@@ -1,0 +1,33 @@
+name: anime_chat_app
+description: A chat app with anime characters using voice synthesis
+
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  
+  # HTTP请求
+  http: ^1.1.0
+  
+  # 音频播放 - Windows支持
+  audioplayers: ^5.2.1
+  
+  # 本地存储 - Windows支持
+  shared_preferences: ^2.2.2
+  
+  # 文件路径 - Windows支持
+  path_provider: ^2.1.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^2.0.0
+
+flutter:
+  uses-material-design: true
