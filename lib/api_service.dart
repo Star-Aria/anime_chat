@@ -6,14 +6,12 @@ import 'storage_service.dart';
 
 class ApiService {
   // ⚠️ DeepSeek API 配置
-  static const String deepseekApiKey =
-      'sk-70f5215dc38d48838a52e3f47856679d'; // 请在这里填入你的 DeepSeek API 密钥
+  static const String deepseekApiKey = 'sk-70f5215dc38d48838a52e3f47856679d';
   static const String deepseekBaseUrl = 'https://api.deepseek.com/v1';
-  static const String deepseekModel = 'deepseek-chat'; // DeepSeek 聊天模型
+  static const String deepseekModel = 'deepseek-chat';
 
-  // ⚠️ GPT-SoVITS 配置
-  static const String gptSovitsBaseUrl =
-      'http://127.0.0.1:9880'; // GPT-SoVITS 本地服务地址
+  // ⚠️ GPT-SoVITS 配置（使用 api_v2）
+  static const String gptSovitsBaseUrl = 'http://127.0.0.1:9880';
 
   // 生成对话回复（日文+中文翻译）
   static Future<Map<String, String>> generateResponse({
@@ -30,7 +28,6 @@ class ApiService {
         },
         // 添加历史对话（只保留日文部分）
         ...conversationHistory.map((msg) {
-          // 如果是assistant的消息，可能包含中文翻译，需要提取日文部分
           String content = msg.content;
           if (msg.role == 'assistant' && content.contains('\n\n中文：')) {
             content = content.split('\n\n中文：')[0];
@@ -40,14 +37,13 @@ class ApiService {
             'content': content,
           };
         }),
-        // 添加当前用户消息
         {
           'role': 'user',
           'content': userMessage,
         },
       ];
 
-      // 调用 DeepSeek API 获取日文回复
+      // 调用 DeepSeek API
       final japaneseResponse = await http.post(
         Uri.parse('$deepseekBaseUrl/chat/completions'),
         headers: {
@@ -95,7 +91,7 @@ class ApiService {
           'model': deepseekModel,
           'messages': translationMessages,
           'max_tokens': 500,
-          'temperature': 0.3, // 降低温度以获得更准确的翻译
+          'temperature': 0.3,
           'stream': false,
         }),
       );
@@ -121,14 +117,14 @@ class ApiService {
     }
   }
 
-  // 生成语音（GPT-SoVITS TTS）- 支持长文本分段
+  // 生成语音（GPT-SoVITS api_v2 TTS）- 支持长文本分段
   static Future<List<String>> generateSpeechSegments({
     required String text,
     required String referWavPath,
     required String promptText,
     required String promptLanguage,
   }) async {
-    // 将文本按句子分段（以。、！、？为分隔符）
+    // 将文本按句子分段
     List<String> segments = _splitTextIntoSegments(text);
     List<String> audioPaths = [];
 
@@ -137,22 +133,35 @@ class ApiService {
       if (segment.isEmpty) continue;
 
       try {
-        // 调用 GPT-SoVITS API
+        // 调用 GPT-SoVITS api_v2（端点是 /tts）
         final response = await http.post(
-          Uri.parse(gptSovitsBaseUrl),
+          Uri.parse('$gptSovitsBaseUrl/tts'),
           headers: {
             'Content-Type': 'application/json',
           },
           body: jsonEncode({
-            'refer_wav_path': referWavPath,
+            // ⚠️ 注意：api_v2 的参数名和 api.py 不同
+            'ref_audio_path': referWavPath,
             'prompt_text': promptText,
-            'prompt_language': promptLanguage,
+            'prompt_lang': promptLanguage,
             'text': segment,
-            'text_language': 'ja', // 日语
-            'top_k': 15,
-            'top_p': 1.0,
-            'temperature': 0.4,
-            'speed': 1.0,
+            'text_lang': 'ja',
+
+            // ⚠️ 以下是 api_v2 的参数
+            'top_k': 5, // 默认值，可调整范围 3-20
+            'top_p': 1.0, // 默认值，可调整范围 0.8-1.0
+            'temperature': 0.4, // 默认值，可调整范围 0.6-1.5
+            'text_split_method': 'cut5', // 默认值，选项：cut0-cut5
+            'batch_size': 1, // 默认值，根据显存调整 1-8
+            'batch_threshold': 0.75, // 默认值
+            'split_bucket': true, // 默认值
+            'speed_factor': 1.0, // 默认值，可调整范围 0.8-1.5
+            'fragment_interval': 0.3, // 默认值，可调整范围 0.1-1.0
+            'seed': -1, // 默认值，-1 表示随机
+            'media_type': 'wav', // 音频格式
+            'streaming_mode': false, // ⭐ 启用流式模式（推荐）
+            'parallel_infer': false, // 并行推理
+            'repetition_penalty': 1.35, // 默认值，可调整范围 1.0-2.0
           }),
         );
 
@@ -166,7 +175,7 @@ class ApiService {
           await file.writeAsBytes(response.bodyBytes);
 
           audioPaths.add(filePath);
-          print('成功生成音频段 $i: $filePath');
+          print('成功生成音频段 $i: $filePath (${response.bodyBytes.length} bytes)');
         } else {
           print('GPT-SoVITS 错误 (段落$i): ${response.statusCode}');
           print('错误内容: ${response.body}');
@@ -179,9 +188,51 @@ class ApiService {
     return audioPaths;
   }
 
+  // 切换角色模型（api_v2 新功能）
+  static Future<bool> switchCharacterModel({
+    required String gptModelPath,
+    required String sovitsModelPath,
+  }) async {
+    try {
+      print('正在切换模型...');
+      print('GPT 模型: $gptModelPath');
+      print('SoVITS 模型: $sovitsModelPath');
+
+      // 切换 GPT 模型
+      final gptResponse = await http.get(
+        Uri.parse(
+            '$gptSovitsBaseUrl/set_gpt_weights?weights_path=$gptModelPath'),
+      );
+
+      if (gptResponse.statusCode != 200) {
+        print('切换 GPT 模型失败: ${gptResponse.statusCode}');
+        print('响应: ${gptResponse.body}');
+        return false;
+      }
+
+      // 切换 SoVITS 模型
+      final sovitsResponse = await http.get(
+        Uri.parse(
+            '$gptSovitsBaseUrl/set_sovits_weights?weights_path=$sovitsModelPath'),
+      );
+
+      if (sovitsResponse.statusCode != 200) {
+        print('切换 SoVITS 模型失败: ${sovitsResponse.statusCode}');
+        print('响应: ${sovitsResponse.body}');
+        return false;
+      }
+
+      print('✅ 模型切换成功！');
+      return true;
+    } catch (e) {
+      print('切换模型失败: $e');
+      return false;
+    }
+  }
+
   // 将长文本分段（每段不超过30个字符，适合日语）
   static List<String> _splitTextIntoSegments(String text) {
-    const int maxCharsPerSegment = 30; // 适合日语的分段长度
+    const int maxCharsPerSegment = 30;
     List<String> segments = [];
 
     // 先按句子分割
@@ -245,7 +296,6 @@ class ApiService {
 
     // 保存最后的片段
     if (currentSegment.isNotEmpty) {
-      // 如果最后的片段还是太长，强制拆分
       if (currentSegment.length > maxCharsPerSegment) {
         for (int i = 0; i < currentSegment.length; i += maxCharsPerSegment) {
           int end = (i + maxCharsPerSegment < currentSegment.length)
@@ -276,27 +326,26 @@ class ApiService {
     required String promptLanguage,
   }) async {
     try {
-      // 调用 GPT-SoVITS API
       final response = await http.post(
-        Uri.parse(gptSovitsBaseUrl),
+        Uri.parse('$gptSovitsBaseUrl/tts'),
         headers: {
           'Content-Type': 'application/json',
         },
         body: jsonEncode({
-          'refer_wav_path': referWavPath,
+          'ref_audio_path': referWavPath,
           'prompt_text': promptText,
-          'prompt_language': promptLanguage,
+          'prompt_lang': promptLanguage,
           'text': text,
-          'text_language': 'ja', // 日语
-          'top_k': 15,
+          'text_lang': 'ja',
+          'top_k': 5,
           'top_p': 1.0,
           'temperature': 1.0,
-          'speed': 1.0,
+          'speed_factor': 1.0,
+          'streaming_mode': false,
         }),
       );
 
       if (response.statusCode == 200) {
-        // 保存音频文件到临时目录
         final tempDir = await getTemporaryDirectory();
         final timestamp = DateTime.now().millisecondsSinceEpoch;
         final filePath = '${tempDir.path}/audio_$timestamp.wav';
@@ -340,13 +389,13 @@ class ApiService {
     }
   }
 
-  // 测试 GPT-SoVITS API 连接
+  // 测试 GPT-SoVITS API 连接（api_v2）
   static Future<bool> testGptSovitsConnection() async {
     try {
       final response = await http.get(
-        Uri.parse(gptSovitsBaseUrl),
+        Uri.parse('$gptSovitsBaseUrl/tts'),
       );
-      // GPT-SoVITS 通常返回 422 或 400，但服务是运行的
+      // api_v2 的 /tts 端点会返回 422 或 400
       return response.statusCode == 422 ||
           response.statusCode == 400 ||
           response.statusCode == 200;

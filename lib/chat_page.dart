@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:audioplayers/audioplayers.dart';
+import 'dart:io';
 import 'character_config.dart';
 import 'storage_service.dart';
 import 'api_service.dart';
@@ -16,42 +17,88 @@ class ChatPage extends StatefulWidget {
 class _ChatPageState extends State<ChatPage> {
   final TextEditingController _textController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
-  final AudioPlayer _audioPlayer = AudioPlayer();
+  late AudioPlayer _audioPlayer;
 
   List<Message> _messages = [];
   bool _isLoading = false;
   bool _isPlaying = false;
+  bool _modelSwitched = false;
 
   @override
   void initState() {
     super.initState();
+    _initAudioPlayer();
     _loadConversation();
+    _switchModel();
+  }
+
+  void _initAudioPlayer() {
+    _audioPlayer = AudioPlayer();
+    _audioPlayer.setAudioContext(
+      AudioContext(
+        iOS: AudioContextIOS(
+          category: AVAudioSessionCategory.playback,
+          options: [],
+        ),
+        android: AudioContextAndroid(
+          isSpeakerphoneOn: true,
+          stayAwake: false,
+          contentType: AndroidContentType.music,
+          usageType: AndroidUsageType.media,
+          audioFocus: AndroidAudioFocus.gain,
+        ),
+      ),
+    );
   }
 
   @override
   void dispose() {
+    _audioPlayer.dispose();
     _textController.dispose();
     _scrollController.dispose();
-    _audioPlayer.dispose();
     super.dispose();
   }
 
-  // 加载历史对话
+  Future<void> _switchModel() async {
+    print('正在切换到 ${widget.character.name} 的模型...');
+
+    final success = await ApiService.switchCharacterModel(
+      gptModelPath: widget.character.gptModelPath,
+      sovitsModelPath: widget.character.sovitsModelPath,
+    );
+
+    if (mounted) {
+      setState(() {
+        _modelSwitched = success;
+      });
+
+      if (!success) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('模型切换失败，可能使用默认模型'),
+            duration: Duration(seconds: 2),
+          ),
+        );
+      } else {
+        print('✅ ${widget.character.name} 的模型切换成功');
+      }
+    }
+  }
+
   Future<void> _loadConversation() async {
     final messages = await StorageService.loadConversation(widget.character.id);
-    setState(() {
-      _messages = messages;
-    });
-
+    if (mounted) {
+      setState(() {
+        _messages = messages;
+      });
+    }
     _scrollToBottom();
   }
 
-  // 发送消息
   Future<void> _sendMessage() async {
     final text = _textController.text.trim();
     if (text.isEmpty || _isLoading) return;
 
-    // 添加用户消息
     final userMessage = Message(
       role: 'user',
       content: text,
@@ -66,10 +113,8 @@ class _ChatPageState extends State<ChatPage> {
     _textController.clear();
     _scrollToBottom();
 
-    // 保存对话
     await StorageService.saveConversation(widget.character.id, _messages);
 
-    // 获取AI回复（日文+中文翻译）
     final recentMessages = StorageService.getRecentMessages(_messages);
     final responseMap = await ApiService.generateResponse(
       characterPersonality: widget.character.personality,
@@ -77,113 +122,168 @@ class _ChatPageState extends State<ChatPage> {
       userMessage: text,
     );
 
-    // 组合日文和中文显示
     final japaneseText = responseMap['japanese'] ?? '';
     final chineseText = responseMap['chinese'] ?? '';
     final displayContent = '$japaneseText\n\n中文：$chineseText';
 
-    // 添加AI回复
+    // ⭐ 先生成音频，获取路径
+    print('🎤 生成音频中...');
+    final audioPath = await ApiService.generateSpeech(
+      text: japaneseText,
+      referWavPath: widget.character.referWavPath,
+      promptText: widget.character.promptText,
+      promptLanguage: widget.character.promptLanguage,
+    );
+
+    // ⭐ 创建消息时保存音频路径
     final assistantMessage = Message(
       role: 'assistant',
       content: displayContent,
       timestamp: DateTime.now(),
+      audioPath: audioPath, // ⭐ 保存音频路径到消息
     );
 
-    setState(() {
-      _messages.add(assistantMessage);
-      _isLoading = false;
-    });
-
-    _scrollToBottom();
-
-    // 保存对话
-    await StorageService.saveConversation(widget.character.id, _messages);
-
-    // 自动播放语音（只播放日文部分）
-    _playAudio(japaneseText);
-  }
-
-  // 播放音频 - 支持长文本分段播放（使用 GPT-SoVITS）
-  Future<void> _playAudio(String text) async {
-    if (_isPlaying) {
-      await _audioPlayer.stop();
+    if (mounted) {
+      setState(() {
+        _messages.add(assistantMessage);
+        _isLoading = false;
+      });
     }
 
-    setState(() {
-      _isPlaying = true;
-    });
+    _scrollToBottom();
+    await StorageService.saveConversation(widget.character.id, _messages);
 
+    // ⭐ 自动播放（使用已生成的音频）
+    if (audioPath != null) {
+      _playAudioFromPath(audioPath);
+    }
+  }
+
+  // ⭐ 新方法：直接播放指定路径的音频
+  Future<void> _playAudioFromPath(String audioPath) async {
     try {
-      // 如果文本包含中文翻译，只提取日文部分
-      String japaneseText = text;
-      if (text.contains('\n\n中文：')) {
-        japaneseText = text.split('\n\n中文：')[0];
+      await _audioPlayer.stop();
+
+      if (!mounted) return;
+
+      setState(() {
+        _isPlaying = true;
+      });
+
+      // 验证文件存在
+      final file = File(audioPath);
+      if (!await file.exists()) {
+        print('❌ 音频文件不存在: $audioPath');
+        if (mounted) {
+          setState(() {
+            _isPlaying = false;
+          });
+        }
+        return;
       }
 
-      // 使用 GPT-SoVITS 分段生成语音
-      final audioPaths = await ApiService.generateSpeechSegments(
+      print('🔊 播放音频: $audioPath');
+
+      await _audioPlayer.setSource(DeviceFileSource(audioPath));
+      await _audioPlayer.setVolume(1.0);
+      await _audioPlayer.resume();
+
+      _audioPlayer.onPlayerStateChanged.listen((PlayerState state) {
+        if (state == PlayerState.completed) {
+          print('✅ 播放完成');
+          if (mounted) {
+            setState(() {
+              _isPlaying = false;
+            });
+          }
+        }
+      });
+    } catch (e) {
+      print('❌ 播放失败: $e');
+      if (mounted) {
+        setState(() {
+          _isPlaying = false;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('播放失败: $e')),
+        );
+      }
+    }
+  }
+
+  // ⭐ 修改后的播放方法：支持缓存
+  Future<void> _playAudio(Message message) async {
+    try {
+      await _audioPlayer.stop();
+
+      if (!mounted) return;
+
+      setState(() {
+        _isPlaying = true;
+      });
+
+      // ⭐ 检查是否有缓存的音频
+      if (message.audioPath != null) {
+        final file = File(message.audioPath!);
+        if (await file.exists()) {
+          print('📂 使用缓存的音频: ${message.audioPath}');
+          await _playAudioFromPath(message.audioPath!);
+          return;
+        } else {
+          print('⚠️ 缓存的音频文件不存在，重新生成');
+        }
+      }
+
+      // ⭐ 没有缓存，重新生成
+      print('🔄 重新生成音频...');
+
+      // 提取日文部分
+      String japaneseText = message.content;
+      if (message.content.contains('\n\n中文：')) {
+        japaneseText = message.content.split('\n\n中文：')[0];
+      }
+
+      final audioPath = await ApiService.generateSpeech(
         text: japaneseText,
         referWavPath: widget.character.referWavPath,
         promptText: widget.character.promptText,
         promptLanguage: widget.character.promptLanguage,
       );
 
-      if (audioPaths.isEmpty) {
-        setState(() {
-          _isPlaying = false;
-        });
+      if (audioPath == null) {
         if (mounted) {
+          setState(() {
+            _isPlaying = false;
+          });
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('语音生成失败，请检查 GPT-SoVITS 服务是否运行')),
+            const SnackBar(content: Text('语音生成失败')),
           );
         }
         return;
       }
 
-      // 依次播放所有音频片段
-      for (int i = 0; i < audioPaths.length; i++) {
-        if (!_isPlaying) break;
-
-        print('开始播放片段 ${i + 1}/${audioPaths.length}');
-
-        // 设置播放源
-        await _audioPlayer.setSource(DeviceFileSource(audioPaths[i]));
-
-        // 开始播放
-        await _audioPlayer.resume();
-
-        // 等待播放完成
-        await for (final state in _audioPlayer.onPlayerStateChanged) {
-          if (state == PlayerState.completed) {
-            print('片段 ${i + 1} 播放完成');
-            break;
-          }
-        }
-
-        // 如果还有下一段，等待一小段时间再播放（自然停顿）
-        if (i < audioPaths.length - 1 && _isPlaying) {
-          await Future.delayed(const Duration(milliseconds: 300));
-        }
+      // ⭐ 更新消息的音频路径并保存
+      final index = _messages.indexOf(message);
+      if (index != -1) {
+        _messages[index] = message.copyWith(audioPath: audioPath);
+        await StorageService.saveConversation(widget.character.id, _messages);
       }
 
-      print('所有片段播放完成');
+      // 播放新生成的音频
+      await _playAudioFromPath(audioPath);
     } catch (e) {
-      print('播放失败: $e');
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('播放失败: $e')),
-        );
-      }
-    } finally {
+      print('❌ 播放失败: $e');
       if (mounted) {
         setState(() {
           _isPlaying = false;
         });
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('播放失败: $e')),
+        );
       }
     }
   }
 
-  // 滚动到底部
   void _scrollToBottom() {
     Future.delayed(const Duration(milliseconds: 100), () {
       if (_scrollController.hasClients) {
@@ -196,14 +296,12 @@ class _ChatPageState extends State<ChatPage> {
     });
   }
 
-  // 构建包含翻译的消息显示
   List<Widget> _buildTranslatedMessage(String content) {
     final parts = content.split('\n\n中文：');
     final japaneseText = parts[0];
     final chineseText = parts.length > 1 ? parts[1] : '';
 
     return [
-      // 日文部分
       Text(
         japaneseText,
         style: const TextStyle(
@@ -215,13 +313,11 @@ class _ChatPageState extends State<ChatPage> {
       ),
       if (chineseText.isNotEmpty) ...[
         const SizedBox(height: 8),
-        // 分隔线
         Container(
           height: 1,
           color: Colors.grey.withOpacity(0.3),
         ),
         const SizedBox(height: 8),
-        // 中文翻译部分
         Text(
           chineseText,
           style: TextStyle(
@@ -234,7 +330,6 @@ class _ChatPageState extends State<ChatPage> {
     ];
   }
 
-  // 清空对话
   Future<void> _clearConversation() async {
     final confirm = await showDialog<bool>(
       context: context,
@@ -298,14 +393,27 @@ class _ChatPageState extends State<ChatPage> {
           ],
         ),
         actions: [
+          if (_modelSwitched)
+            Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: Center(
+                child: Icon(
+                  Icons.check_circle,
+                  color: Colors.green[400],
+                  size: 20,
+                ),
+              ),
+            ),
           if (_isPlaying)
             IconButton(
               icon: const Icon(Icons.stop),
               onPressed: () async {
                 await _audioPlayer.stop();
-                setState(() {
-                  _isPlaying = false;
-                });
+                if (mounted) {
+                  setState(() {
+                    _isPlaying = false;
+                  });
+                }
               },
             ),
           IconButton(
@@ -316,7 +424,6 @@ class _ChatPageState extends State<ChatPage> {
       ),
       body: Column(
         children: [
-          // 对话列表
           Expanded(
             child: ListView.builder(
               controller: _scrollController,
@@ -353,7 +460,6 @@ class _ChatPageState extends State<ChatPage> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        // 显示消息内容，如果是AI回复且包含翻译，则分开显示
                         if (!isUser && message.content.contains('\n\n中文：'))
                           ..._buildTranslatedMessage(message.content)
                         else
@@ -368,13 +474,29 @@ class _ChatPageState extends State<ChatPage> {
                         if (!isUser)
                           Padding(
                             padding: const EdgeInsets.only(top: 8),
-                            child: GestureDetector(
-                              onTap: () => _playAudio(message.content),
-                              child: Icon(
-                                Icons.volume_up,
-                                size: 18,
-                                color: Colors.blue[300],
-                              ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                GestureDetector(
+                                  onTap: () =>
+                                      _playAudio(message), // ⭐ 传入整个 message
+                                  child: Icon(
+                                    Icons.volume_up,
+                                    size: 18,
+                                    color: Colors.blue[300],
+                                  ),
+                                ),
+                                // ⭐ 显示缓存状态
+                                if (message.audioPath != null)
+                                  Padding(
+                                    padding: const EdgeInsets.only(left: 4),
+                                    child: Icon(
+                                      Icons.check_circle,
+                                      size: 12,
+                                      color: Colors.green[300],
+                                    ),
+                                  ),
+                              ],
                             ),
                           ),
                       ],
@@ -384,8 +506,6 @@ class _ChatPageState extends State<ChatPage> {
               },
             ),
           ),
-
-          // 加载指示器
           if (_isLoading)
             Container(
               padding: const EdgeInsets.all(16),
@@ -411,8 +531,6 @@ class _ChatPageState extends State<ChatPage> {
                 ],
               ),
             ),
-
-          // 输入框
           Container(
             padding: const EdgeInsets.all(16),
             decoration: const BoxDecoration(

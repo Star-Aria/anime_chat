@@ -15,8 +15,7 @@ dependencies:
   # HTTP请求
   http: ^1.1.0
   
-  # 音频播放 - Windows支持
-  audioplayers: ^5.2.1
+  audioplayers: ^5.2.1 
   
   # 本地存储 - Windows支持
   shared_preferences: ^2.2.2
