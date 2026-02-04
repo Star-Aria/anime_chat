@@ -23,6 +23,9 @@ dependencies:
   # 文件路径 - Windows支持
   path_provider: ^2.1.1
 
+  window_manager: ^0.3.7    # 窗口管理
+  image_picker: ^1.0.4      # 图片选择器
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
