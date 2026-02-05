@@ -1,21 +1,26 @@
 import 'package:flutter/material.dart';
 import 'package:window_manager/window_manager.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'dart:io';
 import 'character_config.dart';
 import 'chat_page.dart';
 
+// ========================================
+// 窗口大小配置
+// ========================================
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // 设置窗口大小和属性
   await windowManager.ensureInitialized();
 
+  // 设置窗口初始参数
   WindowOptions windowOptions = const WindowOptions(
-    size: Size(800, 700),
-    minimumSize: Size(600, 500),
-    center: true,
+    size: Size(800, 600), // 窗口初始大小 (宽, 高)
+    minimumSize: Size(600, 450), // 窗口最小大小（不能缩小到比这更小）
+    center: true, // 窗口是否居中显示
     backgroundColor: Colors.transparent,
-    skipTaskbar: false,
-    titleBarStyle: TitleBarStyle.normal,
+    skipTaskbar: false, // 是否在任务栏显示
+    titleBarStyle: TitleBarStyle.normal, // 标题栏样式
   );
 
   windowManager.waitUntilReadyToShow(windowOptions, () async {
@@ -26,6 +31,9 @@ void main() async {
   runApp(const MyApp());
 }
 
+// ========================================
+// 应用主组件
+// ========================================
 class MyApp extends StatelessWidget {
   const MyApp({Key? key}) : super(key: key);
 
@@ -37,7 +45,7 @@ class MyApp extends StatelessWidget {
         brightness: Brightness.light,
         primaryColor: const Color(0xFF6C63FF),
         scaffoldBackgroundColor: const Color(0xFFF5F7FA),
-        fontFamily: 'Roboto',
+        fontFamily: 'FangSong', // 默认字体
         colorScheme: ColorScheme.light(
           primary: const Color(0xFF6C63FF),
           secondary: const Color(0xFF00D4AA),
@@ -51,6 +59,9 @@ class MyApp extends StatelessWidget {
   }
 }
 
+// ========================================
+// 角色选择页面
+// ========================================
 class CharacterSelectionPage extends StatelessWidget {
   const CharacterSelectionPage({Key? key}) : super(key: key);
 
@@ -58,6 +69,7 @@ class CharacterSelectionPage extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       body: Container(
+        // 渐变背景
         decoration: const BoxDecoration(
           gradient: LinearGradient(
             begin: Alignment.topLeft,
@@ -71,12 +83,12 @@ class CharacterSelectionPage extends StatelessWidget {
         child: SafeArea(
           child: Column(
             children: [
-              // 标题区域
+              // 页面标题区域
               Padding(
                 padding: const EdgeInsets.all(32),
                 child: Column(
                   children: [
-                    // Logo
+                    // Logo图标
                     Container(
                       width: 70,
                       height: 70,
@@ -100,17 +112,19 @@ class CharacterSelectionPage extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(height: 20),
-                    // 标题
+                    // 应用标题
                     const Text(
                       'Anime Chat',
                       style: TextStyle(
                         fontSize: 28,
                         fontWeight: FontWeight.bold,
+                        fontFamily: 'Times New Roman',
                         color: Color(0xFF2D3142),
                         letterSpacing: 1.2,
                       ),
                     ),
                     const SizedBox(height: 8),
+                    // 副标题
                     Text(
                       '选择你想对话的角色',
                       style: TextStyle(
@@ -135,7 +149,7 @@ class CharacterSelectionPage extends StatelessWidget {
                 ),
               ),
 
-              // 底部提示
+              // 底部提示文字
               Padding(
                 padding: const EdgeInsets.all(20),
                 child: Text(
@@ -154,25 +168,53 @@ class CharacterSelectionPage extends StatelessWidget {
   }
 }
 
-class _CharacterCard extends StatelessWidget {
+// ========================================
+// 角色卡片组件
+// ========================================
+class _CharacterCard extends StatefulWidget {
   final Character character;
 
   const _CharacterCard({Key? key, required this.character}) : super(key: key);
 
   @override
+  State<_CharacterCard> createState() => _CharacterCardState();
+}
+
+class _CharacterCardState extends State<_CharacterCard> {
+  String? _characterAvatarPath; // 角色自定义头像路径
+
+  @override
+  void initState() {
+    super.initState();
+    _loadCharacterAvatar();
+  }
+
+  // 加载用户自定义的角色头像（与聊天界面保持一致）
+  Future<void> _loadCharacterAvatar() async {
+    final prefs = await SharedPreferences.getInstance();
+    final avatarPath = prefs.getString('avatar_${widget.character.id}');
+    if (avatarPath != null && mounted) {
+      setState(() {
+        _characterAvatarPath = avatarPath;
+      });
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final color = Color(int.parse('0xFF${character.color}'));
+    final color = Color(int.parse('0xFF${widget.character.color}'));
 
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
       child: Material(
         color: Colors.transparent,
         child: InkWell(
+          // 点击卡片进入聊天页面
           onTap: () {
             Navigator.push(
               context,
               MaterialPageRoute(
-                builder: (context) => ChatPage(character: character),
+                builder: (context) => ChatPage(character: widget.character),
               ),
             );
           },
@@ -196,31 +238,48 @@ class _CharacterCard extends StatelessWidget {
             ),
             child: Row(
               children: [
-                // 角色头像
+                // 角色头像（优先显示自定义头像）
                 Container(
                   width: 60,
                   height: 60,
                   decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      colors: [color, color.withOpacity(0.7)],
-                    ),
                     borderRadius: BorderRadius.circular(14),
-                  ),
-                  child: Center(
-                    child: Text(
-                      character.avatar,
-                      style: const TextStyle(fontSize: 30),
+                    border: Border.all(
+                      color: color.withOpacity(0.3),
+                      width: 2,
                     ),
+                  ),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(12),
+                    child: _characterAvatarPath != null
+                        ? Image.file(
+                            File(_characterAvatarPath!),
+                            fit: BoxFit.cover,
+                          )
+                        : Container(
+                            decoration: BoxDecoration(
+                              gradient: LinearGradient(
+                                colors: [color, color.withOpacity(0.7)],
+                              ),
+                            ),
+                            child: Center(
+                              child: Text(
+                                widget.character.avatar,
+                                style: const TextStyle(fontSize: 30),
+                              ),
+                            ),
+                          ),
                   ),
                 ),
                 const SizedBox(width: 16),
-                // 角色信息
+                // 角色信息区域
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
+                      // 角色中文名
                       Text(
-                        character.name,
+                        widget.character.name,
                         style: const TextStyle(
                           fontSize: 17,
                           fontWeight: FontWeight.w600,
@@ -228,14 +287,17 @@ class _CharacterCard extends StatelessWidget {
                         ),
                       ),
                       const SizedBox(height: 3),
+                      // 角色日文名
                       Text(
-                        character.nameJp,
+                        widget.character.nameJp,
                         style: TextStyle(
                           fontSize: 13,
+                          fontFamily: 'Times New Roman',
                           color: Colors.grey[600],
                         ),
                       ),
                       const SizedBox(height: 6),
+                      // 作品标签
                       Container(
                         padding: const EdgeInsets.symmetric(
                           horizontal: 8,
@@ -261,7 +323,7 @@ class _CharacterCard extends StatelessWidget {
                     ],
                   ),
                 ),
-                // 箭头图标
+                // 右侧箭头图标
                 Icon(
                   Icons.arrow_forward_ios,
                   color: color.withOpacity(0.6),
