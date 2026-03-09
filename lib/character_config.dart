@@ -71,6 +71,9 @@ class CharacterConfig {
       sovitsModelPath:
           r'C:\GPT-SoVITS-v2pro-20250604-nvidia50\SoVITS_weights_v2ProPlus\AI_Shinobu_e8_s200.pth',
       personality: '''
+（注意，我不是剧情中的任何角色，不是炭治郎，你可以不称呼我，非要称呼的话，可以称呼我为“凛野ちゃん
+（りんのちゃん）”，我是个女生。）
+
 你是《鬼灭之刃》中的蝴蝶忍，女，18岁。
 
 《鬼灭之刃》的世界观设定在日本大正时代，核心是鬼杀队与鬼的千年对抗。鬼由鬼舞辻无惨通过血液转化而成，
@@ -174,8 +177,8 @@ class CharacterConfig {
 
       // 主动消息行为配置（蝴蝶忍：相对活泼，较常主动搭话）
       proactiveTopicChance: 0.35, // 35%概率：回复完后主动抛出新话题
-      proactiveIdleChance: 0.25, // 25%概率：随机触发时主动发消息
-      proactiveMinIntervalHours: 36, // 两次主动消息至少间隔36小时
+      proactiveIdleChance: 1, // 概率：随机触发时主动发消息
+      proactiveMinIntervalHours: 0, // 两次主动消息至少间隔36小时
     ),
 
     // 时透无一郎
@@ -196,7 +199,8 @@ class CharacterConfig {
           r'C:\GPT-SoVITS-v2pro-20250604-nvidia50\SoVITS_weights_v2ProPlus\AI_Muichirou_e8_s200.pth',
       // 角色性格提示词
       personality: '''
-所有对话必须使用日语，禁止出现中文。
+注意：所有对话必须使用日语，禁止出现中文。我不是剧情中的任何角色，不是炭治郎，你可以不称呼我，
+非要称呼的话，可以称呼我为“凛野（りんの）”。
 
 你是《鬼灭之刃》的时透无一郎，男，14岁。
 
@@ -269,7 +273,6 @@ class CharacterConfig {
 的人会温和相待，保留少年的纯粹与些许中二，言行符合霞柱的身份及与各人物的关系，不 OOC，自然
 流畅回应互动；聊天语气要像朋友一样亲切自然，轻松随性，避免像助手般刻意询问“有什么事吗”
 “有什么需要帮助的吗”这类客套话术，主动贴合朋友间的聊天节奏。
-
 ''',
       // 角色主题色 - 可以修改为你喜欢的颜色（十六进制，不带#号）
       color: '00BCD4', // 青色
@@ -289,9 +292,9 @@ class CharacterConfig {
       backgroundOpacity: 0.8, // 背景不透明度（0.0-1.0，1为完全不透明）
 
       // 主动消息行为配置（时透无一郎：话不多，偶尔会主动说几句）
-      proactiveTopicChance: 0.15, // 15%概率：回复完后主动抛出新话题
-      proactiveIdleChance: 0.12, // 12%概率：随机触发时主动发消息
-      proactiveMinIntervalHours: 60, // 两次主动消息至少间隔60小时
+      proactiveTopicChance: 0.20, // 概率：回复完后主动抛出新话题
+      proactiveIdleChance: 1, // 概率：随机触发时主动发消息
+      proactiveMinIntervalHours: 1, // 两次主动消息至少间隔60小时
     ),
 
     // 添加新角色：富冈义勇
@@ -312,8 +315,6 @@ class CharacterConfig {
           r'C:\GPT-SoVITS-v2pro-20250604-nvidia50\SoVITS_weights_v2ProPlus\AI_Giyu_e8_s208.pth',
       // 角色性格提示词
       personality: '''
-所有对话必须使用日语，禁止出现中文。
-
 你是《鬼灭之刃》中的富冈义勇，男，21岁。
 
 《鬼灭之刃》的世界观设定在日本大正时代，核心是鬼杀队与鬼的千年对抗。鬼由鬼舞辻无惨通过血液转化而成，
@@ -373,28 +374,29 @@ class CharacterConfig {
 身份及与各人物的关系，不OOC，自然流畅地回应互动；聊天时不会主动搭话过多，回应简洁，避免像助手般刻意询问
 “有什么事吗”“有什么需要帮助的吗”这类客套话术，贴合人物性格的交流节奏。
 
+全程使用日语回答。对方不是剧中任何角色，称呼时用"凛野（りんの）"，或不称呼。
 ''',
       // 角色主题色 - 可以修改为你喜欢的颜色（十六进制，不带#号）
       color: '1976D2', // 深蓝色
 
       // AI对话框颜色配置 - 蓝色渐变主题（可以自由修改）
       aiBubbleGradient: const [
-        Color.fromARGB(179, 6, 104, 184), // 渐变色（70%不透明度）
-        Color.fromARGB(179, 60, 162, 235),
-        Color.fromARGB(179, 158, 211, 255),
         Color.fromARGB(179, 194, 231, 253),
+        Color.fromARGB(179, 158, 211, 255),
+        Color.fromARGB(179, 60, 162, 235),
+        Color.fromARGB(179, 6, 104, 184), // 渐变色（70%不透明度）
       ],
       aiBubbleBorderColor: const Color.fromARGB(255, 25, 118, 210), // 边框颜色：深蓝色
       aiBubbleGlowColor: const Color.fromARGB(255, 66, 165, 245), // 发光颜色：亮蓝色
 
       // 背景图效果配置（通过UI设置背景图后会使用这些参数）
-      backgroundBlurSigma: 4.0, // 背景模糊度（0-20，数值越大越模糊）
-      backgroundOpacity: 0.75, // 背景不透明度（0.0-1.0，1为完全不透明）
+      backgroundBlurSigma: 5.0, // 背景模糊度（0-20，数值越大越模糊）
+      backgroundOpacity: 0.70, // 背景不透明度（0.0-1.0，1为完全不透明）
 
       // 主动消息行为配置（富冈义勇：沉默寡言，极少主动搭话）
-      proactiveTopicChance: 0.05, // 5%概率：回复完后主动抛出新话题
-      proactiveIdleChance: 0.04, // 4%概率：随机触发时主动发消息
-      proactiveMinIntervalHours: 96, // 两次主动消息至少间隔96小时（4天）
+      proactiveTopicChance: 0.15, // 概率：回复完后主动抛出新话题
+      proactiveIdleChance: 1, // 概率：随机触发时主动发消息
+      proactiveMinIntervalHours: 1, // 两次主动消息至少间隔96小时（4天）
     ),
 
     // ========================================

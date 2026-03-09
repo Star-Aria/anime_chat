@@ -4,6 +4,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:io';
 import 'character_config.dart';
 import 'chat_page.dart';
+import 'proactive_message_service.dart';
 
 // ========================================
 // 窗口大小配置
@@ -27,6 +28,8 @@ void main() async {
     await windowManager.show();
     await windowManager.focus();
   });
+
+  ProactiveMessageService().initialize(CharacterConfig.characters);
 
   runApp(const MyApp());
 }
@@ -59,6 +62,173 @@ class MyApp extends StatelessWidget {
   }
 }
 
+// 调试面板：显示所有角色的主动消息计时状态
+Future<void> _showDebugPanel(BuildContext context) async {
+  showDialog(
+    context: context,
+    builder: (ctx) => _DebugPanelDialog(),
+  );
+}
+
+class _DebugPanelDialog extends StatefulWidget {
+  @override
+  State<_DebugPanelDialog> createState() => _DebugPanelDialogState();
+}
+
+class _DebugPanelDialogState extends State<_DebugPanelDialog> {
+  List<Map<String, dynamic>> _info = [];
+  bool _loading = true;
+  String? _statusMessage;
+
+  @override
+  void initState() {
+    super.initState();
+    _refresh();
+  }
+
+  Future<void> _refresh() async {
+    if (!mounted) return;
+    setState(() {
+      _loading = true;
+    });
+    final info = await ProactiveMessageService()
+        .getDebugInfo(CharacterConfig.characters);
+    if (mounted)
+      setState(() {
+        _info = info;
+        _loading = false;
+      });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Row(children: [
+        const Text('🔧 主动消息调试面板',
+            style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold)),
+        const Spacer(),
+        IconButton(
+          icon: const Icon(Icons.refresh, size: 18),
+          tooltip: '刷新',
+          onPressed: _refresh,
+        ),
+      ]),
+      content: SizedBox(
+        width: 440,
+        child: _loading
+            ? const Center(child: CircularProgressIndicator())
+            : SingleChildScrollView(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    if (_statusMessage != null)
+                      Container(
+                        margin: const EdgeInsets.only(bottom: 8),
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: Colors.green.shade50,
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Text(_statusMessage!,
+                            style: const TextStyle(
+                                fontSize: 12, color: Colors.green)),
+                      ),
+                    ..._info.map((d) => Card(
+                          margin: const EdgeInsets.only(bottom: 10),
+                          child: Padding(
+                            padding: const EdgeInsets.all(10),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(children: [
+                                  Text('${d['name']}',
+                                      style: const TextStyle(
+                                          fontWeight: FontWeight.bold,
+                                          fontSize: 14)),
+                                  const Spacer(),
+                                  if ((d['unread'] as int) > 0)
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(
+                                          horizontal: 6, vertical: 2),
+                                      decoration: BoxDecoration(
+                                          color: Colors.red,
+                                          borderRadius:
+                                              BorderRadius.circular(8)),
+                                      child: Text('未读 ${d['unread']}',
+                                          style: const TextStyle(
+                                              color: Colors.white,
+                                              fontSize: 11)),
+                                    ),
+                                ]),
+                                const SizedBox(height: 6),
+                                _debugRow('服务状态',
+                                    d['serviceRunning'] ? '✅ 运行中' : '❌ 未初始化'),
+                                _debugRow('下次检查', d['nextFire'] ?? '—'),
+                                _debugRow('上次发送', d['lastProactive']),
+                                _debugRow('冷却状态',
+                                    '${d['hoursSince']}  ${d['cooldownOk'] ? "✅ 可触发" : "⏳ 冷却中"}'),
+                                _debugRow('触发概率', d['idleChance']),
+                                const SizedBox(height: 6),
+                                SizedBox(
+                                  width: double.infinity,
+                                  child: OutlinedButton.icon(
+                                    icon: const Icon(Icons.send, size: 14),
+                                    label: const Text('强制触发（跳过冷却和概率）',
+                                        style: TextStyle(fontSize: 12)),
+                                    onPressed: () async {
+                                      setState(() {
+                                        _statusMessage = null;
+                                      });
+                                      final character = CharacterConfig
+                                          .characters
+                                          .firstWhere((c) => c.id == d['id']);
+                                      await ProactiveMessageService()
+                                          .debugForceProactive(character);
+                                      await _refresh();
+                                      if (mounted) {
+                                        setState(() {
+                                          _statusMessage =
+                                              '✅ 已触发 ${d['name']} 的主动消息';
+                                        });
+                                      }
+                                    },
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        )),
+                  ],
+                ),
+              ),
+      ),
+      actions: [
+        TextButton(
+            onPressed: () => Navigator.pop(context), child: const Text('关闭')),
+      ],
+    );
+  }
+}
+
+Widget _debugRow(String label, String value) {
+  return Padding(
+    padding: const EdgeInsets.symmetric(vertical: 1),
+    child: Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(
+          width: 70,
+          child: Text(label,
+              style: TextStyle(fontSize: 12, color: Colors.grey[600])),
+        ),
+        Expanded(
+          child: Text(value, style: const TextStyle(fontSize: 12)),
+        ),
+      ],
+    ),
+  );
+}
+
 // ========================================
 // 角色选择页面
 // ========================================
@@ -68,6 +238,21 @@ class CharacterSelectionPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      // 调试按钮（仅 debug 模式下显示，release 构建后自动消失）
+      floatingActionButton: () {
+        bool isDebug = false;
+        assert(() {
+          isDebug = true;
+          return true;
+        }());
+        if (!isDebug) return null;
+        return FloatingActionButton.small(
+          backgroundColor: Colors.black54,
+          tooltip: '主动消息调试面板',
+          child: const Icon(Icons.bug_report, color: Colors.white, size: 18),
+          onPressed: () => _showDebugPanel(context),
+        );
+      }(),
       body: Container(
         // 渐变背景
         decoration: const BoxDecoration(
@@ -182,11 +367,26 @@ class _CharacterCard extends StatefulWidget {
 
 class _CharacterCardState extends State<_CharacterCard> {
   String? _characterAvatarPath; // 角色自定义头像路径
+  int _unreadCount = 0; // 未读消息数
 
   @override
   void initState() {
     super.initState();
     _loadCharacterAvatar();
+    _loadUnreadCount();
+    // 注册未读数变化回调，离线消息到达时立即刷新红点，不需要等用户手动刷新
+    ProactiveMessageService().registerUnreadCallback(
+      widget.character.id,
+      (count) {
+        if (mounted) setState(() => _unreadCount = count);
+      },
+    );
+  }
+
+  @override
+  void dispose() {
+    ProactiveMessageService().unregisterUnreadCallback(widget.character.id);
+    super.dispose();
   }
 
   // 加载用户自定义的角色头像（与聊天界面保持一致）
@@ -196,6 +396,17 @@ class _CharacterCardState extends State<_CharacterCard> {
     if (avatarPath != null && mounted) {
       setState(() {
         _characterAvatarPath = avatarPath;
+      });
+    }
+  }
+
+  // 加载未读消息数
+  Future<void> _loadUnreadCount() async {
+    final prefs = await SharedPreferences.getInstance();
+    final count = prefs.getInt('unread_${widget.character.id}') ?? 0;
+    if (mounted) {
+      setState(() {
+        _unreadCount = count;
       });
     }
   }
@@ -210,13 +421,15 @@ class _CharacterCardState extends State<_CharacterCard> {
         color: Colors.transparent,
         child: InkWell(
           // 点击卡片进入聊天页面
-          onTap: () {
-            Navigator.push(
+          onTap: () async {
+            await Navigator.push(
               context,
               MaterialPageRoute(
                 builder: (context) => ChatPage(character: widget.character),
               ),
             );
+            // 从聊天页返回后刷新未读数（ChatPage 会在 initState 里清零）
+            _loadUnreadCount();
           },
           borderRadius: BorderRadius.circular(16),
           child: Container(
@@ -238,38 +451,68 @@ class _CharacterCardState extends State<_CharacterCard> {
             ),
             child: Row(
               children: [
-                // 角色头像（优先显示自定义头像）
-                Container(
-                  width: 60,
-                  height: 60,
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(14),
-                    border: Border.all(
-                      color: color.withOpacity(0.3),
-                      width: 2,
-                    ),
-                  ),
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(12),
-                    child: _characterAvatarPath != null
-                        ? Image.file(
-                            File(_characterAvatarPath!),
-                            fit: BoxFit.cover,
-                          )
-                        : Container(
-                            decoration: BoxDecoration(
-                              gradient: LinearGradient(
-                                colors: [color, color.withOpacity(0.7)],
+                // 角色头像（优先显示自定义头像）+ 未读消息红点
+                Stack(
+                  clipBehavior: Clip.none,
+                  children: [
+                    Container(
+                      width: 60,
+                      height: 60,
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(
+                          color: color.withOpacity(0.3),
+                          width: 2,
+                        ),
+                      ),
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(12),
+                        child: _characterAvatarPath != null
+                            ? Image.file(
+                                File(_characterAvatarPath!),
+                                fit: BoxFit.cover,
+                              )
+                            : Container(
+                                decoration: BoxDecoration(
+                                  gradient: LinearGradient(
+                                    colors: [color, color.withOpacity(0.7)],
+                                  ),
+                                ),
+                                child: Center(
+                                  child: Text(
+                                    widget.character.avatar,
+                                    style: const TextStyle(fontSize: 30),
+                                  ),
+                                ),
                               ),
-                            ),
-                            child: Center(
-                              child: Text(
-                                widget.character.avatar,
-                                style: const TextStyle(fontSize: 30),
+                      ),
+                    ),
+                    // 未读消息红点（有未读时才显示）
+                    if (_unreadCount > 0)
+                      Positioned(
+                        top: -4,
+                        right: -4,
+                        child: Container(
+                          constraints: const BoxConstraints(minWidth: 18),
+                          height: 18,
+                          padding: const EdgeInsets.symmetric(horizontal: 4),
+                          decoration: const BoxDecoration(
+                            color: Colors.red,
+                            borderRadius: BorderRadius.all(Radius.circular(9)),
+                          ),
+                          child: Center(
+                            child: Text(
+                              _unreadCount > 99 ? '99+' : '$_unreadCount',
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 11,
+                                fontWeight: FontWeight.bold,
                               ),
                             ),
                           ),
-                  ),
+                        ),
+                      ),
+                  ],
                 ),
                 const SizedBox(width: 16),
                 // 角色信息区域

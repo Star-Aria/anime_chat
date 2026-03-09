@@ -6,13 +6,17 @@ class Message {
   final String role; // 'user' 或 'assistant'
   final String content;
   final DateTime timestamp;
-  final String? audioPath; // ⭐ 新增：音频文件路径（用于缓存）
+  final String? audioPath; // 音频文件缓存路径
+  final String? imagePath; // 用户发送的图片本地路径（仅用户消息）
+  final String? imageDescription; // 豆包视觉模型对图片的描述（发给AI时用，不显示给用户）
 
   Message({
     required this.role,
     required this.content,
     required this.timestamp,
-    this.audioPath, // ⭐ 可选参数
+    this.audioPath,
+    this.imagePath,
+    this.imageDescription,
   });
 
   Map<String, dynamic> toJson() {
@@ -20,7 +24,9 @@ class Message {
       'role': role,
       'content': content,
       'timestamp': timestamp.toIso8601String(),
-      'audioPath': audioPath, // ⭐ 保存音频路径
+      'audioPath': audioPath,
+      'imagePath': imagePath,
+      'imageDescription': imageDescription,
     };
   }
 
@@ -29,22 +35,27 @@ class Message {
       role: json['role'],
       content: json['content'],
       timestamp: DateTime.parse(json['timestamp']),
-      audioPath: json['audioPath'], // ⭐ 读取音频路径
+      audioPath: json['audioPath'],
+      imagePath: json['imagePath'],
+      imageDescription: json['imageDescription'],
     );
   }
 
-  // ⭐ 新增：创建带音频路径的副本
   Message copyWith({
     String? role,
     String? content,
     DateTime? timestamp,
     String? audioPath,
+    String? imagePath,
+    String? imageDescription,
   }) {
     return Message(
       role: role ?? this.role,
       content: content ?? this.content,
       timestamp: timestamp ?? this.timestamp,
       audioPath: audioPath ?? this.audioPath,
+      imagePath: imagePath ?? this.imagePath,
+      imageDescription: imageDescription ?? this.imageDescription,
     );
   }
 }

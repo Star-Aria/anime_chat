@@ -11,38 +11,64 @@ class ApiService {
 
   static const String doubaoBaseUrl = 'https://api.deepseek.com/v1';
 
+  // ========================================
+  // 豆包视觉模型配置
+  // ⚠️ 使用前请在火山引擎控制台创建「推理接入点」，把接入点ID填入 doubaoVisionEndpoint
+  // ⚠️ 把你的豆包 API Key 填入 doubaoVisionApiKey
+  // ========================================
+  // 豆包视觉模型 API 地址
+  static const String doubaoVisionBaseUrl =
+      'https://ark.cn-beijing.volces.com/api/v3';
+  // 豆包视觉模型接入点 ID（如：ep-20250611072348-r2klf）
+  static const String doubaoVisionEndpoint = 'ep-20260213104644-59ljp';
+  // 豆包 API Key（在火山引擎「API Key管理」中获取）
+  static const String doubaoVisionApiKey =
+      'ee7239b4-0334-4062-9819-2e365b6dd49d';
+
   // ⚠️ GPT-SoVITS 配置（使用 api_v2）
   static const String gptSovitsBaseUrl = 'http://127.0.0.1:9880';
 
   // 生成对话回复（日文+中文翻译）
+  // imagePath 可选：传入图片路径时，先调用豆包视觉模型理解图片，
+  // 将描述注入用户消息，使 AI 角色能自然感知并回应图片内容
   static Future<Map<String, String>> generateResponse({
     required String characterPersonality,
     required List<Message> conversationHistory,
     required String userMessage,
     String? timeContext,
     String? proactiveInstruction, // 主动消息专用：直接注入system层，不作为user消息
+    String? imagePath, // 用户发送的图片本地路径（可选）
   }) async {
     try {
+      // ----------------------------------------
+      // 有图片时：先调用豆包视觉模型获取图片描述，
+      // 拼接到用户消息末尾，作为隐式上下文传给 DeepSeek
+      // ----------------------------------------
+      String imageContext = '';
+      if (imagePath != null && imagePath.isNotEmpty) {
+        print('📷 检测到图片，调用视觉模型中...');
+        final description = await _describeImage(imagePath);
+        if (description.isNotEmpty) {
+          // 以【图片内容】标签包裹，让 DeepSeek 知道这是图片描述而非用户文字
+          imageContext = '\n\n【图片内容】$description';
+          print('🖼️ 视觉模型描述: $description');
+        }
+      }
       // 第一步：生成日文回复
       // 把所有内容合并成一条 system 消息，日语强制指令放在最前面
       // DeepSeek 不支持多条 role=system，多余的会被忽略
       final StringBuffer systemBuffer = StringBuffer();
 
-      // ① 日语指令永远第一行，用日文写，避免中文环境干扰
-      systemBuffer.writeln(
-          'あなたは日本語キャラクターです。ユーザーが何語で話しかけても、必ず日本語のみで返答してください。中国語・英語での返答は絶対に禁止です。');
-      systemBuffer.writeln();
-
-      // ② 角色人设
+      // ① 角色人设
       systemBuffer.write(characterPersonality);
 
-      // ③ 时间上下文（仅追加，不放在 system 开头）
+      // ② 时间上下文（仅追加，不放在 system 开头）
       if (timeContext != null && timeContext.isNotEmpty) {
         systemBuffer.writeln();
         systemBuffer.write(timeContext);
       }
 
-      // ④ 主动消息指令
+      // ③ 主动消息指令
       if (proactiveInstruction != null && proactiveInstruction.isNotEmpty) {
         systemBuffer.writeln();
         systemBuffer.write(proactiveInstruction);
@@ -56,17 +82,30 @@ class ApiService {
       ];
 
       // 调试：打印system prompt前150字，确认日语指令在最前面
-      final systemContent = systemBuffer.toString();
+      /*final systemContent = systemBuffer.toString();
       print(
           '📤 System prompt前150字: ${systemContent.substring(0, systemContent.length > 150 ? 150 : systemContent.length)}');
       print(
-          '📤 userMessage: $userMessage | proactiveInstruction: ${proactiveInstruction != null ? "有" : "无"}');
+          '📤 userMessage: $userMessage | proactiveInstruction: ${proactiveInstruction != null ? "有" : "无"}');*/
 
-      // 添加历史对话（只保留日文部分）
+      // 添加历史对话（只保留日文部分；用户消息若带图片描述则追加，让AI在后续回合也能记住图片内容）
       japaneseMessages.addAll(conversationHistory.map((msg) {
         String content = msg.content;
         if (msg.role == 'assistant' && content.contains('\n\n中文：')) {
           content = content.split('\n\n中文：')[0];
+        }
+        // 用户消息：若保存了图片描述，在历史里补上，让 AI 始终能感知图片上下文
+        if (msg.role == 'user' &&
+            msg.imageDescription != null &&
+            msg.imageDescription!.isNotEmpty) {
+          // 去掉显示用的 '[图片]' 前缀，换成 AI 能理解的描述
+          final displayText = content.startsWith('[图片] ')
+              ? content.substring(5)
+              : content == '[图片]'
+                  ? ''
+                  : content;
+          final textPart = displayText.isNotEmpty ? '$displayText\n\n' : '';
+          content = '${textPart}【图片内容】${msg.imageDescription}';
         }
         return {
           'role': msg.role,
@@ -74,11 +113,12 @@ class ApiService {
         };
       }));
 
-      // 主动消息用日文触发词，普通消息直接传用户文字
+      // 主动消息：user 消息留空，让 AI 完全依据 proactiveInstruction 自主生成
+      // （原来用的「システムトリガー」会被 AI 当作用户发言原样回显，导致输出无效内容）
       japaneseMessages.add(
         proactiveInstruction != null
-            ? {'role': 'user', 'content': '（システムトリガー）'}
-            : {'role': 'user', 'content': userMessage},
+            ? {'role': 'user', 'content': ''}
+            : {'role': 'user', 'content': '$userMessage$imageContext'},
       );
 
       // 调用 DeepSeek API
@@ -124,50 +164,59 @@ class ApiService {
       final textForTranslation =
           japaneseText.replaceAll(RegExp(r'（[^）]*）'), '').trim();
 
-      final translationMessages = [
-        {
-          'role': 'system',
-          'content': '你是一个专业的日语翻译。请将用户提供的日语文本翻译成中文。只输出翻译结果，不要有任何额外的解释或说明。',
-        },
-        {
-          'role': 'user',
-          'content': '请将以下日语翻译成中文：\n$textForTranslation',
-        },
-      ];
-
-      // 调用翻译API
-      final translationResponse = await http.post(
-        Uri.parse('$doubaoBaseUrl/chat/completions'),
-        headers: {
-          'Authorization': 'Bearer $doubaoApiKey',
-          'Content-Type': 'application/json',
-        },
-        body: jsonEncode({
-          'model': doubaoModel,
-          'messages': translationMessages,
-          'max_tokens': 500,
-          'temperature': 0.3,
-          'stream': false,
-          'top_p': 0.9,
-          'presence_penalty': 0.0,
-          'frequency_penalty': 0.0,
-        }),
-      );
-
+      // 如果去掉动作描写后没有实质内容（全是括号动作），跳过翻译，中文留空
+      // 避免把空文本发给翻译 API 导致 prompt 泄露
       String chineseText;
-      if (translationResponse.statusCode == 200) {
-        final translationData =
-            jsonDecode(utf8.decode(translationResponse.bodyBytes));
-        chineseText =
-            translationData['choices'][0]['message']['content'] as String;
+      if (textForTranslation.isEmpty) {
+        chineseText = '';
       } else {
-        print('翻译 API 错误: ${translationResponse.statusCode}');
-        chineseText = '[翻译失败]';
+        final translationMessages = [
+          {
+            'role': 'system',
+            'content': '你是一个专业的日语翻译。请将用户提供的日语文本翻译成中文。只输出翻译结果，不要有任何额外的解释或说明。',
+          },
+          {
+            'role': 'user',
+            'content': '请将以下日语翻译成中文：\n$textForTranslation',
+          },
+        ];
+
+        // 调用翻译API
+        final translationResponse = await http.post(
+          Uri.parse('$doubaoBaseUrl/chat/completions'),
+          headers: {
+            'Authorization': 'Bearer $doubaoApiKey',
+            'Content-Type': 'application/json',
+          },
+          body: jsonEncode({
+            'model': doubaoModel,
+            'messages': translationMessages,
+            'max_tokens': 500,
+            'temperature': 0.3,
+            'stream': false,
+            'top_p': 0.9,
+            'presence_penalty': 0.0,
+            'frequency_penalty': 0.0,
+          }),
+        );
+
+        if (translationResponse.statusCode == 200) {
+          final translationData =
+              jsonDecode(utf8.decode(translationResponse.bodyBytes));
+          chineseText =
+              translationData['choices'][0]['message']['content'] as String;
+        } else {
+          print('翻译 API 错误: ${translationResponse.statusCode}');
+          chineseText = '[翻译失败]';
+        }
       }
 
       return {
         'japanese': japaneseText,
         'chinese': chineseText,
+        'imageDescription': imageContext.isNotEmpty
+            ? imageContext.replaceFirst('\n\n【图片内容】', '')
+            : '', // 把描述原文返回，供 chat_page 存入 Message.imageDescription
       };
     } catch (e) {
       print('请求失败: $e');
@@ -584,5 +633,80 @@ class ApiService {
     String result = text.replaceAll(chineseBracketPattern, '').trim();
     if (result.isEmpty) return text; // 若全被过滤则保留原文（方便调试）
     return result;
+  }
+
+  // ========================================
+  // 图片理解：调用豆包视觉模型
+  // ========================================
+  // 读取本地图片 → base64 → 发给豆包视觉模型 → 返回中文描述
+  // 调用失败时静默返回空字符串，不阻断正常对话流程
+  static Future<String> _describeImage(String imagePath) async {
+    try {
+      final file = File(imagePath);
+      if (!await file.exists()) {
+        print('图片文件不存在: $imagePath');
+        return '';
+      }
+
+      // 读取字节并转 base64
+      final bytes = await file.readAsBytes();
+      final String b64 = base64Encode(bytes);
+
+      // 根据扩展名确定 MIME 类型（豆包支持 jpeg/png/gif/webp）
+      final ext = imagePath.toLowerCase().split('.').last;
+      final String mime = const {
+            'jpg': 'image/jpeg',
+            'jpeg': 'image/jpeg',
+            'png': 'image/png',
+            'gif': 'image/gif',
+            'webp': 'image/webp',
+          }[ext] ??
+          'image/jpeg';
+
+      // 视觉理解提示词：要求简洁描述，100字内
+      // 如需修改描述风格，改这里的字符串
+      const String visionPrompt = '请用简洁的中文描述这张图片的内容，包括主要对象、场景、活动、氛围等，'
+          '100字以内，只描述看到的内容，不分析不评价。';
+
+      final response = await http.post(
+        Uri.parse('$doubaoVisionBaseUrl/chat/completions'),
+        headers: {
+          'Authorization': 'Bearer $doubaoVisionApiKey',
+          'Content-Type': 'application/json',
+        },
+        body: jsonEncode({
+          'model': doubaoVisionEndpoint,
+          'messages': [
+            {
+              'role': 'user',
+              'content': [
+                {
+                  'type': 'image_url',
+                  'image_url': {'url': 'data:$mime;base64,$b64'},
+                },
+                {
+                  'type': 'text',
+                  'text': visionPrompt,
+                },
+              ],
+            },
+          ],
+          'max_tokens': 200,
+        }),
+      );
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(utf8.decode(response.bodyBytes));
+        final String desc =
+            (data['choices'][0]['message']['content'] as String?) ?? '';
+        return desc.trim();
+      } else {
+        print('豆包视觉模型错误 ${response.statusCode}: ${response.body}');
+        return '';
+      }
+    } catch (e) {
+      print('图片理解失败: $e');
+      return '';
+    }
   }
 }

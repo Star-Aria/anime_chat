@@ -9,6 +9,7 @@ import 'dart:io';
 import 'character_config.dart';
 import 'storage_service.dart';
 import 'api_service.dart';
+import 'proactive_message_service.dart';
 
 // ========================================
 // 自定义配置区域 - 在这里修改你的UI设置
@@ -155,16 +156,16 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
   String? _characterAvatarPath; // 角色自定义头像路径
   String? _backgroundImagePath; // 自定义背景图片路径
 
-  // 消息队列系统
-  final List<String> _userMessageQueue = []; // 用户消息队列
+  // 消息队列系统（每条携带文字 + 可选图片路径）
+  final List<Map<String, String?>> _userMessageQueue = [];
   bool _isProcessingQueue = false; // 是否正在处理队列
-
-  // 主动消息系统
-  Timer? _proactiveMessageTimer; // 主动消息定时器
 
   // 新增：重新生成语音的状态跟踪
   final Map<Message, bool> _regeneratingAudio = {}; // 记录每条消息是否正在重新生成
   Message? _currentPlayingMessage; // 当前正在播放的消息
+
+  // 图片发送：待发图片路径暂存，点发送后清空
+  String? _pendingImagePath;
 
   late AnimationController _typingAnimationController; // "AI正在输入"动画控制器
   late AnimationController _soundWaveController; // 声波动画控制器
@@ -175,26 +176,45 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
   @override
   void initState() {
     super.initState();
-    _initAudioPlayer(); // 初始化音频播放器
-    _loadConversation(); // 加载历史对话记录
-    _switchModel(); // 切换到当前角色的GPT-SoVITS模型
-    _loadCharacterAvatar(); // 加载自定义角色头像
-    _loadBackgroundImage(); // 加载自定义背景图
+    _initAudioPlayer();
+    _loadConversation();
+    _switchModel();
+    _loadCharacterAvatar();
+    _loadBackgroundImage();
 
-    // 初始化"AI正在输入"的动画控制器
     _typingAnimationController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 1500),
     )..repeat();
 
-    // 初始化声波动画控制器
     _soundWaveController = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 2000), // 2秒一个循环
+      duration: const Duration(milliseconds: 2000),
     );
 
-    // 启动随机主动消息定时器（程序运行期间随时可能触发）
-    _scheduleNextProactiveCheck();
+    // 向全局服务注册回调：当这个角色的定时器触发且用户正在此页时，
+    // 服务会调用这个回调直接把消息发到聊天界面
+    ProactiveMessageService().registerActiveChat(
+      widget.character.id,
+      _onProactiveMessageFromService,
+    );
+
+    // 进入聊天页时清零未读数
+    _clearUnreadCount();
+  }
+
+  // 清零该角色的未读消息数
+  Future<void> _clearUnreadCount() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt('unread_${widget.character.id}', 0);
+  }
+
+  // 全局服务触发主动消息时的回调（用户正在此聊天页时才会被调用）
+  Future<void> _onProactiveMessageFromService(
+      String japanese, String chinese) async {
+    if (!mounted || _isLoading || _isProcessingQueue) return;
+    // MULTI_MESSAGE 已废弃，直接发送单条消息
+    await _sendAIMessage(japanese, chinese);
   }
 
   // 初始化音频播放器
@@ -216,7 +236,9 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
   // 页面销毁时释放资源
   @override
   void dispose() {
-    _proactiveMessageTimer?.cancel(); // 取消主动消息定时器
+    // 离开聊天页时注销回调，让服务知道用户已不在此页
+    // 之后触发的主动消息会走离线存储路径
+    ProactiveMessageService().unregisterActiveChat(widget.character.id);
     _audioPlayer.dispose();
     _textController.dispose();
     _scrollController.dispose();
@@ -344,30 +366,54 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
   // ========================================
 
   // 发送用户消息（加入队列）
+  // 支持纯文字、纯图片、图文混合三种形式
   Future<void> _sendMessage() async {
     final text = _textController.text.trim();
-    if (text.isEmpty) return;
+    final imagePath = _pendingImagePath;
 
-    // 创建用户消息对象
+    // 文字和图片都为空则不发送
+    if (text.isEmpty && imagePath == null) return;
+
+    // 气泡显示内容：有图片时在文字前加 [图片] 前缀
+    final displayContent = (imagePath != null && text.isEmpty)
+        ? '[图片]'
+        : (imagePath != null ? '[图片] $text' : text);
+
     final userMessage = Message(
       role: 'user',
-      content: text,
+      content: displayContent,
       timestamp: DateTime.now(),
+      imagePath: imagePath, // 保存路径，气泡内渲染缩略图用
     );
 
-    // 将用户消息添加到消息列表
+    _textController.clear();
     setState(() {
       _messages.add(userMessage);
-      _userMessageQueue.add(text); // 加入消息队列
+      _userMessageQueue.add({'text': text, 'imagePath': imagePath}); // 加入队列
+      _pendingImagePath = null; // 清空预览
     });
 
-    _textController.clear(); // 清空输入框
-    _scrollToBottom(); // 滚动到底部
+    _scrollToBottom();
     await StorageService.saveConversation(widget.character.id, _messages);
 
-    // 如果队列没在处理，开始处理
     if (!_isProcessingQueue) {
       _processMessageQueue();
+    }
+  }
+
+  // 打开相册选择图片，选完后暂存到 _pendingImagePath 等待发送
+  Future<void> _pickImage() async {
+    final ImagePicker picker = ImagePicker();
+    final XFile? image = await picker.pickImage(
+      source: ImageSource.gallery,
+      maxWidth: 1280, // 限制尺寸，避免 base64 过大
+      maxHeight: 1280,
+      imageQuality: 85,
+    );
+    if (image != null && mounted) {
+      setState(() {
+        _pendingImagePath = image.path;
+      });
     }
   }
 
@@ -377,9 +423,9 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
       setState(() {
         _isProcessingQueue = false;
       });
-
-      // 队列处理完毕，检查是否需要主动发起话题
-      _checkForProactiveTopic();
+      // 注意：这里不再调用 _checkForProactiveTopic()
+      // 主动消息统一由 ProactiveMessageService 全局管理，这里不再触发
+      // 避免 AI 刚回复完就立刻插入一条没头没尾的"话题延续"消息
       return;
     }
 
@@ -388,10 +434,11 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
       _isLoading = true;
     });
 
-    // 取出第一条消息
-    final userMessage = _userMessageQueue.removeAt(0);
+    // 取出第一条（包含文字和可选图片路径）
+    final item = _userMessageQueue.removeAt(0);
+    final userMessage = item['text'] ?? '';
+    final imagePath = item['imagePath']; // 无图片时为 null
 
-    // 生成AI回复
     final timeContext = _generateTimeContext();
     final recentMessages = StorageService.getRecentMessages(_messages);
 
@@ -401,22 +448,32 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
         conversationHistory: recentMessages,
         userMessage: userMessage,
         timeContext: timeContext,
+        imagePath: imagePath, // 传入图片路径，null 表示无图片
       );
 
       // 提取日文和中文
       final japaneseText = responseMap['japanese'] ?? '';
       final chineseText = responseMap['chinese'] ?? '';
 
-      // 检查是否包含多消息分隔符
-      final multiMessages = _parseMultiMessages(japaneseText, chineseText);
-
-      // 依次发送每条消息
-      for (var msgData in multiMessages) {
-        await _sendAIMessage(msgData['japanese']!, msgData['chinese']!);
-        if (multiMessages.length > 1) {
-          await Future.delayed(Duration(milliseconds: 800)); // 多消息间隔
+      // 如果这次请求里有图片，把视觉描述回填到刚才那条用户 Message 里
+      // 这样历史对话里 AI 永远能看到图片上下文，不会因为是主动消息就失忆
+      final imageDescription = responseMap['imageDescription'] ?? '';
+      if (imageDescription.isNotEmpty && _messages.isNotEmpty) {
+        // 找到刚才添加的那条用户消息（应该是最后一条 role=='user' 且有 imagePath 的）
+        final idx = _messages
+            .lastIndexWhere((m) => m.role == 'user' && m.imagePath != null);
+        if (idx != -1) {
+          setState(() {
+            _messages[idx] =
+                _messages[idx].copyWith(imageDescription: imageDescription);
+          });
+          // 持久化更新（让重启后的历史对话也有描述）
+          await StorageService.saveConversation(widget.character.id, _messages);
         }
       }
+
+      // 直接发送单条消息（MULTI_MESSAGE 已废弃）
+      await _sendAIMessage(japaneseText, chineseText);
     } catch (e) {
       print('⚠️ 生成回复时出错: $e');
     }
@@ -429,45 +486,16 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
     await _processMessageQueue();
   }
 
-  // 解析多消息回复
-  List<Map<String, String>> _parseMultiMessages(
-      String japanese, String chinese) {
-    // 检查是否包含 <MULTI_MESSAGE> 标签
-    if (japanese.contains('<MULTI_MESSAGE>')) {
-      final japaneseParts = japanese
-          .split('<MULTI_MESSAGE>')
-          .map((s) => s.trim())
-          .where((s) => s.isNotEmpty)
-          .toList();
-      final chineseParts = chinese.contains('<MULTI_MESSAGE>')
-          ? chinese
-              .split('<MULTI_MESSAGE>')
-              .map((s) => s.trim())
-              .where((s) => s.isNotEmpty)
-              .toList()
-          : [chinese];
-
-      List<Map<String, String>> messages = [];
-      for (int i = 0; i < japaneseParts.length; i++) {
-        messages.add({
-          'japanese': japaneseParts[i],
-          'chinese': i < chineseParts.length ? chineseParts[i] : '',
-        });
-      }
-      return messages;
-    }
-
-    // 单条消息
-    return [
-      {'japanese': japanese, 'chinese': chinese}
-    ];
-  }
-
   // 发送单条AI消息
   Future<void> _sendAIMessage(String japanese, String chinese) async {
     if (japanese.isEmpty) return;
 
-    final displayContent = '$japanese\n\n中文：$chinese';
+    // 清理多余空行（AI 有时会在消息内生成大量换行）
+    final cleanJapanese = japanese.replaceAll(RegExp(r'\n{2,}'), '\n').trim();
+    final cleanChinese = chinese.replaceAll(RegExp(r'\n{2,}'), '\n').trim();
+    final displayContent = cleanChinese.isNotEmpty
+        ? '$cleanJapanese\n\n中文：$cleanChinese'
+        : cleanJapanese;
 
     // 生成语音
     print('🎤 生成音频中...');
@@ -517,73 +545,6 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
     }
   }
 
-  // 检查是否应该主动发起话题（回复完成后）
-  // 回复完成后检查是否主动抛出新话题
-  Future<void> _checkForProactiveTopic() async {
-    // 使用角色配置的概率决定是否主动抛出话题
-    if (Random().nextDouble() < widget.character.proactiveTopicChance &&
-        mounted &&
-        !_isLoading) {
-      // 随机延迟2-5秒，模拟思考后再说话
-      //final delay = 2 + Random().nextInt(4);
-      //await Future.delayed(Duration(seconds: delay));
-      if (mounted && !_isLoading && !_isProcessingQueue) {
-        await _sendProactiveMessage('topic');
-      }
-    }
-  }
-
-  // 调度下一次随机主动消息检查
-  // 每次触发后重新随机设定下一次时间，形成不规律的触发节奏
-  void _scheduleNextProactiveCheck() {
-    _proactiveMessageTimer?.cancel();
-
-    // 随机间隔：1-6小时之间随机选一个时间点触发检查
-    // 触发时不一定发消息，还要经过概率判断
-    final randomMinutes = 60 + Random().nextInt(300); // 60-360分钟（1-6小时）
-    print('下一次主动消息检查将在 $randomMinutes 分钟后');
-
-    _proactiveMessageTimer = Timer(
-      Duration(minutes: randomMinutes),
-      () async {
-        await _tryProactiveIdleMessage();
-        // 发完或者没发，都重新调度下一次
-        if (mounted) {
-          _scheduleNextProactiveCheck();
-        }
-      },
-    );
-  }
-
-  // 尝试发送随机主动消息（随时触发，但受概率和间隔限制）
-  Future<void> _tryProactiveIdleMessage() async {
-    if (!mounted || _isProcessingQueue || _isLoading) return;
-
-    // 检查距离上次主动消息的时间，避免太频繁
-    final prefs = await SharedPreferences.getInstance();
-    final lastProactiveKey = 'last_proactive_${widget.character.id}';
-    final lastProactiveMs = prefs.getInt(lastProactiveKey) ?? 0;
-    final lastProactive = DateTime.fromMillisecondsSinceEpoch(lastProactiveMs);
-    final hoursSinceLast = DateTime.now().difference(lastProactive).inHours;
-
-    // 未达到最短间隔，不发送
-    if (hoursSinceLast < widget.character.proactiveMinIntervalHours) {
-      print(
-          '距上次主动消息仅 $hoursSinceLast 小时，最短间隔为 ${widget.character.proactiveMinIntervalHours} 小时，跳过');
-      return;
-    }
-
-    // 用角色配置的概率决定是否真的发送
-    if (Random().nextDouble() >= widget.character.proactiveIdleChance) return;
-
-    print('触发主动消息 (${widget.character.name})');
-
-    // 记录本次主动消息的时间
-    await prefs.setInt(lastProactiveKey, DateTime.now().millisecondsSinceEpoch);
-
-    await _sendProactiveMessage('idle');
-  }
-
   // 统一的主动消息发送入口
   // _isLoading 被移到 API 调用前设置：
   // 概率判断阶段（调用此方法之前）不显示省略号气泡，
@@ -597,22 +558,21 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
     switch (type) {
       case 'topic':
         proactiveInstruction = '''
-【自発的な話題継続】
-会話が一段落した。あなたから自然に話を続けてください。
-前の話題の延長、ふと思ったこと、相手の近況を聞く、何かを提案するなど、何でも構いません。
-友達同士の気軽なチャットのように、自然体で話しかけてください。
-複数のことを言いたい場合は <MULTI_MESSAGE> で区切って複数メッセージに分けてください。''';
+[主动延续话题]
+对话告一段落，你来自然地继续聊下去。
+可以延续刚才的话题、说说突然想到的事、关心一下对方，或者提点什么建议，随意就好。
+像朋友聊天一样，轻松自然地开口。''';
         break;
 
       case 'idle':
         proactiveInstruction = '''
-【自発的なメッセージ】
-今、ふと相手のことを思い出してメッセージを送ることにした。
-現在の時間帯を踏まえて、自然な理由でメッセージを送ってください。
-例：以前話したことを思い出した、今日面白いことがあった、相手のことが気になった、など。
-「元気？」「おはよう」だけでなく、具体的な内容を含めてください。
-あなたのキャラクターらしい言い方で、自然に話しかけてください。
-複数のことを言いたい場合は <MULTI_MESSAGE> で区切ってください。''';
+[主动发消息]
+你突然想起对方，决定主动发条消息。
+结合现在的时间段，找个自然的理由开口。
+比如：想起之前聊过的事、今天遇到了什么、突然出现的想法等。
+不要只说“你好”或“在吗”，要有具体内容。
+不要延续上次的话题，重新开启一个新话题。
+用你自己的说话方式，自然地开口。''';
         break;
     }
 
@@ -636,13 +596,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
       final japanese = responseMap['japanese'] ?? '';
       final chinese = responseMap['chinese'] ?? '';
 
-      final multiMessages = _parseMultiMessages(japanese, chinese);
-      for (var msgData in multiMessages) {
-        await _sendAIMessage(msgData['japanese']!, msgData['chinese']!);
-        if (multiMessages.length > 1) {
-          await Future.delayed(Duration(milliseconds: 800));
-        }
-      }
+      await _sendAIMessage(japanese, chinese);
     } catch (e) {
       print('⚠️ 生成主动消息时出错: $e');
     }
@@ -657,23 +611,21 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
   Future<void> _sendProactiveGreeting(String greetingType) async {
     if (!mounted || _isLoading) return;
 
-    // 同样注入system层，避免中文指令导致AI用中文回复
+    // 主动问候指令
     String proactiveInstruction = '';
     switch (greetingType) {
       case 'initial':
         proactiveInstruction = '''
-【初めての挨拶】
-これが最初の会話です。自然に挨拶して、自己紹介し、相手の様子を聞いてください。
-温かく親しみやすい雰囲気で話しかけてください。
-複数のことを言いたい場合は <MULTI_MESSAGE> で区切ってください。''';
+[初次打招呼]
+这是第一次对话。自然地打个招呼，简单介绍一下自己，顺便关心一下对方。
+语气温暖亲切。''';
         break;
       case 'long_time':
         proactiveInstruction = '''
-【久しぶりの連絡】
-しばらく話していなかった相手に、自分から連絡することにした。
-久しぶりの気持ちを伝え、相手の近況を気にかけてください。
-前回話した内容があれば自然に触れても構いません。
-複数のことを言いたい場合は <MULTI_MESSAGE> で区切ってください。''';
+[久违的联系]
+好久没说话了，你主动联系对方。
+表达一下久别的心情，关心一下对方最近怎么样。
+如果记得上次聊的内容，可以自然地提一下。''';
         break;
     }
 
@@ -697,13 +649,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
       final japanese = responseMap['japanese'] ?? '';
       final chinese = responseMap['chinese'] ?? '';
 
-      final multiMessages = _parseMultiMessages(japanese, chinese);
-      for (var msgData in multiMessages) {
-        await _sendAIMessage(msgData['japanese']!, msgData['chinese']!);
-        if (multiMessages.length > 1) {
-          await Future.delayed(Duration(milliseconds: 800));
-        }
-      }
+      await _sendAIMessage(japanese, chinese);
     } catch (e) {
       print('⚠️ 生成问候时出错: $e');
     }
@@ -1621,67 +1567,147 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
                     ),
                     child: SafeArea(
                       top: false,
-                      child: Row(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
                         children: [
-                          // 文本输入框
-                          Expanded(
-                            child: Container(
-                              decoration: BoxDecoration(
-                                color: Colors.white.withOpacity(0.6),
-                                borderRadius: BorderRadius.circular(24),
-                                border: Border.all(
-                                  color: color.withOpacity(0.2),
-                                  width: 1.5,
-                                ),
-                              ),
-                              child: TextField(
-                                controller: _textController,
-                                style: const TextStyle(
-                                  color: Color(0xFF2D3142),
-                                  fontSize: 14,
-                                ),
-                                decoration: InputDecoration(
-                                  hintText: '输入消息...',
-                                  hintStyle: TextStyle(
-                                    color: const Color.fromARGB(
-                                        255, 128, 128, 128),
-                                    fontSize: 14,
+                          // ----------------------------------------
+                          // 图片预览区（仅在选了图片后显示）
+                          // ----------------------------------------
+                          if (_pendingImagePath != null)
+                            Padding(
+                              padding: const EdgeInsets.only(bottom: 8),
+                              child: Row(
+                                children: [
+                                  Stack(
+                                    children: [
+                                      // 缩略图
+                                      ClipRRect(
+                                        borderRadius: BorderRadius.circular(8),
+                                        child: Image.file(
+                                          File(_pendingImagePath!),
+                                          width: 56,
+                                          height: 56,
+                                          fit: BoxFit.cover,
+                                        ),
+                                      ),
+                                      // 右上角 × 取消按钮
+                                      Positioned(
+                                        top: 0,
+                                        right: 0,
+                                        child: GestureDetector(
+                                          onTap: () => setState(
+                                              () => _pendingImagePath = null),
+                                          child: Container(
+                                            width: 16,
+                                            height: 16,
+                                            decoration: const BoxDecoration(
+                                              color: Colors.black54,
+                                              shape: BoxShape.circle,
+                                            ),
+                                            child: const Icon(Icons.close,
+                                                size: 11, color: Colors.white),
+                                          ),
+                                        ),
+                                      ),
+                                    ],
                                   ),
-                                  border: InputBorder.none,
-                                  contentPadding: const EdgeInsets.symmetric(
-                                    horizontal: 20,
-                                    vertical: 12,
+                                  const SizedBox(width: 8),
+                                  Text(
+                                    '已选择图片，可直接发送或加文字',
+                                    style: TextStyle(
+                                        fontSize: 12, color: Colors.grey[600]),
+                                  ),
+                                ],
+                              ),
+                            ),
+
+                          // ----------------------------------------
+                          // 输入行：相册按钮 + 文本框 + 发送按钮
+                          // ----------------------------------------
+                          Row(
+                            children: [
+                              // 相册按钮
+                              GestureDetector(
+                                onTap: _isLoading ? null : _pickImage,
+                                child: Container(
+                                  width: 40,
+                                  height: 40,
+                                  margin: const EdgeInsets.only(right: 8),
+                                  decoration: BoxDecoration(
+                                    color: Colors.white.withOpacity(0.7),
+                                    shape: BoxShape.circle,
+                                    border: Border.all(
+                                        color: color.withOpacity(0.3),
+                                        width: 1.5),
+                                  ),
+                                  child: Icon(Icons.image_outlined,
+                                      size: 20, color: color.withOpacity(0.8)),
+                                ),
+                              ),
+                              // 文本输入框
+                              Expanded(
+                                child: Container(
+                                  decoration: BoxDecoration(
+                                    color: Colors.white.withOpacity(0.6),
+                                    borderRadius: BorderRadius.circular(24),
+                                    border: Border.all(
+                                      color: color.withOpacity(0.2),
+                                      width: 1.5,
+                                    ),
+                                  ),
+                                  child: TextField(
+                                    controller: _textController,
+                                    style: const TextStyle(
+                                      color: Color(0xFF2D3142),
+                                      fontSize: 14,
+                                    ),
+                                    decoration: InputDecoration(
+                                      hintText: _pendingImagePath != null
+                                          ? '给图片配上文字（可选）...'
+                                          : '输入消息...',
+                                      hintStyle: TextStyle(
+                                        color: const Color.fromARGB(
+                                            255, 128, 128, 128),
+                                        fontSize: 14,
+                                      ),
+                                      border: InputBorder.none,
+                                      contentPadding:
+                                          const EdgeInsets.symmetric(
+                                        horizontal: 20,
+                                        vertical: 12,
+                                      ),
+                                    ),
+                                    maxLines: null,
+                                    textInputAction: TextInputAction.send,
+                                    onSubmitted: (_) => _sendMessage(),
                                   ),
                                 ),
-                                maxLines: null, // 允许多行输入
-                                textInputAction: TextInputAction.send,
-                                onSubmitted: (_) => _sendMessage(),
                               ),
-                            ),
-                          ),
-                          const SizedBox(width: 12),
-                          // 发送按钮
-                          Container(
-                            width: 48,
-                            height: 48,
-                            decoration: BoxDecoration(
-                              gradient: LinearGradient(
-                                colors: [color, color.withOpacity(0.8)],
-                              ),
-                              shape: BoxShape.circle,
-                              boxShadow: [
-                                BoxShadow(
-                                  color: color.withOpacity(0.4),
-                                  blurRadius: 12,
-                                  offset: const Offset(0, 4),
+                              const SizedBox(width: 12),
+                              // 发送按钮
+                              Container(
+                                width: 48,
+                                height: 48,
+                                decoration: BoxDecoration(
+                                  gradient: LinearGradient(
+                                    colors: [color, color.withOpacity(0.8)],
+                                  ),
+                                  shape: BoxShape.circle,
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: color.withOpacity(0.4),
+                                      blurRadius: 12,
+                                      offset: const Offset(0, 4),
+                                    ),
+                                  ],
                                 ),
-                              ],
-                            ),
-                            child: IconButton(
-                              icon: const Icon(Icons.send,
-                                  color: Colors.white, size: 20),
-                              onPressed: _isLoading ? null : _sendMessage,
-                            ),
+                                child: IconButton(
+                                  icon: const Icon(Icons.send,
+                                      color: Colors.white, size: 20),
+                                  onPressed: _isLoading ? null : _sendMessage,
+                                ),
+                              ),
+                            ],
                           ),
                         ],
                       ),
@@ -2032,20 +2058,47 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          // 消息文本（AI消息如果有翻译则分开显示）
-                          if (!isUser && message.content.contains('\n\n中文：'))
-                            ..._buildTranslatedMessage(message.content)
-                          else
-                            Text(
-                              message.content,
-                              style: TextStyle(
-                                fontSize: 14,
-                                color: isUser
-                                    ? Colors.white
-                                    : const Color(0xFF2D3142),
-                                height: 1.5,
+                          // 用户消息：有图片时先渲染缩略图
+                          if (isUser && message.imagePath != null)
+                            Padding(
+                              padding: const EdgeInsets.only(bottom: 6),
+                              child: ClipRRect(
+                                borderRadius: BorderRadius.circular(8),
+                                child: Image.file(
+                                  File(message.imagePath!),
+                                  width: 180,
+                                  fit: BoxFit.cover,
+                                  errorBuilder: (_, __, ___) => Container(
+                                    width: 180,
+                                    height: 80,
+                                    color: Colors.white24,
+                                    child: const Icon(
+                                        Icons.broken_image_outlined,
+                                        color: Colors.white54),
+                                  ),
+                                ),
                               ),
                             ),
+                          // 消息文本：
+                          //   纯图片消息（content == '[图片]'）不显示文字
+                          //   图文混合消息去掉 '[图片] ' 前缀
+                          //   AI消息带翻译时用 _buildTranslatedMessage
+                          if (!(isUser && message.content == '[图片]'))
+                            if (!isUser && message.content.contains('\n\n中文：'))
+                              ..._buildTranslatedMessage(message.content)
+                            else
+                              Text(
+                                isUser && message.content.startsWith('[图片] ')
+                                    ? message.content.substring(5)
+                                    : message.content,
+                                style: TextStyle(
+                                  fontSize: 14,
+                                  color: isUser
+                                      ? Colors.white
+                                      : const Color(0xFF2D3142),
+                                  height: 1.5,
+                                ),
+                              ),
                           // AI消息底部的按钮区域（播放 / 重新生成）
                           if (!isUser)
                             Padding(
