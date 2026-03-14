@@ -10,63 +10,54 @@ import 'character_config.dart';
 import 'storage_service.dart';
 import 'api_service.dart';
 import 'proactive_message_service.dart';
+import 'emotion_analyzer.dart';
+// 设置页面，从 AppBar 右上角齿轮按钮进入
+import 'character_settings_page.dart';
 
 // ========================================
-// 自定义配置区域 - 在这里修改你的UI设置
+// 自定义配置区域
 // ========================================
 
 // 对话框最大宽度占屏幕的比例（0.0-1.0）
 const double MESSAGE_MAX_WIDTH_RATIO = 0.80;
 
-// 注意：AI消息气泡的颜色配置（渐变色、边框色、发光色）已移至 character_config.dart 中
-// 每个角色可以在那里配置自己独立的对话框颜色样式
-
 // AI消息气泡发光效果参数（全局参数，所有角色共用）
-const double AI_BUBBLE_GLOW_BLUR = 30.0; // 发光范围（越大越扩散，0-50）
-const double AI_BUBBLE_GLOW_OPACITY = 0.8; // 发光强度（0.0-1.0，0为无发光，1为最强）
+const double AI_BUBBLE_GLOW_BLUR = 30.0;
+const double AI_BUBBLE_GLOW_OPACITY = 0.8;
 
 // 对话框圆角大小
-const double MESSAGE_BUBBLE_RADIUS = 18.0; // 主圆角
-const double MESSAGE_BUBBLE_CORNER_RADIUS = 4.0; // 靠近发送者的小圆角
+const double MESSAGE_BUBBLE_RADIUS = 18.0;
+const double MESSAGE_BUBBLE_CORNER_RADIUS = 4.0;
 
 // 对话框内边距
-const double MESSAGE_BUBBLE_HORIZONTAL_PADDING = 16.0; // 左右内边距
-const double MESSAGE_BUBBLE_VERTICAL_PADDING = 12.0; // 上下内边距
-
-// 注意：背景图配置（路径、模糊度、不透明度）已移至 character_config.dart 中
-// 每个角色可以在那里配置自己独立的背景图和效果参数
+const double MESSAGE_BUBBLE_HORIZONTAL_PADDING = 16.0;
+const double MESSAGE_BUBBLE_VERTICAL_PADDING = 12.0;
 
 // 全局背景图片路径（如果角色没有设置专属背景，则使用此路径）
-const String BACKGROUND_IMAGE_PATH = ''; // 例如: 'assets/images/bg.jpg'
-// 注意：需要在 pubspec.yaml 中添加 assets 配置
+const String BACKGROUND_IMAGE_PATH = '';
 
 // 聊天区域背景渐变色（当没有背景图时使用）
 const List<Color> CHAT_BACKGROUND_GRADIENT = [
-  Color(0xFFF5F7FA), // 顶部颜色
-  Color(0xFFE8EDF2), // 中部颜色
-  Color(0xFFDDE3E9), // 底部颜色
+  Color(0xFFF5F7FA),
+  Color(0xFFE8EDF2),
+  Color(0xFFDDE3E9),
 ];
 
 // 字体配置 - AI消息原文（日文）
-const String AI_ORIGINAL_FONT_FAMILY = 'Yu Mincho'; // 原文字体
-const double AI_ORIGINAL_FONT_SIZE = 13.0; // 原文字号
-const FontWeight AI_ORIGINAL_FONT_WEIGHT = FontWeight.w500; // 原文粗细
+const String AI_ORIGINAL_FONT_FAMILY = 'Yu Mincho';
+const double AI_ORIGINAL_FONT_SIZE = 13.0;
+const FontWeight AI_ORIGINAL_FONT_WEIGHT = FontWeight.w500;
 
 // 字体配置 - AI消息翻译（中文）
-const String AI_TRANSLATION_FONT_FAMILY = 'FangSong'; // 翻译字体
-const double AI_TRANSLATION_FONT_SIZE = 13.0; // 翻译字号
-const FontWeight AI_TRANSLATION_FONT_WEIGHT = FontWeight.normal; // 翻译粗细
+const String AI_TRANSLATION_FONT_FAMILY = 'FangSong';
+const double AI_TRANSLATION_FONT_SIZE = 13.0;
+const FontWeight AI_TRANSLATION_FONT_WEIGHT = FontWeight.normal;
 
 // 用户头像路径（填写本地文件路径）
-const String USER_AVATAR_PATH =
-    'C:\\anime_chat\\我的头像.jpg'; // 例如: 'C:\\Users\\YourName\\Pictures\\avatar.jpg'
-// 留空则显示默认头像
+const String USER_AVATAR_PATH = 'C:\\anime_chat\\我的头像.jpg';
 
 // 注音词典配置
-// 用于修正GPT-SoVITS发音不准确的词汇
-// 格式：'原词': '假名注音'
 const Map<String, String> PRONUNCIATION_DICT = {
-  // 人名示例
   '炭治郎': 'たんじろう',
   '禰豆子': 'ねずこ',
   '善逸': 'ぜんいつ',
@@ -91,8 +82,6 @@ const Map<String, String> PRONUNCIATION_DICT = {
   '鬼舞辻　無惨': 'きぶつじ　むざん',
   '錆兎': 'さびと',
   '鱗滝': 'うろこだき',
-
-  // 地名、组织名示例
   '鬼殺隊': 'きさつたい',
   '無限城': 'むげんじょう',
   '蜘蛛山': 'なだくもやま',
@@ -102,8 +91,6 @@ const Map<String, String> PRONUNCIATION_DICT = {
   '上弦の鬼': 'じょうげんのおに',
   '下弦の鬼': 'かげんのおに',
   '藤の花': 'ふじのはな',
-
-  // 其他易读错的词
   '蟲柱': 'むしばしら',
   '花柱': 'はなばしら',
   '水柱': 'みずばしら',
@@ -115,22 +102,19 @@ const Map<String, String> PRONUNCIATION_DICT = {
   '風柱': 'かぜばしら',
   '炎柱': 'ほのおばしら',
   '日輪刀': 'にちりんとう',
-
-  // 可以继续添加更多...
 };
 
 // 是否启用注音功能
 const bool ENABLE_PRONUNCIATION_CORRECTION = true;
 
 // 注音模式
-// 'replace': 把易读错的汉字直接替换为假名发送给gpt-sovits
 const String PRONUNCIATION_MODE = 'replace';
 
 // ========================================
 // 聊天页面主组件
 // ========================================
 class ChatPage extends StatefulWidget {
-  final Character character; // 当前聊天的角色信息
+  final Character character;
 
   const ChatPage({Key? key, required this.character}) : super(key: key);
 
@@ -143,32 +127,95 @@ class ChatPage extends StatefulWidget {
 // ========================================
 class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
   // 控制器
-  final TextEditingController _textController =
-      TextEditingController(); // 输入框控制器
-  final ScrollController _scrollController = ScrollController(); // 消息列表滚动控制器
-  late AudioPlayer _audioPlayer; // 音频播放器
+  final TextEditingController _textController = TextEditingController();
+  final ScrollController _scrollController = ScrollController();
+
+  // ----------------------------------------
+  // 双缓冲音频播放器
+  // ----------------------------------------
+  AudioPlayer _audioPlayerPrimary = AudioPlayer();
+  AudioPlayer _audioPlayerSecondary = AudioPlayer();
+  bool _primaryIsActive = true;
+  AudioPlayer get _activePlayer =>
+      _primaryIsActive ? _audioPlayerPrimary : _audioPlayerSecondary;
+  AudioPlayer get _standbyPlayer =>
+      _primaryIsActive ? _audioPlayerSecondary : _audioPlayerPrimary;
+  Future<void>? _preloadFuture;
 
   // 状态变量
-  List<Message> _messages = []; // 对话历史消息列表
-  bool _isLoading = false; // 是否正在等待AI回复
-  bool _isPlaying = false; // 是否正在播放语音
-  bool _modelSwitched = false; // GPT-SoVITS模型是否切换成功
-  String? _characterAvatarPath; // 角色自定义头像路径
-  String? _backgroundImagePath; // 自定义背景图片路径
+  List<Message> _messages = [];
+  bool _isLoading = false;
+  bool _isPlaying = false;
+  bool _modelSwitched = false;
+  String? _characterAvatarPath;
+  String? _backgroundImagePath;
 
-  // 消息队列系统（每条携带文字 + 可选图片路径）
+  // 消息队列系统
   final List<Map<String, String?>> _userMessageQueue = [];
-  bool _isProcessingQueue = false; // 是否正在处理队列
+  bool _isProcessingQueue = false;
 
-  // 新增：重新生成语音的状态跟踪
-  final Map<Message, bool> _regeneratingAudio = {}; // 记录每条消息是否正在重新生成
-  Message? _currentPlayingMessage; // 当前正在播放的消息
+  // 重新生成语音的状态跟踪
+  final Map<Message, bool> _regeneratingAudio = {};
+  Message? _currentPlayingMessage;
 
-  // 图片发送：待发图片路径暂存，点发送后清空
+  // Completer 机制用于精确感知"当前段播放完毕"
+  Completer<void>? _segmentCompleter;
+
+  // 图片发送：待发图片路径暂存
   String? _pendingImagePath;
 
-  late AnimationController _typingAnimationController; // "AI正在输入"动画控制器
-  late AnimationController _soundWaveController; // 声波动画控制器
+  late AnimationController _typingAnimationController;
+  late AnimationController _soundWaveController;
+
+  // ----------------------------------------
+  // 从设置页读取的用户配置项
+  // ----------------------------------------
+  // 以下字段在 _loadCharacterSettings() 中从 SharedPreferences 加载，
+  // 并在用户从设置页返回时重新加载（navigate 后的 await 块内调用）。
+  // 所有 API 调用和渲染逻辑均通过这些字段而不是直接读取 widget.character 的静态字段。
+
+  // 用户自定义的提示词覆盖，null 表示使用 character_config.dart 中的默认值
+  String? _personalityOverride;
+
+  // 用户设定的称呼（AI 在对话中如何称呼用户），null 表示使用提示词中的内置称呼
+  String? _userNameOverride;
+
+  // 是否在消息气泡下方显示中文翻译，由设置页的「显示中文翻译」开关控制
+  bool _showTranslation = true;
+
+  // 是否在 TTS 前调用情绪分析，由设置页的「启用情绪分析」开关控制
+  // 关闭后跳过 EmotionAnalyzer.analyzeEmotions()，全部使用角色默认参考音频
+  bool _emotionAnalysisEnabled = true;
+
+  // TTS 语速倍率，由设置页的「TTS 语速」滑块控制，传递给 ApiService.generateSpeech()
+  double _ttsSpeed = 1.0;
+
+  // ========================================
+  // 有效提示词（getter）
+  // ========================================
+  // 每次 generateResponse 调用时使用此 getter，而不是直接用 widget.character.personality。
+  //
+  // 逻辑：
+  //   1. 优先使用用户保存的覆盖提示词（_personalityOverride）
+  //   2. 若没有覆盖，使用角色默认提示词（widget.character.personality）
+  //   3. 若用户设定了称呼（_userNameOverride），在提示词末尾追加一条覆盖指令，
+  //      告知 AI 用该名字称呼用户，优先级高于提示词内置的称呼
+  String get _effectivePersonality {
+    // 步骤 1：确定基础提示词
+    String base =
+        (_personalityOverride != null && _personalityOverride!.isNotEmpty)
+            ? _personalityOverride!
+            : widget.character.personality;
+
+    // 步骤 2：如果用户设定了称呼，追加覆盖指令
+    // 这条指令加在提示词末尾，确保模型能看到并优先遵守
+    if (_userNameOverride != null && _userNameOverride!.isNotEmpty) {
+      base += '\n\n[用户称呼设置] 请在对话中用"$_userNameOverride"称呼用户，'
+          '忽略以上提示词中的其他称呼设定。';
+    }
+
+    return base;
+  }
 
   // ========================================
   // 页面初始化
@@ -181,6 +228,8 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
     _switchModel();
     _loadCharacterAvatar();
     _loadBackgroundImage();
+    // 从 SharedPreferences 加载用户设置（提示词覆盖、TTS 语速等）
+    _loadCharacterSettings();
 
     _typingAnimationController = AnimationController(
       vsync: this,
@@ -192,54 +241,83 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
       duration: const Duration(milliseconds: 2000),
     );
 
-    // 向全局服务注册回调：当这个角色的定时器触发且用户正在此页时，
-    // 服务会调用这个回调直接把消息发到聊天界面
     ProactiveMessageService().registerActiveChat(
       widget.character.id,
       _onProactiveMessageFromService,
     );
 
-    // 进入聊天页时清零未读数
     _clearUnreadCount();
   }
 
-  // 清零该角色的未读消息数
+  // ========================================
+  // 加载用户在设置页保存的各项配置
+  // ========================================
+  // 从 SharedPreferences 读取该角色的所有用户自定义设置，
+  // 并更新对应的状态变量。
+  //
+  // 调用时机：
+  //   1. initState() 中（页面首次打开时）
+  //   2. 从设置页返回后（确保设置立即生效，无需重启）
+  Future<void> _loadCharacterSettings() async {
+    final prefs = await SharedPreferences.getInstance();
+    final id = widget.character.id;
+
+    final personalityOverride = prefs.getString('personality_override_$id');
+    final userNameOverride = prefs.getString('user_name_$id');
+    final showTranslation = prefs.getBool('show_translation_$id') ?? true;
+    final emotionAnalysisEnabled =
+        prefs.getBool('emotion_analysis_enabled_$id') ?? true;
+    final ttsSpeed = prefs.getDouble('tts_speed_$id') ?? 1.0;
+
+    if (mounted) {
+      setState(() {
+        // 有覆盖值时使用覆盖，否则置为 null（_effectivePersonality getter 会回退到默认值）
+        _personalityOverride =
+            (personalityOverride != null && personalityOverride.isNotEmpty)
+                ? personalityOverride
+                : null;
+        _userNameOverride =
+            (userNameOverride != null && userNameOverride.isNotEmpty)
+                ? userNameOverride
+                : null;
+        _showTranslation = showTranslation;
+        _emotionAnalysisEnabled = emotionAnalysisEnabled;
+        _ttsSpeed = ttsSpeed;
+      });
+    }
+
+    print('已加载角色设置：'
+        'personality=${_personalityOverride != null ? "已覆盖" : "默认"}, '
+        'userName=$_userNameOverride, '
+        'showTranslation=$_showTranslation, '
+        'emotionAnalysis=$_emotionAnalysisEnabled, '
+        'ttsSpeed=$_ttsSpeed');
+  }
+
   Future<void> _clearUnreadCount() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setInt('unread_${widget.character.id}', 0);
   }
 
-  // 全局服务触发主动消息时的回调（用户正在此聊天页时才会被调用）
   Future<void> _onProactiveMessageFromService(
       String japanese, String chinese) async {
     if (!mounted || _isLoading || _isProcessingQueue) return;
-    // MULTI_MESSAGE 已废弃，直接发送单条消息
     await _sendAIMessage(japanese, chinese);
   }
 
-  // 初始化音频播放器
+  // ----------------------------------------
+  // 初始化双缓冲音频播放器
+  // ----------------------------------------
   void _initAudioPlayer() {
-    _audioPlayer = AudioPlayer();
-    _audioPlayer.setReleaseMode(ReleaseMode.release);
-
-    // 监听播放完成事件
-    _audioPlayer.onPlayerComplete.listen((event) {
-      if (mounted) {
-        setState(() {
-          _isPlaying = false;
-          _currentPlayingMessage = null; // 清除当前播放的消息
-        });
-      }
-    });
+    _audioPlayerPrimary.setReleaseMode(ReleaseMode.release);
+    _audioPlayerSecondary.setReleaseMode(ReleaseMode.release);
   }
 
-  // 页面销毁时释放资源
   @override
   void dispose() {
-    // 离开聊天页时注销回调，让服务知道用户已不在此页
-    // 之后触发的主动消息会走离线存储路径
     ProactiveMessageService().unregisterActiveChat(widget.character.id);
-    _audioPlayer.dispose();
+    _audioPlayerPrimary.dispose();
+    _audioPlayerSecondary.dispose();
     _textController.dispose();
     _scrollController.dispose();
     _typingAnimationController.dispose();
@@ -248,33 +326,27 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
   }
 
   // ========================================
-  // 模型和数据加载相关方法
+  // 模型和数据加载
   // ========================================
 
-  // 切换到当前角色的GPT-SoVITS模型
   Future<void> _switchModel() async {
     print('正在切换到 ${widget.character.name} 的模型...');
-
     final success = await ApiService.switchCharacterModel(
       gptModelPath: widget.character.gptModelPath,
       sovitsModelPath: widget.character.sovitsModelPath,
     );
-
     if (mounted) {
       setState(() {
         _modelSwitched = success;
       });
-
-      // 只在控制台输出结果，不显示UI提示
       if (success) {
-        print('✅ ${widget.character.name} 的模型切换成功');
+        print('${widget.character.name} 的模型切换成功');
       } else {
-        print('⚠️ 模型切换失败，可能使用默认模型');
+        print('模型切换失败，可能使用默认模型');
       }
     }
   }
 
-  // 从本地存储加载历史对话记录
   Future<void> _loadConversation() async {
     final messages = await StorageService.loadConversation(widget.character.id);
     if (mounted) {
@@ -285,7 +357,6 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
     _scrollToBottom();
   }
 
-  // 加载用户自定义的角色头像
   Future<void> _loadCharacterAvatar() async {
     final prefs = await SharedPreferences.getInstance();
     final avatarPath = prefs.getString('avatar_${widget.character.id}');
@@ -296,10 +367,8 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
     }
   }
 
-  // 加载角色专属的聊天背景图
   Future<void> _loadBackgroundImage() async {
     final prefs = await SharedPreferences.getInstance();
-    // 使用角色ID作为键名，每个角色有独立的背景图设置
     final bgPath = prefs.getString('background_${widget.character.id}');
     if (bgPath != null && mounted) {
       setState(() {
@@ -309,19 +378,31 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
   }
 
   // ========================================
-  // 图片和背景设置相关方法
+  // 设置页导航
+  // ========================================
+  // 打开该角色的设置页面，返回后重新加载设置，确保更改立即生效。
+  Future<void> _openSettings() async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) =>
+            CharacterSettingsPage(character: widget.character),
+      ),
+    );
+    // 从设置页返回后重新加载，使新保存的设置立即应用到当前聊天
+    await _loadCharacterSettings();
+  }
+
+  // ========================================
+  // 图片和背景设置
   // ========================================
 
-  // 选择角色专属的聊天背景图片（从相册）
   Future<void> _pickBackgroundImage() async {
     final ImagePicker picker = ImagePicker();
     final XFile? image = await picker.pickImage(source: ImageSource.gallery);
-
     if (image != null) {
-      // 保存到角色专属的键名，每个角色的背景图独立存储
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString('background_${widget.character.id}', image.path);
-
       if (mounted) {
         setState(() {
           _backgroundImagePath = image.path;
@@ -330,12 +411,9 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
     }
   }
 
-  // 清除角色专属的背景图片（恢复默认渐变背景）
   Future<void> _clearBackgroundImage() async {
     final prefs = await SharedPreferences.getInstance();
-    // 删除角色专属的背景图设置
     await prefs.remove('background_${widget.character.id}');
-
     if (mounted) {
       setState(() {
         _backgroundImagePath = null;
@@ -343,16 +421,12 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
     }
   }
 
-  // 选择角色头像（从相册）
   Future<void> _pickCharacterAvatar() async {
     final ImagePicker picker = ImagePicker();
     final XFile? image = await picker.pickImage(source: ImageSource.gallery);
-
     if (image != null) {
-      // 保存头像路径到本地存储
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString('avatar_${widget.character.id}', image.path);
-
       if (mounted) {
         setState(() {
           _characterAvatarPath = image.path;
@@ -362,19 +436,14 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
   }
 
   // ========================================
-  // 消息发送和处理相关方法
+  // 消息发送和处理
   // ========================================
 
-  // 发送用户消息（加入队列）
-  // 支持纯文字、纯图片、图文混合三种形式
   Future<void> _sendMessage() async {
     final text = _textController.text.trim();
     final imagePath = _pendingImagePath;
-
-    // 文字和图片都为空则不发送
     if (text.isEmpty && imagePath == null) return;
 
-    // 气泡显示内容：有图片时在文字前加 [图片] 前缀
     final displayContent = (imagePath != null && text.isEmpty)
         ? '[图片]'
         : (imagePath != null ? '[图片] $text' : text);
@@ -383,14 +452,14 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
       role: 'user',
       content: displayContent,
       timestamp: DateTime.now(),
-      imagePath: imagePath, // 保存路径，气泡内渲染缩略图用
+      imagePath: imagePath,
     );
 
     _textController.clear();
     setState(() {
       _messages.add(userMessage);
-      _userMessageQueue.add({'text': text, 'imagePath': imagePath}); // 加入队列
-      _pendingImagePath = null; // 清空预览
+      _userMessageQueue.add({'text': text, 'imagePath': imagePath});
+      _pendingImagePath = null;
     });
 
     _scrollToBottom();
@@ -401,12 +470,11 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
     }
   }
 
-  // 打开相册选择图片，选完后暂存到 _pendingImagePath 等待发送
   Future<void> _pickImage() async {
     final ImagePicker picker = ImagePicker();
     final XFile? image = await picker.pickImage(
       source: ImageSource.gallery,
-      maxWidth: 1280, // 限制尺寸，避免 base64 过大
+      maxWidth: 1280,
       maxHeight: 1280,
       imageQuality: 85,
     );
@@ -417,15 +485,11 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
     }
   }
 
-  // 处理消息队列
   Future<void> _processMessageQueue() async {
     if (_userMessageQueue.isEmpty) {
       setState(() {
         _isProcessingQueue = false;
       });
-      // 注意：这里不再调用 _checkForProactiveTopic()
-      // 主动消息统一由 ProactiveMessageService 全局管理，这里不再触发
-      // 避免 AI 刚回复完就立刻插入一条没头没尾的"话题延续"消息
       return;
     }
 
@@ -434,32 +498,28 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
       _isLoading = true;
     });
 
-    // 取出第一条（包含文字和可选图片路径）
     final item = _userMessageQueue.removeAt(0);
     final userMessage = item['text'] ?? '';
-    final imagePath = item['imagePath']; // 无图片时为 null
+    final imagePath = item['imagePath'];
 
     final timeContext = _generateTimeContext();
     final recentMessages = StorageService.getRecentMessages(_messages);
 
     try {
       final responseMap = await ApiService.generateResponse(
-        characterPersonality: widget.character.personality,
+        // 使用有效提示词（含用户覆盖和称呼设置），而非直接用 widget.character.personality
+        characterPersonality: _effectivePersonality,
         conversationHistory: recentMessages,
         userMessage: userMessage,
         timeContext: timeContext,
-        imagePath: imagePath, // 传入图片路径，null 表示无图片
+        imagePath: imagePath,
       );
 
-      // 提取日文和中文
       final japaneseText = responseMap['japanese'] ?? '';
       final chineseText = responseMap['chinese'] ?? '';
 
-      // 如果这次请求里有图片，把视觉描述回填到刚才那条用户 Message 里
-      // 这样历史对话里 AI 永远能看到图片上下文，不会因为是主动消息就失忆
       final imageDescription = responseMap['imageDescription'] ?? '';
       if (imageDescription.isNotEmpty && _messages.isNotEmpty) {
-        // 找到刚才添加的那条用户消息（应该是最后一条 role=='user' 且有 imagePath 的）
         final idx = _messages
             .lastIndexWhere((m) => m.role == 'user' && m.imagePath != null);
         if (idx != -1) {
@@ -467,55 +527,108 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
             _messages[idx] =
                 _messages[idx].copyWith(imageDescription: imageDescription);
           });
-          // 持久化更新（让重启后的历史对话也有描述）
           await StorageService.saveConversation(widget.character.id, _messages);
         }
       }
 
-      // 直接发送单条消息（MULTI_MESSAGE 已废弃）
       await _sendAIMessage(japaneseText, chineseText);
     } catch (e) {
-      print('⚠️ 生成回复时出错: $e');
+      print('生成回复时出错: $e');
     }
 
     setState(() {
       _isLoading = false;
     });
 
-    // 继续处理下一条
     await _processMessageQueue();
   }
 
-  // 发送单条AI消息
+  // ----------------------------------------
+  // 发送单条 AI 消息（含情绪感知 TTS + 多段顺序播放）
+  // ----------------------------------------
+  // 与原版的核心区别：
+  //   1. 情绪分析受 _emotionAnalysisEnabled 开关控制：
+  //      关闭时跳过情绪分析，全部使用角色默认参考音频，节省一次 API 调用
+  //   2. TTS 调用时传入 _ttsSpeed（来自设置页的语速滑块），而非硬编码 1.0
   Future<void> _sendAIMessage(String japanese, String chinese) async {
     if (japanese.isEmpty) return;
 
-    // 清理多余空行（AI 有时会在消息内生成大量换行）
     final cleanJapanese = japanese.replaceAll(RegExp(r'\n{2,}'), '\n').trim();
     final cleanChinese = chinese.replaceAll(RegExp(r'\n{2,}'), '\n').trim();
-    final displayContent = cleanChinese.isNotEmpty
+
+    // 根据「显示中文翻译」设置决定存储和显示格式：
+    //   开启时：日文 + \n\n中文：译文（气泡会渲染翻译块）
+    //   关闭时：仅存日文（气泡只显示原文，不渲染翻译块）
+    // 注意：关闭翻译时仍然调用翻译 API，只是不显示。
+    // 如果希望关闭翻译时同时跳过翻译 API 调用，可以在 generateResponse 里添加 translateEnabled 参数。
+    final displayContent = (_showTranslation && cleanChinese.isNotEmpty)
         ? '$cleanJapanese\n\n中文：$cleanChinese'
         : cleanJapanese;
 
-    // 生成语音
-    print('🎤 生成音频中...');
-    final correctedText = _applyPronunciationCorrection(japanese);
-    print('原文: $japanese');
-    print('注音后: $correctedText');
+    final List<String> sentences =
+        EmotionAnalyzer.splitSentences(cleanJapanese);
 
-    final audioPath = await ApiService.generateSpeech(
-      text: correctedText,
-      referWavPath: widget.character.referWavPath,
-      promptText: widget.character.promptText,
-      promptLanguage: widget.character.promptLanguage,
-    );
+    print('TTS 分句结果（共 ${sentences.length} 句）：');
+    for (int i = 0; i < sentences.length; i++) {
+      print('  [$i] ${sentences[i]}');
+    }
 
-    // 创建消息
+    // 情绪分析：受设置页「启用情绪分析」开关控制
+    // 关闭时直接填充全部 neutral，跳过 API 调用
+    final List<SpeechEmotion> emotions;
+    if (_emotionAnalysisEnabled) {
+      print('正在进行情绪分析...');
+      emotions = await EmotionAnalyzer.analyzeEmotions(
+        sentences: sentences,
+        character: widget.character,
+      );
+    } else {
+      // 情绪分析已关闭，全部使用 neutral（或角色第一个可用情绪）
+      final fallback = widget.character.emotionAudioMap?.availableEmotions
+                  .contains(SpeechEmotion.neutral) ==
+              true
+          ? SpeechEmotion.neutral
+          : (widget.character.emotionAudioMap?.availableEmotions.first ??
+              SpeechEmotion.neutral);
+      emotions = List.filled(sentences.length, fallback);
+      print('情绪分析已关闭，全部使用 ${fallback.name}');
+    }
+
+    print('开始逐句生成情绪化语音...');
+    final List<String> audioPaths = [];
+
+    for (int i = 0; i < sentences.length; i++) {
+      final String sentence = sentences[i];
+      final SpeechEmotion emotion = emotions[i];
+      final referenceAudio = await _getValidReferenceAudio(emotion);
+
+      print('句子 [$i] 情绪：${emotion.name}，参考音频：${referenceAudio.referWavPath}');
+
+      final correctedSentence = _applyPronunciationCorrection(sentence);
+
+      // 传入 _ttsSpeed（来自设置页语速滑块），而不是硬编码 1.0
+      final String? audioPath = await ApiService.generateSpeech(
+        text: correctedSentence,
+        referWavPath: referenceAudio.referWavPath,
+        promptText: referenceAudio.promptText,
+        promptLanguage: referenceAudio.promptLanguage,
+        speedFactor: _ttsSpeed,
+      );
+
+      if (audioPath != null) {
+        audioPaths.add(audioPath);
+        print('句子 [$i] 音频生成成功：$audioPath');
+      } else {
+        print('句子 [$i] 音频生成失败，跳过该段');
+      }
+    }
+
     final assistantMessage = Message(
       role: 'assistant',
       content: displayContent,
       timestamp: DateTime.now(),
-      audioPath: audioPath,
+      audioPath: audioPaths.isNotEmpty ? audioPaths.first : null,
+      audioPaths: audioPaths.isNotEmpty ? audioPaths : null,
     );
 
     if (mounted) {
@@ -527,34 +640,22 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
     _scrollToBottom();
     await StorageService.saveConversation(widget.character.id, _messages);
 
-    // 自动播放语音
-    if (audioPath != null && mounted) {
-      print('✅ 语音生成成功，自动播放');
-      setState(() {
-        _currentPlayingMessage = assistantMessage;
-        _isPlaying = true;
-      });
-      await _playAudioFromPath(audioPath);
-
-      // 等待播放完成后再继续
-      while (_isPlaying && mounted) {
-        await Future.delayed(Duration(milliseconds: 100));
-      }
+    if (audioPaths.isNotEmpty && mounted) {
+      print('开始顺序播放 ${audioPaths.length} 段情绪化语音...');
+      await _playAudioSequentially(
+        paths: audioPaths,
+        forMessage: assistantMessage,
+      );
+      print('所有音频段播放完毕');
     } else {
-      print('⚠️ 语音生成失败');
+      print('没有成功生成的音频段');
     }
   }
 
-  // 统一的主动消息发送入口
-  // _isLoading 被移到 API 调用前设置：
-  // 概率判断阶段（调用此方法之前）不显示省略号气泡，
-  // 只有确认要发送、即将请求 DeepSeek 时才出现加载指示器
   Future<void> _sendProactiveMessage(String type) async {
     if (!mounted || _isLoading) return;
 
-    // 主动消息指令注入到system层，不作为user消息传入，避免AI用中文回复
     String proactiveInstruction = '';
-
     switch (type) {
       case 'topic':
         proactiveInstruction = '''
@@ -563,14 +664,13 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
 可以延续刚才的话题、说说突然想到的事、关心一下对方，或者提点什么建议，随意就好。
 像朋友聊天一样，轻松自然地开口。''';
         break;
-
       case 'idle':
         proactiveInstruction = '''
 [主动发消息]
 你突然想起对方，决定主动发条消息。
 结合现在的时间段，找个自然的理由开口。
 比如：想起之前聊过的事、今天遇到了什么、突然出现的想法等。
-不要只说“你好”或“在吗”，要有具体内容。
+不要只说"你好"或"在吗"，要有具体内容。
 不要延续上次的话题，重新开启一个新话题。
 用你自己的说话方式，自然地开口。''';
         break;
@@ -579,26 +679,25 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
     final timeContext = _generateTimeContext();
     final recentMessages = StorageService.getRecentMessages(_messages);
 
-    // 概率判断已在调用方完成，确认发送后才在这里开启加载指示器
     setState(() {
       _isLoading = true;
     });
 
     try {
       final responseMap = await ApiService.generateResponse(
-        characterPersonality: widget.character.personality,
+        // 使用有效提示词（含用户覆盖和称呼设置）
+        characterPersonality: _effectivePersonality,
         conversationHistory: recentMessages,
-        userMessage: '', // 主动消息模式下不需要userMessage
+        userMessage: '',
         timeContext: timeContext,
-        proactiveInstruction: proactiveInstruction, // 指令注入system层
+        proactiveInstruction: proactiveInstruction,
       );
 
       final japanese = responseMap['japanese'] ?? '';
       final chinese = responseMap['chinese'] ?? '';
-
       await _sendAIMessage(japanese, chinese);
     } catch (e) {
-      print('⚠️ 生成主动消息时出错: $e');
+      print('生成主动消息时出错: $e');
     }
 
     setState(() {
@@ -606,12 +705,9 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
     });
   }
 
-  // 发送主动问候（首次打开/久未联系）
-  // 同 _sendProactiveMessage，_isLoading 移到 API 调用前
   Future<void> _sendProactiveGreeting(String greetingType) async {
     if (!mounted || _isLoading) return;
 
-    // 主动问候指令
     String proactiveInstruction = '';
     switch (greetingType) {
       case 'initial':
@@ -624,22 +720,21 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
         proactiveInstruction = '''
 [久违的联系]
 好久没说话了，你主动联系对方。
-表达一下久别的心情，关心一下对方最近怎么样。
-如果记得上次聊的内容，可以自然地提一下。''';
+表达一下久别的心情，关心一下对方最近怎么样。''';
         break;
     }
 
     final timeContext = _generateTimeContext();
     final recentMessages = StorageService.getRecentMessages(_messages);
 
-    // 准备完成，即将调用 API，才开启加载指示器
     setState(() {
       _isLoading = true;
     });
 
     try {
       final responseMap = await ApiService.generateResponse(
-        characterPersonality: widget.character.personality,
+        // 使用有效提示词（含用户覆盖和称呼设置）
+        characterPersonality: _effectivePersonality,
         conversationHistory: recentMessages,
         userMessage: '',
         timeContext: timeContext,
@@ -648,10 +743,9 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
 
       final japanese = responseMap['japanese'] ?? '';
       final chinese = responseMap['chinese'] ?? '';
-
       await _sendAIMessage(japanese, chinese);
     } catch (e) {
-      print('⚠️ 生成问候时出错: $e');
+      print('生成问候时出错: $e');
     }
 
     setState(() {
@@ -660,85 +754,121 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
   }
 
   // ========================================
-  // 音频播放相关方法
+  // 音频播放 - 核心方法
   // ========================================
 
-  // 从本地文件路径播放音频
-  Future<void> _playAudioFromPath(String audioPath) async {
-    try {
-      await _audioPlayer.stop(); // 先停止当前播放
-
-      if (!mounted) return;
-
+  Future<void> _playAudioSequentially({
+    required List<String> paths,
+    required Message forMessage,
+  }) async {
+    if (mounted) {
       setState(() {
-        _isPlaying = true; // 更新播放状态
+        _currentPlayingMessage = forMessage;
+        _isPlaying = true;
       });
+    }
 
-      // 启动声波动画（循环播放）
-      _soundWaveController.repeat();
+    _primaryIsActive = true;
+    _preloadFuture = null;
 
-      // 检查音频文件是否存在
+    for (int i = 0; i < paths.length; i++) {
+      if (!_isPlaying || !mounted) {
+        print('用户停止播放，中断后续音频段（已播 $i/${paths.length} 段）');
+        break;
+      }
+
+      print('顺序播放第 ${i + 1}/${paths.length} 段：${paths[i]}');
+
+      _segmentCompleter = Completer<void>();
+      await _resumeActivePlayer(paths[i]);
+      await _segmentCompleter!.future;
+
+      print('第 ${i + 1}/${paths.length} 段播放完毕');
+      _primaryIsActive = !_primaryIsActive;
+    }
+
+    _segmentCompleter = null;
+    _preloadFuture = null;
+
+    if (mounted) {
+      setState(() {
+        _isPlaying = false;
+        _currentPlayingMessage = null;
+      });
+      _soundWaveController.stop();
+      _soundWaveController.reset();
+    }
+  }
+
+  Future<void> _safeSetSource(AudioPlayer player, String audioPath) async {
+    try {
       final file = File(audioPath);
       if (!await file.exists()) {
-        print('❌ 音频文件不存在: $audioPath');
-        _soundWaveController.stop();
-        _soundWaveController.reset();
-        if (mounted) {
-          setState(() {
-            _isPlaying = false;
-          });
+        print('预加载：文件不存在，跳过（$audioPath）');
+        return;
+      }
+      await player.setSource(DeviceFileSource(audioPath));
+      print('预加载完成：$audioPath');
+    } catch (e) {
+      print('预加载失败（$audioPath）: $e');
+    }
+  }
+
+  Future<void> _resumeActivePlayer(String audioPath) async {
+    try {
+      final file = File(audioPath);
+      if (!await file.exists()) {
+        print('播放：文件不存在，跳过（$audioPath）');
+        if (_segmentCompleter != null && !_segmentCompleter!.isCompleted) {
+          _segmentCompleter!.complete();
         }
         return;
       }
 
-      print('🔊 播放音频: $audioPath');
+      _soundWaveController.repeat();
 
-      // 设置音频源并播放
-      await _audioPlayer.setSource(DeviceFileSource(audioPath));
-      await _audioPlayer.setVolume(1.0);
-      await _audioPlayer.resume();
+      await _activePlayer.setVolume(1.0);
+      await _activePlayer.setReleaseMode(ReleaseMode.release);
+      await _activePlayer.setSource(DeviceFileSource(audioPath));
 
-      // 监听播放完成事件
-      _audioPlayer.onPlayerStateChanged.listen((PlayerState state) {
-        if (state == PlayerState.completed) {
-          print('✅ 播放完成');
-          if (mounted) {
-            setState(() {
-              _isPlaying = false;
-            });
+      _activePlayer.onPlayerComplete.take(1).listen((_) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (_segmentCompleter != null && !_segmentCompleter!.isCompleted) {
+            _segmentCompleter!.complete();
           }
-        }
+        });
       });
+
+      await _activePlayer.resume();
     } catch (e) {
-      print('❌ 播放失败: $e');
+      print('播放失败（$audioPath）: $e');
       _soundWaveController.stop();
       _soundWaveController.reset();
-      if (mounted) {
-        setState(() {
-          _isPlaying = false;
-          _currentPlayingMessage = null;
-        });
+      if (_segmentCompleter != null && !_segmentCompleter!.isCompleted) {
+        _segmentCompleter!.complete();
       }
     }
   }
 
-  // 切换播放/停止（点击播放按钮时调用）
   Future<void> _togglePlayAudio(Message message) async {
-    // 如果正在播放这条消息，则停止
     if (_currentPlayingMessage == message && _isPlaying) {
       await _stopAudio();
     } else {
-      // 否则播放
       await _playAudio(message);
     }
   }
 
-  // 停止播放音频
   Future<void> _stopAudio() async {
     try {
-      await _audioPlayer.stop();
+      await _audioPlayerPrimary.stop();
+      await _audioPlayerSecondary.stop();
+
       _soundWaveController.stop();
       _soundWaveController.reset();
+
+      if (_segmentCompleter != null && !_segmentCompleter!.isCompleted) {
+        _segmentCompleter!.complete();
+      }
 
       if (mounted) {
         setState(() {
@@ -746,57 +876,77 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
           _currentPlayingMessage = null;
         });
       }
-      print('⏹️ 停止播放');
+      print('停止播放');
     } catch (e) {
-      print('❌ 停止播放失败: $e');
+      print('停止播放失败: $e');
     }
   }
 
-  // 播放指定消息的音频（点击音量图标时调用）
   Future<void> _playAudio(Message message) async {
     try {
-      await _audioPlayer.stop(); // 先停止当前播放
+      await _audioPlayerPrimary.stop();
+      await _audioPlayerSecondary.stop();
 
       if (!mounted) return;
 
-      setState(() {
-        _isPlaying = true;
-        _currentPlayingMessage = message; // 记录当前播放的消息
-      });
+      if (message.audioPaths != null && message.audioPaths!.isNotEmpty) {
+        final existingPaths = <String>[];
+        for (final p in message.audioPaths!) {
+          if (await File(p).exists()) {
+            existingPaths.add(p);
+          } else {
+            print('音频文件不存在，跳过：$p');
+          }
+        }
 
-      // 优先使用缓存的音频文件
+        if (existingPaths.isNotEmpty) {
+          print('使用缓存的多段音频，共 ${existingPaths.length} 段');
+          await _playAudioSequentially(
+            paths: existingPaths,
+            forMessage: message,
+          );
+          return;
+        }
+        print('多段音频缓存均已失效，重新生成');
+      }
+
       if (message.audioPath != null) {
         final file = File(message.audioPath!);
         if (await file.exists()) {
-          print('📂 使用缓存的音频: ${message.audioPath}');
-          await _playAudioFromPath(message.audioPath!);
+          print('使用旧版单段缓存音频：${message.audioPath}');
+          await _playAudioSequentially(
+            paths: [message.audioPath!],
+            forMessage: message,
+          );
           return;
-        } else {
-          print('⚠️ 缓存的音频文件不存在，重新生成');
         }
+        print('旧版单段缓存已失效，重新生成');
       }
 
-      // 如果没有缓存或缓存失效，重新生成音频
-      print('🔄 重新生成音频...');
+      print('重新生成音频...');
+      setState(() {
+        _isPlaying = true;
+        _currentPlayingMessage = message;
+      });
 
-      // 提取日文原文（去掉中文翻译部分）
       String japaneseText = message.content;
       if (message.content.contains('\n\n中文：')) {
         japaneseText = message.content.split('\n\n中文：')[0];
       }
 
-      // 调用GPT-SoVITS API生成语音（应用注音修正）
       final correctedText = _applyPronunciationCorrection(japaneseText);
 
+      // 重新生成时也传入用户设置的语速
       final audioPath = await ApiService.generateSpeech(
-        text: correctedText, // 使用注音修正后的文本
+        text: correctedText,
         referWavPath: widget.character.referWavPath,
         promptText: widget.character.promptText,
         promptLanguage: widget.character.promptLanguage,
+        speedFactor: _ttsSpeed,
       );
 
       if (audioPath == null) {
-        print('❌ 音频生成失败');
+        print('音频生成失败');
         if (mounted) {
           setState(() {
             _isPlaying = false;
@@ -806,17 +956,18 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
         return;
       }
 
-      // 更新消息的音频路径缓存
       final messageIndex = _messages.indexOf(message);
       if (messageIndex != -1) {
         _messages[messageIndex] = message.copyWith(audioPath: audioPath);
         await StorageService.saveConversation(widget.character.id, _messages);
       }
 
-      // 播放生成的音频
-      await _playAudioFromPath(audioPath);
+      await _playAudioSequentially(
+        paths: [audioPath],
+        forMessage: message,
+      );
     } catch (e) {
-      print('❌ 播放错误: $e');
+      print('播放错误: $e');
       if (mounted) {
         setState(() {
           _isPlaying = false;
@@ -826,79 +977,136 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
     }
   }
 
-  // 重新生成指定消息的语音（不重新生成文字）
+  // ----------------------------------------
+  // 重新生成指定消息的语音
+  // ----------------------------------------
+  // 与原版的区别：
+  //   1. 受 _emotionAnalysisEnabled 控制，关闭时跳过情绪分析
+  //   2. TTS 调用传入 _ttsSpeed
   Future<void> _regenerateAudio(Message message) async {
     try {
-      // 设置重新生成状态（用于显示旋转动画）
       if (mounted) {
         setState(() {
           _regeneratingAudio[message] = true;
         });
       }
 
-      // 提取日文原文（去掉中文翻译部分）
       String japaneseText = message.content;
       if (message.content.contains('\n\n中文：')) {
         japaneseText = message.content.split('\n\n中文：')[0];
       }
 
-      print('🔄 重新生成音频: $japaneseText');
+      print('重新生成情绪化语音: $japaneseText');
 
-      // 调用GPT-SoVITS API生成语音（应用注音修正）
-      final correctedText = _applyPronunciationCorrection(japaneseText);
-      print('注音后: $correctedText');
+      final List<String> sentences =
+          EmotionAnalyzer.splitSentences(japaneseText);
 
-      final audioPath = await ApiService.generateSpeech(
-        text: correctedText, // 使用注音修正后的文本
-        referWavPath: widget.character.referWavPath,
-        promptText: widget.character.promptText,
-        promptLanguage: widget.character.promptLanguage,
-      );
+      // 同样受情绪分析开关控制
+      final List<SpeechEmotion> emotions;
+      if (_emotionAnalysisEnabled) {
+        emotions = await EmotionAnalyzer.analyzeEmotions(
+          sentences: sentences,
+          character: widget.character,
+        );
+      } else {
+        final fallback = widget.character.emotionAudioMap?.availableEmotions
+                    .contains(SpeechEmotion.neutral) ==
+                true
+            ? SpeechEmotion.neutral
+            : (widget.character.emotionAudioMap?.availableEmotions.first ??
+                SpeechEmotion.neutral);
+        emotions = List.filled(sentences.length, fallback);
+      }
 
-      // 清除重新生成状态
+      final List<String> newAudioPaths = [];
+      for (int i = 0; i < sentences.length; i++) {
+        final referenceAudio = await _getValidReferenceAudio(emotions[i]);
+        final correctedSentence = _applyPronunciationCorrection(sentences[i]);
+
+        // 传入用户设置的语速
+        final audioPath = await ApiService.generateSpeech(
+          text: correctedSentence,
+          referWavPath: referenceAudio.referWavPath,
+          promptText: referenceAudio.promptText,
+          promptLanguage: referenceAudio.promptLanguage,
+          speedFactor: _ttsSpeed,
+        );
+
+        if (audioPath != null) {
+          newAudioPaths.add(audioPath);
+        } else {
+          print('句子 [$i] 重新生成失败，跳过');
+        }
+      }
+
       if (mounted) {
         setState(() {
           _regeneratingAudio.remove(message);
         });
       }
 
-      if (audioPath == null) {
-        print('❌ 语音生成失败');
+      if (newAudioPaths.isEmpty) {
+        print('所有句子重新生成均失败');
         return;
       }
 
-      // 删除旧的音频文件（如果存在）
-      if (message.audioPath != null) {
-        final oldFile = File(message.audioPath!);
+      final oldPaths = message.audioPaths ??
+          (message.audioPath != null ? [message.audioPath!] : []);
+      for (final oldPath in oldPaths) {
+        final oldFile = File(oldPath);
         if (await oldFile.exists()) {
           try {
             await oldFile.delete();
-            print('🗑️ 已删除旧音频文件');
           } catch (e) {
-            print('⚠️ 删除旧音频文件失败: $e');
+            print('删除旧音频失败: $e');
           }
         }
       }
 
-      // 更新消息的音频路径缓存
       final messageIndex = _messages.indexOf(message);
       if (messageIndex != -1) {
-        _messages[messageIndex] = message.copyWith(audioPath: audioPath);
-        await StorageService.saveConversation(widget.character.id, _messages);
-
-        print('✅ 语音重新生成成功');
-
-        // 自动播放新生成的语音
+        final updatedMessage = _messages[messageIndex].copyWith(
+          audioPath: newAudioPaths.first,
+          audioPaths: newAudioPaths,
+        );
         if (mounted) {
           setState(() {
-            _currentPlayingMessage = _messages[messageIndex];
-            _isPlaying = true;
+            _messages[messageIndex] = updatedMessage;
           });
         }
-        await _playAudioFromPath(audioPath);
+        await StorageService.saveConversation(widget.character.id, _messages);
+
+        if (!mounted) return;
+
+        try {
+          await _audioPlayerPrimary.stop();
+          await _audioPlayerSecondary.stop();
+        } catch (e) {
+          print('停止播放器失败（忽略）: $e');
+        }
+
+        if (_segmentCompleter != null && !_segmentCompleter!.isCompleted) {
+          _segmentCompleter!.complete();
+        }
+        _segmentCompleter = null;
+        _preloadFuture = null;
+        _primaryIsActive = true;
+
+        if (mounted) {
+          setState(() {
+            _isPlaying = false;
+            _currentPlayingMessage = null;
+          });
+        }
+
+        print('重新生成完成，开始顺序播放 ${newAudioPaths.length} 段...');
+        await _playAudioSequentially(
+          paths: newAudioPaths,
+          forMessage: updatedMessage,
+        );
       }
     } catch (e) {
-      print('❌ 重新生成语音错误: $e');
+      print('重新生成语音错误: $e');
       if (mounted) {
         setState(() {
           _regeneratingAudio.remove(message);
@@ -907,9 +1115,15 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
     }
   }
 
-  // 构建带翻译的AI消息（将原文和翻译分开显示，并应用不同字体）
+  // ========================================
+  // 构建带翻译的 AI 消息
+  // ========================================
+  // 与原版的区别：受 _showTranslation 控制。
+  // 关闭翻译时，即使 content 里含有 \n\n中文：，也只渲染日文部分，不显示翻译块。
   List<Widget> _buildTranslatedMessage(String content) {
     final parts = content.split('\n\n中文：');
+
+    // 内容不含翻译分隔符，直接显示全文
     if (parts.length != 2) {
       return [
         Text(
@@ -923,8 +1137,8 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
       ];
     }
 
-    return [
-      // 原文部分（日文）- 使用原文字体配置
+    // 始终渲染日文原文
+    final widgets = <Widget>[
       Text(
         parts[0],
         style: const TextStyle(
@@ -935,68 +1149,81 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
           height: 1.5,
         ),
       ),
-      const SizedBox(height: 8),
-      // 翻译部分（中文）- 磨砂玻璃质感
-      ClipRRect(
-        borderRadius: BorderRadius.circular(8),
-        child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
-          child: Container(
-            padding: const EdgeInsets.all(10),
-            decoration: BoxDecoration(
-              color: Colors.white.withOpacity(0.3),
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(
-                color: Colors.white.withOpacity(0.2),
-                width: 1,
+    ];
+
+    // 只有在「显示中文翻译」开启时才渲染翻译块
+    // 关闭时仅显示日文，不渲染毛玻璃翻译区域
+    if (_showTranslation) {
+      widgets.add(const SizedBox(height: 8));
+      widgets.add(
+        ClipRRect(
+          borderRadius: BorderRadius.circular(8),
+          child: BackdropFilter(
+            filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+            child: Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.3),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(
+                  color: Colors.white.withOpacity(0.2),
+                  width: 1,
+                ),
               ),
-            ),
-            child: Text(
-              parts[1],
-              style: const TextStyle(
-                fontFamily: AI_TRANSLATION_FONT_FAMILY,
-                fontSize: AI_TRANSLATION_FONT_SIZE,
-                fontWeight: AI_TRANSLATION_FONT_WEIGHT,
-                color: Color(0xFF2D3142),
-                height: 1.4,
+              child: Text(
+                parts[1],
+                style: const TextStyle(
+                  fontFamily: AI_TRANSLATION_FONT_FAMILY,
+                  fontSize: AI_TRANSLATION_FONT_SIZE,
+                  fontWeight: AI_TRANSLATION_FONT_WEIGHT,
+                  color: Color(0xFF2D3142),
+                  height: 1.4,
+                ),
               ),
             ),
           ),
         ),
-      ),
-    ];
+      );
+    }
+
+    return widgets;
   }
 
   // ========================================
   // 辅助工具方法
   // ========================================
 
-  // 应用注音修正（将文本中的词汇替换为带假名注音的格式）
-  String _applyPronunciationCorrection(String text) {
-    if (!ENABLE_PRONUNCIATION_CORRECTION) {
-      return text;
+  Future<EmotionReferenceAudio> _getValidReferenceAudio(
+      SpeechEmotion emotion) async {
+    final audio = widget.character.getReferenceAudio(emotion);
+    if (await File(audio.referWavPath).exists()) {
+      return audio;
     }
+    print('情绪音频文件不存在（${emotion.name}）：${audio.referWavPath}，回退到默认参考音频');
+    return EmotionReferenceAudio(
+      referWavPath: widget.character.referWavPath,
+      promptText: widget.character.promptText,
+      promptLanguage: widget.character.promptLanguage,
+      description: '默认参考音频（情绪文件缺失时回退）',
+    );
+  }
 
+  String _applyPronunciationCorrection(String text) {
+    if (!ENABLE_PRONUNCIATION_CORRECTION) return text;
     String correctedText = text;
-
-    // 遍历注音词典，替换匹配的词汇
     PRONUNCIATION_DICT.forEach((word, pronunciation) {
       if (correctedText.contains(word)) {
         if (PRONUNCIATION_MODE == 'bracket') {
-          // 方括号模式：词汇[假名] - 需要GPT-SoVITS支持
           correctedText =
               correctedText.replaceAll(word, '$word[$pronunciation]');
         } else {
-          // 直接替换模式：直接用假名替换汉字 - 更稳定
           correctedText = correctedText.replaceAll(word, pronunciation);
         }
       }
     });
-
     return correctedText;
   }
 
-  // 生成时间上下文信息（让AI感知时间）
   String _generateTimeContext() {
     final now = DateTime.now();
     final weekdayNames = ['星期一', '星期二', '星期三', '星期四', '星期五', '星期六', '星期日'];
@@ -1015,7 +1242,6 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
       '十二月'
     ];
 
-    // 当前日期时间
     final year = now.year;
     final month = monthNames[now.month - 1];
     final day = now.day;
@@ -1023,7 +1249,6 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
     final hour = now.hour;
     final minute = now.minute.toString().padLeft(2, '0');
 
-    // 判断时间段
     String timeOfDay;
     if (hour >= 5 && hour < 11) {
       timeOfDay = '早上';
@@ -1039,7 +1264,6 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
       timeOfDay = '深夜';
     }
 
-    // 判断季节
     String season;
     if (now.month >= 3 && now.month <= 5) {
       season = '春天';
@@ -1051,15 +1275,12 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
       season = '冬天';
     }
 
-    // 计算距离上次对话的时间
     String lastChatInfo = '';
     if (_messages.length >= 2) {
-      // 找到上一条assistant消息
       for (int i = _messages.length - 1; i >= 0; i--) {
         if (_messages[i].role == 'assistant') {
           final lastChatTime = _messages[i].timestamp;
           final difference = now.difference(lastChatTime);
-
           if (difference.inMinutes < 1) {
             lastChatInfo = '距离上次对话：刚刚';
           } else if (difference.inMinutes < 60) {
@@ -1080,7 +1301,6 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
       }
     }
 
-    // 构建完整的时间上下文
     String context = '''【当前时间信息】
 现在的时间是：${year}年${month}${day}日（${weekday}）${timeOfDay} ${hour}:${minute}
 当前季节：${season}''';
@@ -1102,7 +1322,6 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
     return context;
   }
 
-  // 格式化消息时间（像微信那样）
   String _formatMessageTime(DateTime messageTime) {
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
@@ -1114,23 +1333,17 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
     final minute = messageTime.minute.toString().padLeft(2, '0');
     final timeString = '$hour:$minute';
 
-    // 判断是今天、昨天还是更早
     if (messageDay == today) {
-      // 今天：只显示时间
       return timeString;
     } else if (messageDay == yesterday) {
-      // 昨天：显示"昨天 HH:mm"
       return '昨天 $timeString';
     } else if (messageDay.year == now.year) {
-      // 今年：显示"MM月DD日 HH:mm"
       return '${messageTime.month}月${messageTime.day}日 $timeString';
     } else {
-      // 去年或更早：显示"YYYY年MM月DD日 HH:mm"
       return '${messageTime.year}年${messageTime.month}月${messageTime.day}日 $timeString';
     }
   }
 
-  // 滚动消息列表到底部
   void _scrollToBottom() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (_scrollController.hasClients) {
@@ -1143,46 +1356,30 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
     });
   }
 
-  // 清空当前角色的所有对话记录
   Future<void> _clearConversation() async {
-    // 显示确认对话框
     final confirm = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(16),
-        ),
-        title: const Text(
-          '确认清空',
-          style: TextStyle(
-            fontWeight: FontWeight.bold,
-            color: Color(0xFF2D3142),
-          ),
-        ),
-        content: const Text(
-          '确定要清空所有对话记录吗？',
-          style: TextStyle(color: Color(0xFF5A5F73)),
-        ),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('确认清空',
+            style: TextStyle(
+                fontWeight: FontWeight.bold, color: Color(0xFF2D3142))),
+        content: const Text('确定要清空所有对话记录吗？',
+            style: TextStyle(color: Color(0xFF5A5F73))),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
-            child: Text(
-              '取消',
-              style: TextStyle(color: Colors.grey[600]),
-            ),
+            child: Text('取消', style: TextStyle(color: Colors.grey[600])),
           ),
           TextButton(
             onPressed: () => Navigator.pop(context, true),
-            style: TextButton.styleFrom(
-              foregroundColor: Colors.red[700],
-            ),
+            style: TextButton.styleFrom(foregroundColor: Colors.red[700]),
             child: const Text('确定'),
           ),
         ],
       ),
     );
 
-    // 用户确认后执行清空操作
     if (confirm == true) {
       await StorageService.clearConversation(widget.character.id);
       setState(() {
@@ -1196,44 +1393,26 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
   // 单条消息删除
   // ========================================
 
-  // 删除指定下标的单条消息
-  // 弹确认对话框 -> 确认后从列表移除 -> 删除音频缓存文件 -> 持久化保存
-  // index 为该消息在 _messages 列表中的下标
   Future<void> _deleteMessage(int index) async {
     if (index < 0 || index >= _messages.length) return;
 
-    // 弹出确认对话框，防止误触
     final confirm = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(16),
-        ),
-        title: const Text(
-          '删除消息',
-          style: TextStyle(
-            fontWeight: FontWeight.bold,
-            color: Color(0xFF2D3142),
-          ),
-        ),
-        content: const Text(
-          '确定要删除这条消息吗？',
-          style: TextStyle(color: Color(0xFF5A5F73)),
-        ),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('删除消息',
+            style: TextStyle(
+                fontWeight: FontWeight.bold, color: Color(0xFF2D3142))),
+        content: const Text('确定要删除这条消息吗？',
+            style: TextStyle(color: Color(0xFF5A5F73))),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
-            child: Text(
-              '取消',
-              style: TextStyle(color: Colors.grey[600]),
-            ),
+            child: Text('取消', style: TextStyle(color: Colors.grey[600])),
           ),
           TextButton(
             onPressed: () => Navigator.pop(context, true),
-            style: TextButton.styleFrom(
-              // 确认按钮颜色（危险操作用红色，可自行修改）
-              foregroundColor: Colors.red[700],
-            ),
+            style: TextButton.styleFrom(foregroundColor: Colors.red[700]),
             child: const Text('删除'),
           ),
         ],
@@ -1244,31 +1423,28 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
 
     final targetMessage = _messages[index];
 
-    // 如果正在播放这条消息，先停止播放再删除
     if (_currentPlayingMessage == targetMessage && _isPlaying) {
       await _stopAudio();
     }
 
-    // 删除关联的音频缓存文件（如果存在），避免临时目录堆积
-    if (targetMessage.audioPath != null) {
-      final audioFile = File(targetMessage.audioPath!);
-      if (await audioFile.exists()) {
+    final pathsToDelete = targetMessage.audioPaths ??
+        (targetMessage.audioPath != null ? [targetMessage.audioPath!] : []);
+    for (final p in pathsToDelete) {
+      final f = File(p);
+      if (await f.exists()) {
         try {
-          await audioFile.delete();
-          print('已删除消息音频缓存: ${targetMessage.audioPath}');
+          await f.delete();
+          print('已删除音频缓存: $p');
         } catch (e) {
-          // 删除失败不阻断主流程，只打印日志
           print('删除音频缓存失败: $e');
         }
       }
     }
 
-    // 从列表移除并刷新UI
     setState(() {
       _messages.removeAt(index);
     });
 
-    // 持久化：将更新后的列表写回本地存储
     await StorageService.saveConversation(widget.character.id, _messages);
     print('消息已删除（下标: $index）');
   }
@@ -1277,16 +1453,12 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
   // 气泡右键上下文菜单
   // ========================================
 
-  // 在鼠标右键位置弹出菜单，当前只有"删除消息"一项
-  // 如需添加更多操作（如复制文字），在 items 列表里继续追加 PopupMenuItem
   void _showMessageContextMenu(
     BuildContext context,
-    Offset globalPosition, // 菜单弹出的屏幕坐标（跟随鼠标位置）
+    Offset globalPosition,
     int index,
     Message message,
   ) async {
-    // RelativeRect 描述菜单相对于屏幕四边的距离
-    // 用鼠标坐标构造一个 1x1 的矩形，showMenu 会把菜单贴着它弹出
     final RelativeRect position = RelativeRect.fromLTRB(
       globalPosition.dx,
       globalPosition.dy,
@@ -1297,28 +1469,17 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
     final selected = await showMenu<String>(
       context: context,
       position: position,
-      // 菜单圆角大小（可自行修改）
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(10),
-      ),
-      // 菜单背景色（可自行修改）
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
       color: Colors.white,
       items: [
         PopupMenuItem<String>(
           value: 'delete',
           child: Row(
             children: [
-              // 菜单项图标颜色（可自行修改）
               Icon(Icons.delete_outline, size: 18, color: Colors.red[400]),
               const SizedBox(width: 10),
-              // 菜单项文字颜色（可自行修改）
-              Text(
-                '删除消息',
-                style: TextStyle(
-                  fontSize: 14,
-                  color: Colors.red[400],
-                ),
-              ),
+              Text('删除消息',
+                  style: TextStyle(fontSize: 14, color: Colors.red[400])),
             ],
           ),
         ),
@@ -1330,7 +1491,6 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
     }
   }
 
-  // 显示背景设置菜单（底部弹出菜单）
   void _showBackgroundMenu() {
     showModalBottomSheet(
       context: context,
@@ -1368,7 +1528,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
   }
 
   // ========================================
-  // UI构建方法
+  // UI 构建
   // ========================================
 
   @override
@@ -1377,22 +1537,15 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
 
     return Scaffold(
       backgroundColor: const Color(0xFFF5F7FA),
-
-      // ========================================
-      // 顶部标题栏
-      // ========================================
       appBar: AppBar(
         backgroundColor: Colors.white,
         elevation: 0,
-        // 返回按钮
         leading: IconButton(
           icon: const Icon(Icons.arrow_back, color: Color(0xFF2D3142)),
           onPressed: () => Navigator.pop(context),
         ),
-        // 角色头像和名称显示区域
         title: Row(
           children: [
-            // 角色头像（点击可更换）
             GestureDetector(
               onTap: _pickCharacterAvatar,
               child: Container(
@@ -1400,59 +1553,43 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
                 height: 40,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
-                  border: Border.all(
-                    color: color.withOpacity(0.3),
-                    width: 2,
-                  ),
+                  border: Border.all(color: color.withOpacity(0.3), width: 2),
                 ),
                 child: ClipOval(
                   child: _characterAvatarPath != null
-                      ? Image.file(
-                          File(_characterAvatarPath!),
-                          fit: BoxFit.cover,
-                        )
+                      ? Image.file(File(_characterAvatarPath!),
+                          fit: BoxFit.cover)
                       : Container(
                           decoration: BoxDecoration(
                             gradient: LinearGradient(
-                              colors: [color, color.withOpacity(0.7)],
-                            ),
+                                colors: [color, color.withOpacity(0.7)]),
                           ),
                           child: Center(
-                            child: Text(
-                              widget.character.avatar,
-                              style: const TextStyle(fontSize: 20),
-                            ),
+                            child: Text(widget.character.avatar,
+                                style: const TextStyle(fontSize: 20)),
                           ),
                         ),
                 ),
               ),
             ),
             const SizedBox(width: 12),
-            // 角色名称（中文+日文）
             Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  widget.character.name,
-                  style: const TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w600,
-                    color: Color(0xFF2D3142),
-                  ),
-                ),
-                Text(
-                  widget.character.nameJp,
-                  style: TextStyle(
-                    fontSize: 12,
-                    fontFamily: 'Times New Roman',
-                    color: Colors.grey[600],
-                  ),
-                ),
+                Text(widget.character.name,
+                    style: const TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                        color: Color(0xFF2D3142))),
+                Text(widget.character.nameJp,
+                    style: TextStyle(
+                        fontSize: 12,
+                        fontFamily: 'Times New Roman',
+                        color: Colors.grey[600])),
               ],
             ),
           ],
         ),
-        // 右侧操作按钮区域
         actions: [
           // 背景设置按钮
           IconButton(
@@ -1460,60 +1597,48 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
             onPressed: _showBackgroundMenu,
             tooltip: '背景设置',
           ),
-          // 停止播放按钮（播放时显示）
+          // 停止播放按钮（仅在播放时显示）
           if (_isPlaying)
             IconButton(
               icon: Icon(Icons.stop, color: color),
-              onPressed: () async {
-                await _audioPlayer.stop();
-                if (mounted) {
-                  setState(() {
-                    _isPlaying = false;
-                  });
-                }
-              },
+              onPressed: _stopAudio,
             ),
           // 清空对话按钮
           IconButton(
             icon: Icon(Icons.delete_outline, color: Colors.grey[700]),
             onPressed: _clearConversation,
           ),
+          // ----------------------------------------
+          // 设置按钮（新增）
+          // ----------------------------------------
+          // 点击后进入 CharacterSettingsPage，返回时重新加载设置使更改立即生效。
+          // 使用齿轮图标，放在 AppBar 最右侧以便用户发现。
+          IconButton(
+            icon: const Icon(Icons.settings_outlined, color: Color(0xFF2D3142)),
+            onPressed: _openSettings,
+            tooltip: '角色设置',
+          ),
         ],
       ),
-      // ========================================
-      // 页面主体
-      // ========================================
       body: Stack(
         children: [
-          // 主聊天区域（背景+消息列表）
           Column(
             children: [
               Expanded(
                 child: Stack(
                   children: [
-                    // 聊天背景层（渐变或图片）
                     _buildChatBackground(),
-
-                    // 消息列表
                     ListView.builder(
                       controller: _scrollController,
                       padding: const EdgeInsets.only(
-                        left: 16,
-                        right: 16,
-                        top: 16,
-                        bottom: 100, // 留出输入框的空间
-                      ),
+                          left: 16, right: 16, top: 16, bottom: 100),
                       itemCount: _messages.length + (_isLoading ? 1 : 0),
                       itemBuilder: (context, index) {
-                        // 显示"AI正在输入"指示器
                         if (_isLoading && index == _messages.length) {
                           return _buildTypingIndicator();
                         }
-
-                        // 显示消息气泡
                         final message = _messages[index];
                         final isUser = message.role == 'user';
-
                         return _buildMessageBubble(
                             message, isUser, color, index);
                       },
@@ -1523,10 +1648,6 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
               ),
             ],
           ),
-
-          // ========================================
-          // 底部输入框（毛玻璃效果）
-          // ========================================
           Positioned(
             left: 0,
             right: 0,
@@ -1543,17 +1664,13 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
                   ],
                 ),
                 border: Border(
-                  top: BorderSide(
-                    color: Colors.white.withOpacity(0.3),
-                    width: 1,
-                  ),
-                ),
+                    top: BorderSide(
+                        color: Colors.white.withOpacity(0.3), width: 1)),
                 boxShadow: [
                   BoxShadow(
-                    color: Colors.black.withOpacity(0.1),
-                    blurRadius: 20,
-                    offset: const Offset(0, -5),
-                  ),
+                      color: Colors.black.withOpacity(0.1),
+                      blurRadius: 20,
+                      offset: const Offset(0, -5)),
                 ],
               ),
               child: ClipRRect(
@@ -1570,9 +1687,6 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
                       child: Column(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          // ----------------------------------------
-                          // 图片预览区（仅在选了图片后显示）
-                          // ----------------------------------------
                           if (_pendingImagePath != null)
                             Padding(
                               padding: const EdgeInsets.only(bottom: 8),
@@ -1580,17 +1694,14 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
                                 children: [
                                   Stack(
                                     children: [
-                                      // 缩略图
                                       ClipRRect(
                                         borderRadius: BorderRadius.circular(8),
                                         child: Image.file(
-                                          File(_pendingImagePath!),
-                                          width: 56,
-                                          height: 56,
-                                          fit: BoxFit.cover,
-                                        ),
+                                            File(_pendingImagePath!),
+                                            width: 56,
+                                            height: 56,
+                                            fit: BoxFit.cover),
                                       ),
-                                      // 右上角 × 取消按钮
                                       Positioned(
                                         top: 0,
                                         right: 0,
@@ -1601,9 +1712,8 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
                                             width: 16,
                                             height: 16,
                                             decoration: const BoxDecoration(
-                                              color: Colors.black54,
-                                              shape: BoxShape.circle,
-                                            ),
+                                                color: Colors.black54,
+                                                shape: BoxShape.circle),
                                             child: const Icon(Icons.close,
                                                 size: 11, color: Colors.white),
                                           ),
@@ -1612,21 +1722,15 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
                                     ],
                                   ),
                                   const SizedBox(width: 8),
-                                  Text(
-                                    '已选择图片，可直接发送或加文字',
-                                    style: TextStyle(
-                                        fontSize: 12, color: Colors.grey[600]),
-                                  ),
+                                  Text('已选择图片，可直接发送或加文字',
+                                      style: TextStyle(
+                                          fontSize: 12,
+                                          color: Colors.grey[600])),
                                 ],
                               ),
                             ),
-
-                          // ----------------------------------------
-                          // 输入行：相册按钮 + 文本框 + 发送按钮
-                          // ----------------------------------------
                           Row(
                             children: [
-                              // 相册按钮
                               GestureDetector(
                                 onTap: _isLoading ? null : _pickImage,
                                 child: Container(
@@ -1644,38 +1748,31 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
                                       size: 20, color: color.withOpacity(0.8)),
                                 ),
                               ),
-                              // 文本输入框
                               Expanded(
                                 child: Container(
                                   decoration: BoxDecoration(
                                     color: Colors.white.withOpacity(0.6),
                                     borderRadius: BorderRadius.circular(24),
                                     border: Border.all(
-                                      color: color.withOpacity(0.2),
-                                      width: 1.5,
-                                    ),
+                                        color: color.withOpacity(0.2),
+                                        width: 1.5),
                                   ),
                                   child: TextField(
                                     controller: _textController,
                                     style: const TextStyle(
-                                      color: Color(0xFF2D3142),
-                                      fontSize: 14,
-                                    ),
+                                        color: Color(0xFF2D3142), fontSize: 14),
                                     decoration: InputDecoration(
                                       hintText: _pendingImagePath != null
                                           ? '给图片配上文字（可选）...'
                                           : '输入消息...',
-                                      hintStyle: TextStyle(
-                                        color: const Color.fromARGB(
-                                            255, 128, 128, 128),
-                                        fontSize: 14,
-                                      ),
+                                      hintStyle: const TextStyle(
+                                          color: Color.fromARGB(
+                                              255, 128, 128, 128),
+                                          fontSize: 14),
                                       border: InputBorder.none,
                                       contentPadding:
                                           const EdgeInsets.symmetric(
-                                        horizontal: 20,
-                                        vertical: 12,
-                                      ),
+                                              horizontal: 20, vertical: 12),
                                     ),
                                     maxLines: null,
                                     textInputAction: TextInputAction.send,
@@ -1684,21 +1781,18 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
                                 ),
                               ),
                               const SizedBox(width: 12),
-                              // 发送按钮
                               Container(
                                 width: 48,
                                 height: 48,
                                 decoration: BoxDecoration(
                                   gradient: LinearGradient(
-                                    colors: [color, color.withOpacity(0.8)],
-                                  ),
+                                      colors: [color, color.withOpacity(0.8)]),
                                   shape: BoxShape.circle,
                                   boxShadow: [
                                     BoxShadow(
-                                      color: color.withOpacity(0.4),
-                                      blurRadius: 12,
-                                      offset: const Offset(0, 4),
-                                    ),
+                                        color: color.withOpacity(0.4),
+                                        blurRadius: 12,
+                                        offset: const Offset(0, 4))
                                   ],
                                 ),
                                 child: IconButton(
@@ -1723,49 +1817,16 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
   }
 
   // ========================================
-  // 辅助UI组件构建方法
+  // 辅助 UI 组件
   // ========================================
 
-  // 构建聊天背景（支持自定义图片或默认渐变）
   Widget _buildChatBackground() {
-    // 情况1：使用用户从UI选择的角色专属背景图片
     if (_backgroundImagePath != null &&
         File(_backgroundImagePath!).existsSync()) {
       return Stack(
         fit: StackFit.expand,
         children: [
-          // 背景图片
-          Image.file(
-            File(_backgroundImagePath!),
-            fit: BoxFit.cover,
-          ),
-          // 模糊和半透明遮罩（使用角色配置的效果参数）
-          ClipRect(
-            child: BackdropFilter(
-              filter: ImageFilter.blur(
-                sigmaX: widget.character.backgroundBlurSigma, // 使用角色配置的模糊度
-                sigmaY: widget.character.backgroundBlurSigma,
-              ),
-              child: Container(
-                color: Colors.white.withOpacity(
-                  1.0 - widget.character.backgroundOpacity, // 使用角色配置的不透明度
-                ),
-              ),
-            ),
-          ),
-        ],
-      );
-    }
-
-    // 情况2：使用全局配置的背景图路径（从assets）
-    if (BACKGROUND_IMAGE_PATH.isNotEmpty) {
-      return Stack(
-        fit: StackFit.expand,
-        children: [
-          Image.asset(
-            BACKGROUND_IMAGE_PATH,
-            fit: BoxFit.cover,
-          ),
+          Image.file(File(_backgroundImagePath!), fit: BoxFit.cover),
           ClipRect(
             child: BackdropFilter(
               filter: ImageFilter.blur(
@@ -1773,17 +1834,34 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
                 sigmaY: widget.character.backgroundBlurSigma,
               ),
               child: Container(
-                color: Colors.white.withOpacity(
-                  1.0 - widget.character.backgroundOpacity,
-                ),
-              ),
+                  color: Colors.white
+                      .withOpacity(1.0 - widget.character.backgroundOpacity)),
             ),
           ),
         ],
       );
     }
 
-    // 情况3：默认渐变背景
+    if (BACKGROUND_IMAGE_PATH.isNotEmpty) {
+      return Stack(
+        fit: StackFit.expand,
+        children: [
+          Image.asset(BACKGROUND_IMAGE_PATH, fit: BoxFit.cover),
+          ClipRect(
+            child: BackdropFilter(
+              filter: ImageFilter.blur(
+                sigmaX: widget.character.backgroundBlurSigma,
+                sigmaY: widget.character.backgroundBlurSigma,
+              ),
+              child: Container(
+                  color: Colors.white
+                      .withOpacity(1.0 - widget.character.backgroundOpacity)),
+            ),
+          ),
+        ],
+      );
+    }
+
     return Container(
       decoration: const BoxDecoration(
         gradient: LinearGradient(
@@ -1795,52 +1873,41 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
     );
   }
 
-  // 构建"AI正在输入"动画指示器
   Widget _buildTypingIndicator() {
     return Padding(
       padding: const EdgeInsets.only(bottom: 12),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // 角色头像
           Container(
             width: 36,
             height: 36,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
               border: Border.all(
-                color: Color(int.parse('0xFF${widget.character.color}'))
-                    .withOpacity(0.3),
-                width: 2,
-              ),
+                  color: Color(int.parse('0xFF${widget.character.color}'))
+                      .withOpacity(0.3),
+                  width: 2),
             ),
             child: ClipOval(
               child: _characterAvatarPath != null
-                  ? Image.file(
-                      File(_characterAvatarPath!),
-                      fit: BoxFit.cover,
-                    )
+                  ? Image.file(File(_characterAvatarPath!), fit: BoxFit.cover)
                   : Container(
                       decoration: BoxDecoration(
-                        gradient: LinearGradient(
-                          colors: [
-                            Color(int.parse('0xFF${widget.character.color}')),
-                            Color(int.parse('0xFF${widget.character.color}'))
-                                .withOpacity(0.7),
-                          ],
-                        ),
+                        gradient: LinearGradient(colors: [
+                          Color(int.parse('0xFF${widget.character.color}')),
+                          Color(int.parse('0xFF${widget.character.color}'))
+                              .withOpacity(0.7),
+                        ]),
                       ),
                       child: Center(
-                        child: Text(
-                          widget.character.avatar,
-                          style: const TextStyle(fontSize: 18),
-                        ),
+                        child: Text(widget.character.avatar,
+                            style: const TextStyle(fontSize: 18)),
                       ),
                     ),
             ),
           ),
           const SizedBox(width: 10),
-          // 三个闪烁的点（循环动画）
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
             decoration: BoxDecoration(
@@ -1853,10 +1920,9 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
               ),
               boxShadow: [
                 BoxShadow(
-                  color: Colors.black.withOpacity(0.05),
-                  blurRadius: 5,
-                  offset: const Offset(0, 2),
-                ),
+                    color: Colors.black.withOpacity(0.05),
+                    blurRadius: 5,
+                    offset: const Offset(0, 2))
               ],
             ),
             child: AnimatedBuilder(
@@ -1865,12 +1931,10 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
                 return Row(
                   mainAxisSize: MainAxisSize.min,
                   children: List.generate(3, (index) {
-                    // 每个点有不同的延迟，产生波浪效果
                     final delay = index * 0.3;
                     final value =
                         (_typingAnimationController.value - delay) % 1.0;
                     final opacity = (value < 0.5) ? value * 2 : (1 - value) * 2;
-
                     return Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 2),
                       child: Container(
@@ -1892,122 +1956,89 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
     );
   }
 
-  // 构建单个消息气泡（包含头像、文本、语音按钮）
   Widget _buildMessageBubble(
       Message message, bool isUser, Color color, int index) {
-    // 判断是否需要显示时间标签（间隔超过5分钟或是第一条消息）
     bool shouldShowTime = false;
     if (index == 0) {
-      // 第一条消息总是显示时间
       shouldShowTime = true;
     } else {
-      // 计算与上一条消息的时间间隔
       final previousMessage = _messages[index - 1];
       final timeDifference =
           message.timestamp.difference(previousMessage.timestamp);
-      // 间隔超过5分钟则显示时间
       shouldShowTime = timeDifference.inMinutes >= 5;
     }
 
     return Column(
       children: [
-        // 时间标签（间隔超过5分钟才显示）
         if (shouldShowTime)
           Padding(
             padding: const EdgeInsets.only(bottom: 8),
             child: Text(
               _formatMessageTime(message.timestamp),
-              style: TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w600,
-                color: const Color.fromARGB(255, 49, 49, 49),
-              ),
+              style: const TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: Color.fromARGB(255, 49, 49, 49)),
             ),
           ),
-        // 消息内容
         Padding(
           padding: const EdgeInsets.only(bottom: 12),
           child: Row(
-            // 用户消息靠右，AI消息靠左
             mainAxisAlignment:
                 isUser ? MainAxisAlignment.end : MainAxisAlignment.start,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // AI消息才显示头像（在左侧）
               if (!isUser) ...[
-                // 角色头像
                 Container(
                   width: 36,
                   height: 36,
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
-                    border: Border.all(
-                      color: color.withOpacity(0.3),
-                      width: 2,
-                    ),
+                    border: Border.all(color: color.withOpacity(0.3), width: 2),
                   ),
                   child: ClipOval(
                     child: _characterAvatarPath != null
-                        ? Image.file(
-                            File(_characterAvatarPath!),
-                            fit: BoxFit.cover,
-                          )
+                        ? Image.file(File(_characterAvatarPath!),
+                            fit: BoxFit.cover)
                         : Container(
                             decoration: BoxDecoration(
                               gradient: LinearGradient(
-                                colors: [color, color.withOpacity(0.7)],
-                              ),
+                                  colors: [color, color.withOpacity(0.7)]),
                             ),
                             child: Center(
-                              child: Text(
-                                widget.character.avatar,
-                                style: const TextStyle(fontSize: 18),
-                              ),
+                              child: Text(widget.character.avatar,
+                                  style: const TextStyle(fontSize: 18)),
                             ),
                           ),
                   ),
                 ),
                 const SizedBox(width: 10),
               ],
-              // 消息气泡主体
               Flexible(
                 child: ConstrainedBox(
-                  // 限制对话框最大宽度（避免太宽）
                   constraints: BoxConstraints(
                     maxWidth: MediaQuery.of(context).size.width *
                         MESSAGE_MAX_WIDTH_RATIO,
                   ),
-                  // GestureDetector：右键点击气泡弹出上下文菜单
-                  // onSecondaryTapUp 捕获右键抬起时的屏幕坐标，
-                  // 用于在鼠标位置附近显示菜单
                   child: GestureDetector(
                     onSecondaryTapUp: (details) {
                       _showMessageContextMenu(
-                        context,
-                        details.globalPosition, // 菜单弹出位置（跟随鼠标）
-                        index,
-                        message,
-                      );
+                          context, details.globalPosition, index, message);
                     },
                     child: Container(
                       padding: const EdgeInsets.symmetric(
-                        horizontal:
-                            MESSAGE_BUBBLE_HORIZONTAL_PADDING, // 在顶部配置区修改
-                        vertical: MESSAGE_BUBBLE_VERTICAL_PADDING, // 在顶部配置区修改
+                        horizontal: MESSAGE_BUBBLE_HORIZONTAL_PADDING,
+                        vertical: MESSAGE_BUBBLE_VERTICAL_PADDING,
                       ),
                       decoration: BoxDecoration(
-                        // AI消息：自定义渐变色 + 发光效果
                         gradient: isUser
                             ? null
                             : LinearGradient(
                                 begin: Alignment.topLeft,
                                 end: Alignment.bottomRight,
-                                colors: widget
-                                    .character.aiBubbleGradient, // 在顶部配置区修改
+                                colors: widget.character.aiBubbleGradient,
                               ),
-                        // 用户消息：主题色纯色背景
                         color: isUser ? color.withOpacity(0.6) : null,
-                        // 圆角设置（靠近发送者一侧用小圆角）
                         borderRadius: isUser
                             ? const BorderRadius.only(
                                 topLeft: Radius.circular(MESSAGE_BUBBLE_RADIUS),
@@ -2028,28 +2059,21 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
                                 bottomRight:
                                     Radius.circular(MESSAGE_BUBBLE_RADIUS),
                               ),
-                        // AI消息边框
                         border: !isUser
                             ? Border.all(
-                                color: widget
-                                    .character.aiBubbleBorderColor, // 在顶部配置区修改
-                                width: 1.5,
-                              )
+                                color: widget.character.aiBubbleBorderColor,
+                                width: 1.5)
                             : null,
                         boxShadow: [
-                          // 基础阴影
                           BoxShadow(
-                            color: Colors.black.withOpacity(0.05),
-                            blurRadius: 5,
-                            offset: const Offset(0, 2),
-                          ),
-                          // AI消息发光效果
+                              color: Colors.black.withOpacity(0.05),
+                              blurRadius: 5,
+                              offset: const Offset(0, 2)),
                           if (!isUser)
                             BoxShadow(
                               color: widget.character.aiBubbleGlowColor
-                                  .withOpacity(
-                                      AI_BUBBLE_GLOW_OPACITY), // 在顶部配置区修改
-                              blurRadius: AI_BUBBLE_GLOW_BLUR, // 在顶部配置区修改
+                                  .withOpacity(AI_BUBBLE_GLOW_OPACITY),
+                              blurRadius: AI_BUBBLE_GLOW_BLUR,
                               spreadRadius: -2,
                               offset: const Offset(0, 0),
                             ),
@@ -2058,7 +2082,6 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          // 用户消息：有图片时先渲染缩略图
                           if (isUser && message.imagePath != null)
                             Padding(
                               padding: const EdgeInsets.only(bottom: 6),
@@ -2079,11 +2102,9 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
                                 ),
                               ),
                             ),
-                          // 消息文本：
-                          //   纯图片消息（content == '[图片]'）不显示文字
-                          //   图文混合消息去掉 '[图片] ' 前缀
-                          //   AI消息带翻译时用 _buildTranslatedMessage
                           if (!(isUser && message.content == '[图片]'))
+                            // AI 消息：通过 _buildTranslatedMessage 渲染
+                            // （该方法内部会根据 _showTranslation 决定是否渲染翻译块）
                             if (!isUser && message.content.contains('\n\n中文：'))
                               ..._buildTranslatedMessage(message.content)
                             else
@@ -2099,20 +2120,17 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
                                   height: 1.5,
                                 ),
                               ),
-                          // AI消息底部的按钮区域（播放 / 重新生成）
                           if (!isUser)
                             Padding(
                               padding: const EdgeInsets.only(top: 8),
                               child: Row(
                                 mainAxisSize: MainAxisSize.min,
                                 children: [
-                                  // 语音播放/停止按钮
                                   GestureDetector(
                                     onTap: () => _togglePlayAudio(message),
                                     child: _buildPlayButton(message),
                                   ),
                                   const SizedBox(width: 8),
-                                  // 重新生成语音按钮（带旋转动画）
                                   GestureDetector(
                                     onTap: () => _regenerateAudio(message),
                                     child: _buildRegenerateButton(message),
@@ -2123,42 +2141,30 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
                         ],
                       ),
                     ),
-                  ), // GestureDetector
+                  ),
                 ),
               ),
-              // 用户消息才显示头像（在右侧）
               if (isUser) ...[
                 const SizedBox(width: 10),
-                // 用户头像
                 Container(
                   width: 36,
                   height: 36,
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
-                    border: Border.all(
-                      color: color.withOpacity(0.3),
-                      width: 2,
-                    ),
+                    border: Border.all(color: color.withOpacity(0.3), width: 2),
                   ),
                   child: ClipOval(
                     child: USER_AVATAR_PATH.isNotEmpty &&
                             File(USER_AVATAR_PATH).existsSync()
-                        ? Image.file(
-                            File(USER_AVATAR_PATH),
-                            fit: BoxFit.cover,
-                          )
+                        ? Image.file(File(USER_AVATAR_PATH), fit: BoxFit.cover)
                         : Container(
                             decoration: BoxDecoration(
                               gradient: LinearGradient(
-                                colors: [color, color.withOpacity(0.7)],
-                              ),
+                                  colors: [color, color.withOpacity(0.7)]),
                             ),
                             child: const Center(
-                              child: Icon(
-                                Icons.person,
-                                size: 20,
-                                color: Colors.white,
-                              ),
+                              child: Icon(Icons.person,
+                                  size: 20, color: Colors.white),
                             ),
                           ),
                   ),
@@ -2175,7 +2181,6 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
   // 按钮构建辅助方法
   // ========================================
 
-  // 构建播放按钮（扇形扩散声波动画）
   Widget _buildPlayButton(Message message) {
     final isPlaying = _currentPlayingMessage == message && _isPlaying;
 
@@ -2185,7 +2190,6 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
       child: Stack(
         alignment: Alignment.center,
         children: [
-          // 声波动画层（播放时显示）
           if (isPlaying)
             AnimatedBuilder(
               animation: _soundWaveController,
@@ -2199,38 +2203,23 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
                 );
               },
             ),
-          // 喇叭图标
-          Icon(
-            Icons.volume_down, // 喇叭图标
-            size: 18,
-            color: widget.character.aiBubbleBorderColor,
-          ),
+          Icon(Icons.volume_down,
+              size: 18, color: widget.character.aiBubbleBorderColor),
         ],
       ),
     );
   }
 
-  // 构建重新生成按钮（持续旋转动画）
   Widget _buildRegenerateButton(Message message) {
     final isRegenerating = _regeneratingAudio[message] == true;
 
     if (isRegenerating) {
-      // 生成中显示持续旋转动画
       return RotationTransition(
         turns: _typingAnimationController,
-        child: Icon(
-          Icons.refresh,
-          size: 18,
-          color: Colors.blue[600],
-        ),
+        child: Icon(Icons.refresh, size: 18, color: Colors.blue[600]),
       );
     } else {
-      // 未生成显示普通刷新图标
-      return Icon(
-        Icons.refresh,
-        size: 18,
-        color: Colors.grey[600],
-      );
+      return Icon(Icons.refresh, size: 18, color: Colors.grey[600]);
     }
   }
 }
@@ -2242,10 +2231,7 @@ class SoundWavePainter extends CustomPainter {
   final double animationValue;
   final Color color;
 
-  SoundWavePainter({
-    required this.animationValue,
-    required this.color,
-  });
+  SoundWavePainter({required this.animationValue, required this.color});
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -2255,36 +2241,20 @@ class SoundWavePainter extends CustomPainter {
       ..strokeWidth = 1.5;
 
     final center = Offset(size.width / 2, size.height / 2);
-
-    // 根据动画值计算当前显示的声波数量（0-4个）
     final waveCount = _calculateWaveCount(animationValue);
 
-    // 绘制多个扇形声波
     for (int i = 0; i < waveCount; i++) {
-      // 从图标边缘开始，逐渐扩散
       final radius = size.width * (0.4 + i * 0.18);
-
-      // 绘制弧线（扇形）
       final rect = Rect.fromCircle(center: center, radius: radius);
-      canvas.drawArc(
-        rect,
-        -0.6, // 起始角度
-        1.2, // 扫过的角度
-        false,
-        paint,
-      );
+      canvas.drawArc(rect, -0.6, 1.2, false, paint);
     }
   }
 
-  // 计算当前应该显示的声波数量
   int _calculateWaveCount(double value) {
-    // 让声波数量在0-3之间循环变化
-    // 0.0-0.5: 0->3 (从里到外逐条出现)
-    // 0.5-1.0: 3->0 (从外到里逐条消失)
     if (value < 0.5) {
-      return (value * 2 * 3).floor().clamp(0, 3); // 0->3
+      return (value * 2 * 3).floor().clamp(0, 3);
     } else {
-      return (3 - (value - 0.5) * 2 * 3).floor().clamp(0, 3); // 3->0
+      return (3 - (value - 0.5) * 2 * 3).floor().clamp(0, 3);
     }
   }
 

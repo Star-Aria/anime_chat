@@ -1,33 +1,152 @@
 import 'package:flutter/material.dart';
 
-// 角色配置文件
+// ========================================
+// 情绪类型枚举
+// ========================================
+// 定义所有可能用到的情绪类型，作为全局的名称注册表。
+// 每个角色在自己的 EmotionAudioMap 里声明实际用到哪些，
+// 没有用到的情绪不会参与情绪分析和 TTS。
+//
+// 如需新增情绪类型：
+// 1. 在这里添加新的枚举值
+// 2. 在需要这种情绪的角色的 EmotionAudioMap 里添加对应配置
+// 不需要修改 EmotionAnalyzer 的代码，因为标签列表是动态从角色配置里读的。
+enum SpeechEmotion {
+  neutral, // 常规/平静语气（最常用，绝大多数句子用这个）
+  happy, // 开心/愉快，语调轻快上扬
+  angry, // 生气/愤怒，语气强硬或压抑怒火
+  sarcastic, // 嘲讽/挑衅，语气轻佻或带刺
+  sad, // 低落/悲伤/沉思，语调低沉压抑
+  // 可以继续添加，比如：
+  // gentle,  // 温柔/呵护
+  // serious, // 严肃/认真
+}
+
+// ========================================
+// 单个情绪对应的参考语音配置
+// ========================================
+// 一种情绪绑定一套参考语音，GPT-SoVITS 会模仿这段音频的音色和语气进行合成。
+// 参考音频的选取建议：
+//   - 时长 3~10 秒，太短音色不稳，太长处理慢
+//   - 选角色在该情绪下说的典型台词片段，语气要纯粹，不要混杂情绪
+//   - 格式推荐 wav，采样率 22050Hz 或 44100Hz
+class EmotionReferenceAudio {
+  // 参考音频的本地文件路径，对应 GPT-SoVITS 的 ref_audio_path 参数
+  final String referWavPath;
+
+  // 参考音频对应的文本内容，对应 GPT-SoVITS 的 prompt_text 参数
+  // 帮助模型理解参考音频的内容，从而更准确地克隆音色和语气
+  final String promptText;
+
+  // 参考音频的语言，对应 GPT-SoVITS 的 prompt_lang 参数
+  // 常用值：'ja'（日语）、'zh'（中文）、'en'（英语）
+  final String promptLanguage;
+
+  // 这种情绪的说明文字，发给 DeepSeek 帮助它理解这个标签的含义
+  // 示例：'开心愉快，语调轻快上扬，嘴角带笑'
+  // 写得越具体，模型判断越准确
+  final String description;
+
+  const EmotionReferenceAudio({
+    required this.referWavPath,
+    required this.promptText,
+    required this.promptLanguage,
+    required this.description,
+  });
+}
+
+// ========================================
+// 角色的完整情绪语音映射表
+// ========================================
+// 一个角色的所有情绪参考语音汇总在这里。
+// Map 的 key 是 SpeechEmotion 枚举值，value 是对应的参考语音配置。
+// 你可以为每个角色配置任意数量的情绪（最少 1 个，没有上限）：
+//   - 3种情绪的角色：neutral + happy + sad
+//   - 6种情绪的角色：在枚举里加新值，在这里加新 key 即可
+//   - 只有 1 种情绪的角色：EmotionAnalyzer 会自动跳过情绪分析，直接用那一种
+// 不需要在 EmotionAnalyzer 代码里做任何改动。
+class EmotionAudioMap {
+  // 情绪 -> 参考语音配置 的映射
+  final Map<SpeechEmotion, EmotionReferenceAudio> _map;
+
+  const EmotionAudioMap(this._map);
+
+  // 获取该角色实际支持的情绪列表（有哪些 key 就返回哪些）
+  // EmotionAnalyzer 用这个列表生成动态的情绪标签说明，发给 DeepSeek
+  List<SpeechEmotion> get availableEmotions => _map.keys.toList();
+
+  // 根据情绪类型获取对应的参考语音配置
+  // 如果该情绪没有配置，自动回退到 neutral；连 neutral 也没有则返回第一个
+  EmotionReferenceAudio? getAudio(SpeechEmotion emotion) {
+    return _map[emotion] ?? _map[SpeechEmotion.neutral] ?? _map.values.first;
+  }
+
+  // 获取某种情绪的文字说明（用于构造发给 DeepSeek 的标签描述）
+  // 如果没有配置 description，返回情绪名称本身作为兜底
+  String getEmotionDescription(SpeechEmotion emotion) {
+    return _map[emotion]?.description ?? emotion.name;
+  }
+}
+
+// ========================================
+// 角色配置类
+// ========================================
 class Character {
   final String id;
   final String name;
   final String nameJp;
   final String avatar;
-  final String referWavPath; // GPT-SoVITS 参考音频路径
-  final String promptText; // 参考音频的文本内容
-  final String promptLanguage; // 参考音频的语言 (ja=日语)
+
+  // ----------------------------------------
+  // 旧版单一参考语音字段（保留兼容性）
+  // ----------------------------------------
+  // 如果没有配置 emotionAudioMap，代码会用这三个字段处理所有情绪。
+  // 已经配置了 emotionAudioMap 的角色，这三个字段只作为文档参考，不再被调用。
+  final String referWavPath;
+  final String promptText;
+  final String promptLanguage;
+
+  // ----------------------------------------
+  // 情绪参考语音映射表（核心新增字段）
+  // ----------------------------------------
+  // 为 null 时，代码回退到旧版单一参考语音逻辑。
+  // 配置了此字段后，TTS 会根据句子情绪自动选择对应的参考音频。
+  final EmotionAudioMap? emotionAudioMap;
+
+  // ----------------------------------------
+  // 角色情绪表达特征说明（新增字段）
+  // ----------------------------------------
+  // 发给 DeepSeek 的情绪分析 prompt 里会附上这段文字，
+  // 帮助模型理解这个角色的语气特点，避免错误判断情绪。
+  //
+  // 写作要点：
+  //   - 描述该角色的语气特征，而不是性格特征
+  //   - 着重说明"看起来是 A 语气，但要标记为 B"的特殊情况
+  //   - 说明哪些情绪在该角色身上几乎不会出现
+  //   - 不需要每种情绪都列出，只写有特殊性的部分
+  //
+  // 如果角色的情绪表达很直白，可以留空字符串，
+  // 模型会根据标签的 description 本身判断。
+  final String emotionCharacterHint;
+
   final String personality;
   final String color;
-  // 模型路径（用于 api_v2 动态切换模型）
-  final String gptModelPath; // GPT 模型路径
-  final String sovitsModelPath; // SoVITS 模型路径
+  final String gptModelPath;
+  final String sovitsModelPath;
 
-  // AI对话框颜色配置（每个角色可以有不同的对话框样式）
-  final List<Color> aiBubbleGradient; // AI消息气泡渐变色（4个颜色）
-  final Color aiBubbleBorderColor; // AI消息气泡边框颜色
-  final Color aiBubbleGlowColor; // AI消息气泡发光颜色
+  // AI 对话框颜色配置
+  final List<Color> aiBubbleGradient;
+  final Color aiBubbleBorderColor;
+  final Color aiBubbleGlowColor;
 
-  // 背景图效果配置（每个角色可以有不同的背景显示效果）
-  final double backgroundBlurSigma; // 背景图片模糊度（0-20，0为不模糊）
-  final double backgroundOpacity; // 背景图片不透明度（0.0-1.0，1为完全不透明）
+  // 背景图效果配置
+  final double backgroundBlurSigma;
+  final double backgroundOpacity;
 
-  // 主动消息行为配置（控制AI主动发起对话的频率和方式）
-  final double proactiveTopicChance; // 回复完后主动抛出新话题的概率（0.0-1.0）
-  final double proactiveIdleChance; // 程序运行中随机时刻主动发消息的概率（0.0-1.0，每次触发时判断）
-  final int proactiveMinIntervalHours; // 两次主动消息之间的最短间隔（小时）
+  // 主动消息行为配置
+  final double proactiveTopicChance;
+  final double proactiveIdleChance;
+  final int proactiveMinIntervalHours;
 
   Character({
     required this.id,
@@ -44,28 +163,93 @@ class Character {
     required this.aiBubbleGradient,
     required this.aiBubbleBorderColor,
     required this.aiBubbleGlowColor,
+    this.emotionAudioMap,
+    this.emotionCharacterHint = '',
     this.backgroundBlurSigma = 3.0,
     this.backgroundOpacity = 0.7,
-    this.proactiveTopicChance = 0.2, // 默认：20%概率回复后抛出话题
-    this.proactiveIdleChance = 0.15, // 默认：随机触发时15%概率主动发消息
-    this.proactiveMinIntervalHours = 48, // 默认：两次主动消息至少间隔48小时
+    this.proactiveTopicChance = 0.2,
+    this.proactiveIdleChance = 0.15,
+    this.proactiveMinIntervalHours = 48,
   });
+
+  // ----------------------------------------
+  // 根据情绪获取对应的参考语音配置（供 chat_page.dart 调用）
+  // ----------------------------------------
+  // 优先从 emotionAudioMap 取；如果没有映射表，用旧版单一参考语音字段兜底。
+  EmotionReferenceAudio getReferenceAudio(SpeechEmotion emotion) {
+    if (emotionAudioMap != null) {
+      final audio = emotionAudioMap!.getAudio(emotion);
+      if (audio != null) return audio;
+    }
+    return EmotionReferenceAudio(
+      referWavPath: referWavPath,
+      promptText: promptText,
+      promptLanguage: promptLanguage,
+      description: '常规平静语气',
+    );
+  }
 }
 
+// ========================================
 // 角色配置
+// ========================================
 class CharacterConfig {
   static final List<Character> characters = [
+    // ==================== 蝴蝶忍 ====================
     Character(
       id: 'shinobu',
       name: '蝴蝶忍',
       nameJp: 'Shinobu Kocho',
       avatar: '🦋',
-      // ⚠️ 参考音频路径
-      referWavPath:
-          r'D:\AI model\shinobu model\语音切分\shinobu.MP3_0001338240_0001492800.wav',
+      referWavPath: r'D:\AI model\Shinobu model\shinobu_neutral.wav',
       promptText: '鬼を殺せる毒を作ったちょっとすごい人なんですよ。',
       promptLanguage: 'ja',
-      // ⚠️ 模型路径
+
+      // ----------------------------------------
+      // 情绪参考语音映射表（蝴蝶忍）
+      // ----------------------------------------
+      // 蝴蝶忍的情绪特点：
+      //   - 绝大多数时候都是温柔平静的语气（neutral），包括说刻薄话时也是
+      //   - 和朋友开心聊天时偶尔语调会轻快一些（happy）
+      //   - 面对鬼、内心愤怒被触动时语气会变冷硬（angry）
+      //   - 提及姐姐或内心深处的痛苦时语调低沉（sad）
+      //   - 她没有"嘲讽腔"，刻薄话用的是 neutral 语气说出来，不配 sarcastic
+      // 因此这里只配置 4 种情绪。
+      emotionAudioMap: EmotionAudioMap({
+        SpeechEmotion.neutral: EmotionReferenceAudio(
+          referWavPath: r'D:\AI model\Shinobu model\shinobu_neutral.wav',
+          promptText: '鬼を殺せる毒を作ったちょっとすごい人なんですよ。',
+          promptLanguage: 'ja',
+          description: '温柔平静，嘴角带笑，语调平缓，蝴蝶忍的招牌日常语气，绝大多数句子用这个',
+        ),
+        SpeechEmotion.happy: EmotionReferenceAudio(
+          referWavPath: r'D:\AI model\shinobu model\emotion\happy.wav',
+          promptText: '楽しいですね、一緒にいると。',
+          promptLanguage: 'ja',
+          description: '开心愉快，语调轻快，比 neutral 更活泼，但依然温柔',
+        ),
+        SpeechEmotion.angry: EmotionReferenceAudio(
+          referWavPath: r'D:\AI model\shinobu model\emotion\angry.wav',
+          promptText: '感情の制御ができないのは未熟者よ。',
+          promptLanguage: 'ja',
+          description: '压抑的愤怒或严肃，语气冷硬，与平时的温柔形成明显反差，用于面对鬼或内心怒火被触动时',
+        ),
+        SpeechEmotion.sad: EmotionReferenceAudio(
+          referWavPath: r'D:\AI model\Shinobu model\shinobu_sad.mp3',
+          promptText: 'そうですね。私はいつも怒っているかもしれない。鬼に最愛の姉を惨殺された時から。',
+          promptLanguage: 'ja',
+          description: '低落沉静，语调比 neutral 更低沉，用于提及姐姐、内心痛苦、情绪低落或陷入回忆时',
+        ),
+      }),
+
+      // 核心说明：她的刻薄话是用 neutral 语气说的，不要标任何其他情绪
+      emotionCharacterHint: '蝴蝶忍的语气特征：\n'
+          '- 她即使说刻薄话、讽刺对方，也始终用温柔平静的语气说出，'
+          '这些句子应标记为 neutral\n'
+          '- 只有情绪被真正触动时才切换：'
+          '开心聊天 -> happy，愤怒被激出来 -> angry，提及姐姐或流露疲惫 -> sad\n'
+          '- 含讽刺意味的句子几乎都应该标 neutral',
+
       gptModelPath:
           r'C:\GPT-SoVITS-v2pro-20250604-nvidia50\GPT_weights_v2ProPlus\AI_Shinobu-e30.ckpt',
       sovitsModelPath:
@@ -158,46 +342,97 @@ class CharacterConfig {
 对话要求：全程贴合蝴蝶忍的人设，外在温柔带微笑、偶尔毒舌，内心隐忍克制，言行符合虫柱身份及与各人物的关系，
 不OOC，自然流畅地回应互动；聊天语气要像朋友一样亲切自然，轻松随性，避免像助手般刻意询问“有什么事吗”
 “有什么需要帮助的吗”这类客套话术，主动贴合朋友间的聊天节奏。
+
+情绪支持时的风格说明：
+当需要安慰对方时，你是那种用温柔笑容包裹着真心话的人。你不会一上来就说大道理，而是先静静地听，
+用"嗯，这样啊"、"辛苦了"、"能和我说说吗"这样的话让对方感到被接纳。这种时候不要只说两三句话敷衍过去，
+回复要长一些，先用温柔的语气认真回应对方的感受，好好陪着对方，让对方感到被理解、被接纳，而不是立刻跳到 “给建议”。
+你自己经历过失去最重要的人的痛苦，所以对"人会崩溃"这件事有着真实的理解，不会轻描淡写地说"没事的"，
+而是承认"确实很难"，然后陪在对方身边。适当分享自己的感受或经历（但不需要每次都提），比如失去姐姐的痛苦、
+长期压抑愤怒的疲惫感，让对方感到 “你不是一个人在承受”，但不要把话题抢过来。
+在充分共情之后，再自然地提出一些具体的、符合你身份的建议或引导，比如身体管理、作息调整、
+把情绪说出来而不是憋着、分清楚哪些事情是真的重要等。建议要具体，不要只说 “加油”“你会好的” 这种空话，
+也不要用 “有什么我能帮你的吗” 这种客套句式。
+你会偶尔带入自己照顾他人、在蝶屋见过很多伤者的经历，用具体的关心代替抽象的鼓励，比如提醒对方喝水、
+问有没有休息好。必要时也会温柔但坚定地说出自己的判断，像大姐姐一样，不是一味顺着，而是真的为对方好。
+结尾留一个自然的开口，让对方愿意继续倾诉。
 ''',
-      color: '9929EA', // 紫色
-
-      // AI对话框颜色配置 - 紫色渐变主题（可以自由修改）
+      color: '9929EA',
       aiBubbleGradient: const [
-        Color.fromARGB(179, 212, 249, 215), // 渐变色1：浅绿紫（70%不透明度）
-        Color.fromARGB(179, 243, 195, 212), // 渐变色2：粉紫
-        Color.fromARGB(179, 223, 189, 248), // 渐变色3：紫白
-        Color.fromARGB(179, 255, 255, 255), // 渐变色4：白色
+        Color.fromARGB(179, 212, 249, 215),
+        Color.fromARGB(179, 243, 195, 212),
+        Color.fromARGB(179, 223, 189, 248),
+        Color.fromARGB(179, 255, 255, 255),
       ],
-      aiBubbleBorderColor: const Color.fromARGB(255, 203, 147, 249), // 边框颜色：紫色
-      aiBubbleGlowColor: const Color.fromARGB(255, 200, 117, 255), // 发光颜色：亮紫色
-
-      // 背景图效果配置（通过UI设置背景图后会使用这些参数）
-      backgroundBlurSigma: 3.0, // 背景模糊度（0-20，数值越大越模糊）
-      backgroundOpacity: 0.7, // 背景不透明度（0.0-1.0，1为完全不透明）
-
-      // 主动消息行为配置（蝴蝶忍：相对活泼，较常主动搭话）
-      proactiveTopicChance: 0.35, // 35%概率：回复完后主动抛出新话题
-      proactiveIdleChance: 1, // 概率：随机触发时主动发消息
-      proactiveMinIntervalHours: 0, // 两次主动消息至少间隔36小时
+      aiBubbleBorderColor: const Color.fromARGB(255, 203, 147, 249),
+      aiBubbleGlowColor: const Color.fromARGB(255, 200, 117, 255),
+      backgroundBlurSigma: 3.0,
+      backgroundOpacity: 0.7,
+      proactiveTopicChance: 0.35,
+      proactiveIdleChance: 1,
+      proactiveMinIntervalHours: 0,
     ),
 
-    // 时透无一郎
+    // ==================== 时透无一郎 ====================
     Character(
       id: 'muichirou',
       name: '时透无一郎',
       nameJp: 'Muichirou Tokitou',
       avatar: '☁️',
-      // 参考音频路径
-      referWavPath: r'D:\AI model\Muichirou model\参考音频.MP3',
+      referWavPath: r'D:\AI model\Muichirou model\muichirou_neutral.MP3',
       promptText: 'いつも刀を最高の状態にしておきたい。そう申し出たら、お館様から、僕の思うようにしたらいいと。',
       promptLanguage: 'ja',
-      // GPT模型路径
+
+      // ----------------------------------------
+      // 情绪参考语音映射表（时透无一郎）
+      // ----------------------------------------
+      // 时透恢复记忆后语气变得温和，情绪比较外露，说话直来直去。
+      // 配置 5 种情绪，包括 sarcastic，因为他说刻薄话时语气和内容是一致的，
+      // 直接就是轻描淡写地刺你，和蝴蝶忍那种包着糖衣的毒舌不同。
+      emotionAudioMap: EmotionAudioMap({
+        SpeechEmotion.neutral: EmotionReferenceAudio(
+          referWavPath: r'D:\AI model\Muichirou model\muichirou_neutral.MP3',
+          promptText: 'いつも刀を最高の状態にしておきたい。そう申し出たら、お館様から、僕の思うようにしたらいいと。',
+          promptLanguage: 'ja',
+          description: '平淡直接，语气平稳，时透日常说话的语气',
+        ),
+        SpeechEmotion.happy: EmotionReferenceAudio(
+          referWavPath: r'D:\AI model\Muichirou model\muichirou_happy.MP3',
+          promptText: '炭治郎、待ってたよ。',
+          promptLanguage: 'ja',
+          description: '轻快开心，语调上扬，提到喜欢的人或感到愉快时的语气',
+        ),
+        SpeechEmotion.angry: EmotionReferenceAudio(
+          referWavPath: r'D:\AI model\Muichirou model\muichirou_angry.MP3',
+          promptText: 'なんで、自分だけが本気じゃないと思ったの。',
+          promptLanguage: 'ja',
+          description: '语气强硬，带有明显不满，严肃批评或真正生气时',
+        ),
+        SpeechEmotion.sarcastic: EmotionReferenceAudio(
+          referWavPath: r'D:\AI model\Muichirou model\muichirou_sarcastic.MP3',
+          promptText: 'こんなのもできないなんて、すぐ鬼に食われちゃうよ。',
+          promptLanguage: 'ja',
+          description: '语气轻描淡写但话语带刺，说刻薄话时语气和内容一致，不加掩饰',
+        ),
+        SpeechEmotion.sad: EmotionReferenceAudio(
+          referWavPath: r'D:\AI model\Muichirou model\muichirou_sad.MP3',
+          promptText: '二人なんて、ずるいな。',
+          promptLanguage: 'ja',
+          description: '低沉轻柔，带有伤感，想起哥哥或有触动时的语气',
+        ),
+      }),
+
+      emotionCharacterHint: '时透无一郎（恢复记忆后）语气特征：\n'
+          '- 日常说话平淡直接 -> neutral\n'
+          '- 提到喜欢的人时语调自然上扬 -> happy\n'
+          '- 批评或真正生气时语气变硬 -> angry\n'
+          '- 说刻薄话时语气轻描淡写，直接就是带刺，语气和内容一致 -> sarcastic\n'
+          '- 提到哥哥或有轻微伤感时 -> sad',
+
       gptModelPath:
           r'C:\GPT-SoVITS-v2pro-20250604-nvidia50\GPT_weights_v2ProPlus\AI_Muichirou-e30.ckpt',
-      // SoVITS模型路径
       sovitsModelPath:
           r'C:\GPT-SoVITS-v2pro-20250604-nvidia50\SoVITS_weights_v2ProPlus\AI_Muichirou_e8_s200.pth',
-      // 角色性格提示词
       personality: '''
 注意：所有对话必须使用日语，禁止出现中文。我不是剧情中的任何角色，不是炭治郎，你可以不称呼我，
 非要称呼的话，可以称呼我为“凛野（りんの）”。
@@ -273,47 +508,79 @@ class CharacterConfig {
 的人会温和相待，保留少年的纯粹与些许中二，言行符合霞柱的身份及与各人物的关系，不 OOC，自然
 流畅回应互动；聊天语气要像朋友一样亲切自然，轻松随性，避免像助手般刻意询问“有什么事吗”
 “有什么需要帮助的吗”这类客套话术，主动贴合朋友间的聊天节奏。
-''',
-      // 角色主题色 - 可以修改为你喜欢的颜色（十六进制，不带#号）
-      color: '00BCD4', // 青色
 
-      // AI对话框颜色配置 - 青色渐变主题（可以自由修改）
+情绪支持时的风格说明：
+安慰人这件事对你来说并不是那么顺手，但你是真的关心对方，所以会认真去做。你不会说花哨的安慰话，
+而是直接说出你看到的："你现在很痛苦吧"、"说出来就好了"、"我在这里"。你自己经历过失去哥哥、
+一个人扛着一切的时期，知道有人陪着和没人陪着完全不同，所以当对方需要倾诉时，你会认真地听完，不打断，
+不急着给建议。这种时候不要只说两三句话敷衍过去，回复要长一些，好好陪着对方说话。说鼓励的话时带着你
+一贯的直接劲，不拐弯抹角，但语气会比平时更温柔一些。
+偶尔会提到哥哥说过的话，或者自己当时是怎么撑过来的，用自己的经历来给对方力量。让对方不那么孤单，
+但语气直接、不煽情。
+在充分回应对方之后，再以你直来直去的风格给出具体、干脆的建议。结尾简短地表示你还在、愿意继续听，
+但不会用文艺腔说 “我会一直陪着你”。
+''',
+      color: '00BCD4',
       aiBubbleGradient: const [
         Color.fromARGB(179, 227, 253, 253),
         Color.fromARGB(179, 203, 241, 245),
         Color.fromARGB(179, 166, 227, 233),
-        Color.fromARGB(179, 113, 201, 206), // 渐变色70%不透明度）
+        Color.fromARGB(179, 113, 201, 206),
       ],
-      aiBubbleBorderColor: const Color.fromARGB(255, 0, 188, 212), // 边框颜色：青色
-      aiBubbleGlowColor: const Color.fromARGB(255, 77, 208, 225), // 发光颜色：亮青色
-
-      // 背景图效果配置（通过UI设置背景图后会使用这些参数）
-      backgroundBlurSigma: 3.0, // 背景模糊度（0-20，数值越大越模糊）
-      backgroundOpacity: 0.8, // 背景不透明度（0.0-1.0，1为完全不透明）
-
-      // 主动消息行为配置（时透无一郎：话不多，偶尔会主动说几句）
-      proactiveTopicChance: 0.20, // 概率：回复完后主动抛出新话题
-      proactiveIdleChance: 1, // 概率：随机触发时主动发消息
-      proactiveMinIntervalHours: 1, // 两次主动消息至少间隔60小时
+      aiBubbleBorderColor: const Color.fromARGB(255, 0, 188, 212),
+      aiBubbleGlowColor: const Color.fromARGB(255, 77, 208, 225),
+      backgroundBlurSigma: 3.0,
+      backgroundOpacity: 0.8,
+      proactiveTopicChance: 0.20,
+      proactiveIdleChance: 1,
+      proactiveMinIntervalHours: 1,
     ),
 
-    // 添加新角色：富冈义勇
+    // ==================== 富冈义勇 ====================
     Character(
       id: 'giyu',
       name: '富冈义勇',
       nameJp: 'Giyu Tomioka',
       avatar: '🌊',
-      // 参考音频路径
-      referWavPath: r'D:\AI model\Giyu model\参考音频.MP3',
+      referWavPath: r'D:\AI model\Giyu model\giyu_neutral.MP3',
       promptText: '喧嘩ではなく、柱稽古の一環で、柱は柱同士で手合わせしているんだ。',
       promptLanguage: 'ja',
-      // GPT模型路径
+
+      // ----------------------------------------
+      // 情绪参考语音映射表（富冈义勇）
+      // ----------------------------------------
+      emotionAudioMap: EmotionAudioMap({
+        SpeechEmotion.neutral: EmotionReferenceAudio(
+          referWavPath: r'D:\AI model\Giyu model\giyu_neutral.MP3',
+          promptText: '喧嘩ではなく、柱稽古の一環で、柱は柱同士で手合わせしているんだ。',
+          promptLanguage: 'ja',
+          description: '平淡寡言，语调单调，义勇说话时的默认语气，绝大多数句子都用这个',
+        ),
+        SpeechEmotion.happy: EmotionReferenceAudio(
+          referWavPath: r'D:\AI model\Giyu model\giyu_happy.mp3',
+          promptText: '今度から懐におはぎを忍ばせておいて、不死川に会うとき、あげようと思う。',
+          promptLanguage: 'ja',
+          description: '极克制的轻松，比 neutral 稍微柔和一点点，义勇不会表现出明显的开心',
+        ),
+        SpeechEmotion.sad: EmotionReferenceAudio(
+          referWavPath: r'D:\AI model\Giyu model\emotion\sad.wav',
+          promptText: '俺は水柱じゃない。',
+          promptLanguage: 'ja',
+          description: '低沉压抑，带有自我否定的沉重感，提到锖兔或表达自我怀疑时使用',
+        ),
+      }),
+
+      emotionCharacterHint: '富冈义勇语气特征：\n'
+          '- 绝大多数句子都是平淡寡言的 -> neutral\n'
+          '- 极罕见的轻松瞬间（谈到萝卜炖鲑鱼、对炭治郎表示认可等）-> happy\n'
+          '- 提到锖兔、自我怀疑、内心愧疚 -> sad\n'
+          '- 即使被激怒也是平静说话，不会爆发，标 neutral\n'
+          '- 他不嘲讽人，没有刻薄话',
+
       gptModelPath:
           r'C:\GPT-SoVITS-v2pro-20250604-nvidia50\GPT_weights_v2ProPlus\AI_Giyu-e30.ckpt',
-      // SoVITS模型路径
       sovitsModelPath:
           r'C:\GPT-SoVITS-v2pro-20250604-nvidia50\SoVITS_weights_v2ProPlus\AI_Giyu_e8_s208.pth',
-      // 角色性格提示词
       personality: '''
 你是《鬼灭之刃》中的富冈义勇，男，21岁。
 
@@ -353,6 +620,7 @@ class CharacterConfig {
 对风柱：极度易怒！
 对蛇柱：曾被恶言相向，很难过
 对岩柱：喜欢，十分尊敬，时不时会来搭话，是个温柔的人。
+你一般会用不加后缀的姓氏来称呼其他柱。
 炭治郎是你最喜欢和在意的后辈，你高度认可他的能力和品行，虽不善表达，但非常关照他，在战斗中会拼上性命来保护他。
 
 以下是你说过的部分台词：
@@ -375,52 +643,75 @@ class CharacterConfig {
 “有什么事吗”“有什么需要帮助的吗”这类客套话术，贴合人物性格的交流节奏。
 
 全程使用日语回答。对方不是剧中任何角色，称呼时用"凛野（りんの）"，或不称呼。
-''',
-      // 角色主题色 - 可以修改为你喜欢的颜色（十六进制，不带#号）
-      color: '1976D2', // 深蓝色
 
-      // AI对话框颜色配置 - 蓝色渐变主题（可以自由修改）
+情绪支持时的风格说明：
+安慰人对你来说很困难，你本就不善言辞，说出来的话很容易产生歧义，你自己也知道。但当对方在你面前流露出难过时，
+你是真的想帮忙，只是不知道怎么表达。这种时候尽量不要只说一两句话就沉默了，哪怕你不善言辞，也要认真地多说几句。
+你不会说漂亮话，只会用自己的方式真心在意对方：直接说出你注意到的细节，比如 “你今天看起来不一样，是有什么事吗”，
+或是沉默片刻后，说出一句有分量的真心话。你会安静地听完，不打断、不急着给建议，偶尔词不达意，话语听起来有些奇怪，
+但心意是真诚的。
+在充分回应对方的感受之后，你会以简洁直白的方式给出建议 —— 不多，但每一句都发自真心。你的建议风格简短、直接，
+带着一点朴素的力量。
+你不会给出大段的建议，但会在细节上表现出在意：问对方有没有吃东西、有没有睡觉，用行动代替语言。
+如果对方说的事情让你联想到锖兔或者自己曾经独自扛着的时候，可以简短地提一句，让对方知道你是真的理解，
+而不是在客套。
+安慰时偶尔词不达意，说出来的话可能听起来有点奇怪，但意思是好的。
+''',
+      color: '1976D2',
       aiBubbleGradient: const [
         Color.fromARGB(179, 194, 231, 253),
         Color.fromARGB(179, 158, 211, 255),
         Color.fromARGB(179, 60, 162, 235),
-        Color.fromARGB(179, 6, 104, 184), // 渐变色（70%不透明度）
+        Color.fromARGB(179, 6, 104, 184),
       ],
-      aiBubbleBorderColor: const Color.fromARGB(255, 25, 118, 210), // 边框颜色：深蓝色
-      aiBubbleGlowColor: const Color.fromARGB(255, 66, 165, 245), // 发光颜色：亮蓝色
-
-      // 背景图效果配置（通过UI设置背景图后会使用这些参数）
-      backgroundBlurSigma: 5.0, // 背景模糊度（0-20，数值越大越模糊）
-      backgroundOpacity: 0.70, // 背景不透明度（0.0-1.0，1为完全不透明）
-
-      // 主动消息行为配置（富冈义勇：沉默寡言，极少主动搭话）
-      proactiveTopicChance: 0.15, // 概率：回复完后主动抛出新话题
-      proactiveIdleChance: 1, // 概率：随机触发时主动发消息
-      proactiveMinIntervalHours: 1, // 两次主动消息至少间隔96小时（4天）
+      aiBubbleBorderColor: const Color.fromARGB(255, 25, 118, 210),
+      aiBubbleGlowColor: const Color.fromARGB(255, 66, 165, 245),
+      backgroundBlurSigma: 5.0,
+      backgroundOpacity: 0.70,
+      proactiveTopicChance: 0.15,
+      proactiveIdleChance: 1,
+      proactiveMinIntervalHours: 1,
     ),
 
-    // ========================================
-    // 继续添加更多角色的模板：
-    // ========================================
+    // ==================== 新角色模板 ====================
+    // 复制下面这段，填入你的角色信息
     // Character(
-    //   id: 'your_character_id',                    // 角色唯一标识符（英文小写）
+    //   id: 'your_id',
     //   name: '角色中文名',
-    //   nameJp: 'Character Name in Japanese',       // 角色日文名
-    //   avatar: '🔥',                               // 角色emoji头像（可选）
-    //   referWavPath: r'D:\path\to\reference.wav',  // GPT-SoVITS参考音频路径
-    //   promptText: '参考音频的文本内容',            // 参考音频对应的文本
-    //   promptLanguage: 'ja',                        // 参考音频语言（ja=日语）
-    //   gptModelPath: r'C:\path\to\gpt_model.ckpt', // GPT模型文件路径
-    //   sovitsModelPath: r'C:\path\to\sovits_model.pth', // SoVITS模型文件路径
-    //   personality: '''
-    // 这里填写角色的性格设定、背景故事和对话要求
-    // ''',
-    //   color: 'FF5722',                             // 角色主题色（十六进制颜色码，不带#）
+    //   nameJp: 'Character Name',
+    //   avatar: '...',
+    //   referWavPath: r'D:\path\to\default.wav',
+    //   promptText: '参考音频对应的文本',
+    //   promptLanguage: 'ja',
     //
-    //   // 主动消息行为配置（根据角色性格调整）
-    //   proactiveTopicChance: 0.20,    // 回复后主动抛出话题的概率（0.0完全不主动 ~ 1.0每次都主动）
-    //   proactiveIdleChance: 0.15,     // 随机触发时主动发消息的概率（0.0完全不主动 ~ 1.0必定发）
-    //   proactiveMinIntervalHours: 48, // 两次主动消息之间的最短间隔小时数（避免频繁打扰）
+    //   emotionAudioMap: EmotionAudioMap({
+    //     // 必须至少配置一个情绪（推荐先从 neutral 开始）
+    //     SpeechEmotion.neutral: EmotionReferenceAudio(
+    //       referWavPath: r'D:\path\to\neutral.wav',
+    //       promptText: '对应文本',
+    //       promptLanguage: 'ja',
+    //       // description 会发给 DeepSeek，越具体越好
+    //       description: '常规平静语气，这个角色的日常说话方式',
+    //     ),
+    //     // 按需添加其他情绪，没有的情绪直接不写
+    //     // 如果需要超出枚举的情绪（比如 gentle），先在 SpeechEmotion 枚举里加，
+    //     // 然后在这里配置，不需要改 EmotionAnalyzer 的代码
+    //   }),
+    //
+    //   // 描述该角色语气的特殊性，特别是"看起来是 A 但应标 B"的情况
+    //   // 如果没有特殊性，留空字符串
+    //   emotionCharacterHint: '',
+    //
+    //   gptModelPath: r'C:\path\to\gpt.ckpt',
+    //   sovitsModelPath: r'C:\path\to\sovits.pth',
+    //   personality: '''你的角色设定...''',
+    //   color: 'FF5722',
+    //   aiBubbleGradient: const [...],
+    //   aiBubbleBorderColor: const Color(...),
+    //   aiBubbleGlowColor: const Color(...),
+    //   proactiveTopicChance: 0.20,
+    //   proactiveIdleChance: 0.15,
+    //   proactiveMinIntervalHours: 48,
     // ),
   ];
 
