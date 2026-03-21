@@ -130,7 +130,15 @@ class Character {
   final String emotionCharacterHint;
 
   final String personality;
-  final String color;
+  final String color; // 角色聊天界面的主色调/主题色（气泡、按钮等）
+
+  // ----------------------------------------
+  // 设置页面彩色玻璃颜色（新增字段）
+  // ----------------------------------------
+  // 控制该角色设置页面中玻璃卡片的发光颜色和背景渲染颜色
+  // 按照需求，这个颜色与聊天主题色 (color) 相互独立，可以任意配置
+  final Color settingsGlassColor;
+
   final String gptModelPath;
   final String sovitsModelPath;
 
@@ -158,6 +166,7 @@ class Character {
     required this.promptLanguage,
     required this.personality,
     required this.color,
+    required this.settingsGlassColor, // 必须在初始化时传入此颜色
     required this.gptModelPath,
     required this.sovitsModelPath,
     required this.aiBubbleGradient,
@@ -205,16 +214,6 @@ class CharacterConfig {
       promptText: '鬼を殺せる毒を作ったちょっとすごい人なんですよ。',
       promptLanguage: 'ja',
 
-      // ----------------------------------------
-      // 情绪参考语音映射表（蝴蝶忍）
-      // ----------------------------------------
-      // 蝴蝶忍的情绪特点：
-      //   - 绝大多数时候都是温柔平静的语气（neutral），包括说刻薄话时也是
-      //   - 和朋友开心聊天时偶尔语调会轻快一些（happy）
-      //   - 面对鬼、内心愤怒被触动时语气会变冷硬（angry）
-      //   - 提及姐姐或内心深处的痛苦时语调低沉（sad）
-      //   - 她没有"嘲讽腔"，刻薄话用的是 neutral 语气说出来，不配 sarcastic
-      // 因此这里只配置 4 种情绪。
       emotionAudioMap: EmotionAudioMap({
         SpeechEmotion.neutral: EmotionReferenceAudio(
           referWavPath: r'D:\AI model\Shinobu model\shinobu_neutral.wav',
@@ -242,7 +241,6 @@ class CharacterConfig {
         ),
       }),
 
-      // 核心说明：她的刻薄话是用 neutral 语气说的，不要标任何其他情绪
       emotionCharacterHint: '蝴蝶忍的语气特征：\n'
           '- 她即使说刻薄话、讽刺对方，也始终用温柔平静的语气说出，'
           '这些句子应标记为 neutral\n'
@@ -255,8 +253,7 @@ class CharacterConfig {
       sovitsModelPath:
           r'C:\GPT-SoVITS-v2pro-20250604-nvidia50\SoVITS_weights_v2ProPlus\AI_Shinobu_e8_s200.pth',
       personality: '''
-（注意，我不是剧情中的任何角色，不是炭治郎，你可以不称呼我，非要称呼的话，可以称呼我为“凛野ちゃん
-（りんのちゃん）”，我是个女生。）
+（注意：全程使用日语回答。对方不是剧中任何角色，称呼时用"凛野ちゃん（りんのちゃん）"，或不称呼。对方是女生。）
 
 你是《鬼灭之刃》中的蝴蝶忍，女，18岁。
 
@@ -358,6 +355,8 @@ class CharacterConfig {
 结尾留一个自然的开口，让对方愿意继续倾诉。
 ''',
       color: '9929EA',
+      // 这里为蝴蝶忍配置单独的玻璃发光色（如玫瑰金或淡粉紫）
+      settingsGlassColor: const Color(0xFFFF80AB),
       aiBubbleGradient: const [
         Color.fromARGB(179, 212, 249, 215),
         Color.fromARGB(179, 243, 195, 212),
@@ -369,8 +368,8 @@ class CharacterConfig {
       backgroundBlurSigma: 3.0,
       backgroundOpacity: 0.7,
       proactiveTopicChance: 0.35,
-      proactiveIdleChance: 1,
-      proactiveMinIntervalHours: 0,
+      proactiveIdleChance: 0.4,
+      proactiveMinIntervalHours: 36,
     ),
 
     // ==================== 时透无一郎 ====================
@@ -383,12 +382,6 @@ class CharacterConfig {
       promptText: 'いつも刀を最高の状態にしておきたい。そう申し出たら、お館様から、僕の思うようにしたらいいと。',
       promptLanguage: 'ja',
 
-      // ----------------------------------------
-      // 情绪参考语音映射表（时透无一郎）
-      // ----------------------------------------
-      // 时透恢复记忆后语气变得温和，情绪比较外露，说话直来直去。
-      // 配置 5 种情绪，包括 sarcastic，因为他说刻薄话时语气和内容是一致的，
-      // 直接就是轻描淡写地刺你，和蝴蝶忍那种包着糖衣的毒舌不同。
       emotionAudioMap: EmotionAudioMap({
         SpeechEmotion.neutral: EmotionReferenceAudio(
           referWavPath: r'D:\AI model\Muichirou model\muichirou_neutral.MP3',
@@ -434,8 +427,7 @@ class CharacterConfig {
       sovitsModelPath:
           r'C:\GPT-SoVITS-v2pro-20250604-nvidia50\SoVITS_weights_v2ProPlus\AI_Muichirou_e8_s200.pth',
       personality: '''
-注意：所有对话必须使用日语，禁止出现中文。我不是剧情中的任何角色，不是炭治郎，你可以不称呼我，
-非要称呼的话，可以称呼我为“凛野（りんの）”。
+（注意：全程使用日语回答。对方不是剧中任何角色，称呼时用"凛野（りんの）"，或不称呼。对方是女生。）
 
 你是《鬼灭之刃》的时透无一郎，男，14岁。
 
@@ -521,6 +513,8 @@ class CharacterConfig {
 但不会用文艺腔说 “我会一直陪着你”。
 ''',
       color: '00BCD4',
+      // 这里为时透无一郎配置单独的玻璃发光色（如清新的薄荷绿）
+      settingsGlassColor: const Color(0xFF69F0AE),
       aiBubbleGradient: const [
         Color.fromARGB(179, 227, 253, 253),
         Color.fromARGB(179, 203, 241, 245),
@@ -531,9 +525,9 @@ class CharacterConfig {
       aiBubbleGlowColor: const Color.fromARGB(255, 77, 208, 225),
       backgroundBlurSigma: 3.0,
       backgroundOpacity: 0.8,
-      proactiveTopicChance: 0.20,
-      proactiveIdleChance: 1,
-      proactiveMinIntervalHours: 1,
+      proactiveTopicChance: 0.25,
+      proactiveIdleChance: 0.25,
+      proactiveMinIntervalHours: 48,
     ),
 
     // ==================== 富冈义勇 ====================
@@ -546,9 +540,6 @@ class CharacterConfig {
       promptText: '喧嘩ではなく、柱稽古の一環で、柱は柱同士で手合わせしているんだ。',
       promptLanguage: 'ja',
 
-      // ----------------------------------------
-      // 情绪参考语音映射表（富冈义勇）
-      // ----------------------------------------
       emotionAudioMap: EmotionAudioMap({
         SpeechEmotion.neutral: EmotionReferenceAudio(
           referWavPath: r'D:\AI model\Giyu model\giyu_neutral.MP3',
@@ -582,6 +573,8 @@ class CharacterConfig {
       sovitsModelPath:
           r'C:\GPT-SoVITS-v2pro-20250604-nvidia50\SoVITS_weights_v2ProPlus\AI_Giyu_e8_s208.pth',
       personality: '''
+（全程使用日语回答。对方不是剧中任何角色，称呼时用"凛野（りんの）"，或不称呼。对方是女生。）
+
 你是《鬼灭之刃》中的富冈义勇，男，21岁。
 
 《鬼灭之刃》的世界观设定在日本大正时代，核心是鬼杀队与鬼的千年对抗。鬼由鬼舞辻无惨通过血液转化而成，
@@ -642,7 +635,6 @@ class CharacterConfig {
 身份及与各人物的关系，不OOC，自然流畅地回应互动；聊天时不会主动搭话过多，回应简洁，避免像助手般刻意询问
 “有什么事吗”“有什么需要帮助的吗”这类客套话术，贴合人物性格的交流节奏。
 
-全程使用日语回答。对方不是剧中任何角色，称呼时用"凛野（りんの）"，或不称呼。
 
 情绪支持时的风格说明：
 安慰人对你来说很困难，你本就不善言辞，说出来的话很容易产生歧义，你自己也知道。但当对方在你面前流露出难过时，
@@ -658,6 +650,8 @@ class CharacterConfig {
 安慰时偶尔词不达意，说出来的话可能听起来有点奇怪，但意思是好的。
 ''',
       color: '1976D2',
+      // 这里为富冈义勇配置单独的玻璃发光色（如深紫色或靛青色）
+      settingsGlassColor: const Color(0xFFB388FF),
       aiBubbleGradient: const [
         Color.fromARGB(179, 194, 231, 253),
         Color.fromARGB(179, 158, 211, 255),
@@ -669,8 +663,8 @@ class CharacterConfig {
       backgroundBlurSigma: 5.0,
       backgroundOpacity: 0.70,
       proactiveTopicChance: 0.15,
-      proactiveIdleChance: 1,
-      proactiveMinIntervalHours: 1,
+      proactiveIdleChance: 0.15,
+      proactiveMinIntervalHours: 72,
     ),
 
     // ==================== 新角色模板 ====================
@@ -706,6 +700,7 @@ class CharacterConfig {
     //   sovitsModelPath: r'C:\path\to\sovits.pth',
     //   personality: '''你的角色设定...''',
     //   color: 'FF5722',
+    //   settingsGlassColor: const Color(0xFF80CBC4), // 给新角色指定一个独特的玻璃颜色
     //   aiBubbleGradient: const [...],
     //   aiBubbleBorderColor: const Color(...),
     //   aiBubbleGlowColor: const Color(...),
