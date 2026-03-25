@@ -1345,83 +1345,11 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
 
     return Scaffold(
       backgroundColor: const Color(0xFFF5F7FA),
-      appBar: AppBar(
-        backgroundColor: Colors.white,
-        elevation: 0,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back, color: Color(0xFF2D3142)),
-          onPressed: () => Navigator.pop(context),
-        ),
-        title: Row(
-          children: [
-            GestureDetector(
-              onTap: _pickCharacterAvatar,
-              child: Container(
-                width: 40,
-                height: 40,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  border: Border.all(color: color.withOpacity(0.3), width: 2),
-                ),
-                child: ClipOval(
-                  child: _characterAvatarPath != null
-                      ? Image.file(File(_characterAvatarPath!),
-                          fit: BoxFit.cover)
-                      : Container(
-                          decoration: BoxDecoration(
-                            gradient: LinearGradient(
-                                colors: [color, color.withOpacity(0.7)]),
-                          ),
-                          child: Center(
-                            child: Text(widget.character.avatar,
-                                style: const TextStyle(fontSize: 20)),
-                          ),
-                        ),
-                ),
-              ),
-            ),
-            const SizedBox(width: 12),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(widget.character.name,
-                    style: const TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w600,
-                        color: Color(0xFF2D3142))),
-                Text(widget.character.nameJp,
-                    style: TextStyle(
-                        fontSize: 12,
-                        fontFamily: 'Times New Roman',
-                        color: Colors.grey[600])),
-              ],
-            ),
-          ],
-        ),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.wallpaper, color: Color(0xFF2D3142)),
-            onPressed: _showBackgroundMenu,
-            tooltip: '背景设置',
-          ),
-          if (_isPlaying)
-            IconButton(
-              icon: Icon(Icons.stop, color: color),
-              onPressed: _stopAudio,
-            ),
-          IconButton(
-            icon: Icon(Icons.delete_outline, color: Colors.grey[700]),
-            onPressed: _clearConversation,
-          ),
-          IconButton(
-            icon: const Icon(Icons.settings_outlined, color: Color(0xFF2D3142)),
-            onPressed: _openSettings,
-            tooltip: '角色设置',
-          ),
-        ],
-      ),
       body: Stack(
         children: [
+          // ========================================
+          // 第一层：聊天消息区域（铺满全屏，在 bar 下方也可见）
+          // ========================================
           Column(
             children: [
               Expanded(
@@ -1430,8 +1358,16 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
                     _buildChatBackground(),
                     ListView.builder(
                       controller: _scrollController,
-                      padding: const EdgeInsets.only(
-                          left: 16, right: 16, top: 16, bottom: 100),
+                      // --- top padding 要大于 bar 高度，避免第一条消息被 bar 遮住 ---
+                      // kToolbarHeight 约 56，加上状态栏高度和额外间距
+                      // 可调：如果 bar 高度有变化，相应调整这里的 top 值
+                      padding: EdgeInsets.only(
+                          left: 16,
+                          right: 16,
+                          top: MediaQuery.of(context).padding.top +
+                              kToolbarHeight +
+                              12,
+                          bottom: 100),
                       itemCount: _messages.length + (_isLoading ? 1 : 0),
                       itemBuilder: (context, index) {
                         if (_isLoading && index == _messages.length) {
@@ -1448,6 +1384,10 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
               ),
             ],
           ),
+
+          // ========================================
+          // 第二层：底部输入栏（保持原有逻辑不变）
+          // ========================================
           Positioned(
             left: 0,
             right: 0,
@@ -1604,6 +1544,174 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
                             ],
                           ),
                         ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+          // ========================================
+          // 第三层：顶部悬浮栏 -- 磨砂陶瓷质感，底部圆角，阴影悬浮
+          // ========================================
+          // 放在 Stack 最顶层，浮在聊天内容和背景之上。
+          // 不使用 Scaffold.appBar，这样 bar 底部圆角可以直接露出背景，
+          // 不会被系统 AppBar 的不透明矩形背景层遮挡。
+          Positioned(
+            top: 0,
+            left: 0,
+            right: 0,
+            child: Container(
+              // --- 外层 Container 只负责投射阴影，不裁切 ---
+              // 因为 ClipRRect 会把 boxShadow 也裁掉，
+              // 所以阴影放在 ClipRRect 外面的这个 Container 上
+              decoration: BoxDecoration(
+                borderRadius: const BorderRadius.only(
+                  bottomLeft: Radius.circular(18),
+                  bottomRight: Radius.circular(18),
+                ),
+                boxShadow: [
+                  // 外层浅阴影：制造悬浮离地感
+                  // blurRadius 控制阴影扩散范围（可调 6~20），opacity 控制深浅（可调 0.04~0.15）
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.15),
+                    blurRadius: 20,
+                    offset: const Offset(0, 5),
+                  ),
+                  // 第二层更柔和的远距离阴影，增加空间层次感
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.03),
+                    blurRadius: 30,
+                    offset: const Offset(0, 8),
+                  ),
+                ],
+              ),
+              child: ClipRRect(
+                // --- 底部圆角半径（可调范围 0~24，0 为直角）---
+                borderRadius: const BorderRadius.only(
+                  bottomLeft: Radius.circular(18),
+                  bottomRight: Radius.circular(18),
+                ),
+                child: BackdropFilter(
+                  // --- 磨砂模糊程度（可调范围 10~40，越大越模糊越朦胧）---
+                  filter: ImageFilter.blur(sigmaX: 32, sigmaY: 32),
+                  child: Container(
+                    decoration: BoxDecoration(
+                      // --- 陶瓷底色渐变：从上到下由浅白到微灰白，模拟真实陶瓷的柔和光泽 ---
+                      // 上方 opacity 可调 0.7~0.92（越大越白实），下方 0.55~0.8
+                      gradient: LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: [
+                          Colors.white.withOpacity(0.92),
+                          Colors.white.withOpacity(0.72),
+                        ],
+                      ),
+                      borderRadius: const BorderRadius.only(
+                        bottomLeft: Radius.circular(18),
+                        bottomRight: Radius.circular(18),
+                      ),
+                      // --- 统一颜色的边框（borderRadius 要求四边颜色一致）---
+                      // 用极淡的灰线勾勒整体轮廓，让 bar 边界更清晰
+                      // opacity 可调 0.04~0.12，越大轮廓越明显
+                      border: Border.all(
+                        color: Colors.black.withOpacity(0.06),
+                        width: 0.8,
+                      ),
+                    ),
+                    child: SafeArea(
+                      bottom: false,
+                      child: SizedBox(
+                        height: kToolbarHeight,
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 4),
+                          child: Row(
+                            children: [
+                              IconButton(
+                                icon: const Icon(Icons.arrow_back,
+                                    color: Color(0xFF2D3142)),
+                                onPressed: () => Navigator.pop(context),
+                              ),
+                              // 角色头像（点击可更换）
+                              GestureDetector(
+                                onTap: _pickCharacterAvatar,
+                                child: Container(
+                                  width: 40,
+                                  height: 40,
+                                  decoration: BoxDecoration(
+                                    shape: BoxShape.circle,
+                                    border: Border.all(
+                                        color: color.withOpacity(0.3),
+                                        width: 2),
+                                  ),
+                                  child: ClipOval(
+                                    child: _characterAvatarPath != null
+                                        ? Image.file(
+                                            File(_characterAvatarPath!),
+                                            fit: BoxFit.cover)
+                                        : Container(
+                                            decoration: BoxDecoration(
+                                              gradient: LinearGradient(colors: [
+                                                color,
+                                                color.withOpacity(0.7)
+                                              ]),
+                                            ),
+                                            child: Center(
+                                              child: Text(
+                                                  widget.character.avatar,
+                                                  style: const TextStyle(
+                                                      fontSize: 20)),
+                                            ),
+                                          ),
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 12),
+                              // 角色名称
+                              Expanded(
+                                child: Column(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(widget.character.name,
+                                        style: const TextStyle(
+                                            fontSize: 16,
+                                            fontWeight: FontWeight.w600,
+                                            color: Color(0xFF2D3142))),
+                                    Text(widget.character.nameJp,
+                                        style: TextStyle(
+                                            fontSize: 12,
+                                            fontFamily: 'Times New Roman',
+                                            color: Colors.grey[600])),
+                                  ],
+                                ),
+                              ),
+                              // 右侧操作按钮
+                              IconButton(
+                                icon: const Icon(Icons.wallpaper,
+                                    color: Color(0xFF2D3142)),
+                                onPressed: _showBackgroundMenu,
+                                tooltip: '背景设置',
+                              ),
+                              if (_isPlaying)
+                                IconButton(
+                                  icon: Icon(Icons.stop, color: color),
+                                  onPressed: _stopAudio,
+                                ),
+                              IconButton(
+                                icon: Icon(Icons.delete_outline,
+                                    color: Colors.grey[700]),
+                                onPressed: _clearConversation,
+                              ),
+                              IconButton(
+                                icon: const Icon(Icons.settings_outlined,
+                                    color: Color(0xFF2D3142)),
+                                onPressed: _openSettings,
+                                tooltip: '角色设置',
+                              ),
+                            ],
+                          ),
+                        ),
                       ),
                     ),
                   ),
