@@ -178,6 +178,7 @@ class EmotionAnalyzer {
         availableEmotions: availableEmotions,
         fallback: fallback,
         defaults: defaults,
+        sentences: sentences,
       );
     } catch (e) {
       print('情绪分析失败: $e，回退到默认情绪');
@@ -193,12 +194,15 @@ class EmotionAnalyzer {
   //
   // availableEmotions 用于校验标签是否在该角色支持的范围内：
   // 不在范围内的标签（比如角色没有配置的情绪）回退到 fallback。
+  //
+  // sentences 仅用于在调试日志中附带句子内容，方便排查跳句问题。
   static List<SpeechEmotion> _parseEmotionResponse({
     required String rawContent,
     required int expectedCount,
     required List<SpeechEmotion> availableEmotions,
     required SpeechEmotion fallback,
     required List<SpeechEmotion> defaults,
+    required List<String> sentences,
   }) {
     try {
       // 清理可能残留的代码块标记（有些模型不听话会加 ```json）
@@ -241,10 +245,11 @@ class EmotionAnalyzer {
         }
       }
 
-      // 打印最终结果，方便调试时对照句子检查情绪是否准确
+      // 打印最终结果，附带对应句子内容，方便调试时对照检查情绪是否准确、是否有跳句
       print('情绪分析完成（共 ${result.length} 句）：');
       for (int i = 0; i < result.length; i++) {
-        print('  [$i] ${result[i].name}');
+        final sentencePreview = i < sentences.length ? sentences[i] : '(无对应句子)';
+        print('  [$i] ${result[i].name} | $sentencePreview');
       }
 
       return result;

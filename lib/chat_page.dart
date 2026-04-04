@@ -130,6 +130,11 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
   final List<Map<String, String?>> _userMessageQueue = [];
   bool _isProcessingQueue = false;
 
+  // 当前这轮对话中 AI 已经追加了几条连续消息
+  // 每次用户发消息时重置为 0，每次 AI 成功追加一条就 +1，
+  // 达到 _maxConsecutiveFollowUps 后不再追加
+  int _consecutiveCount = 0;
+
   final Map<Message, bool> _regeneratingAudio = {};
   Message? _currentPlayingMessage;
   Completer<void>? _segmentCompleter;
@@ -368,6 +373,10 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
     final imagePath = _pendingImagePath;
     if (text.isEmpty && imagePath == null) return;
 
+    // 用户发了新消息，重置连续追加计数器
+    // 这样 AI 对这条新消息的回复之后，又可以重新开始尝试追加
+    _consecutiveCount = 0;
+
     final displayContent = (imagePath != null && text.isEmpty)
         ? '[图片]'
         : (imagePath != null ? '[图片] $text' : text);
@@ -455,6 +464,22 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
       }
 
       await _sendAIMessage(japaneseText, chineseText);
+
+      // ========================================
+      // 连续消息判定：AI 回复后有概率追加消息
+      // ========================================
+      // 每次用户发消息时 _consecutiveCount 被重置为 0（见 _sendMessage），
+      // 这里每追加成功一条就 +1，达到 _maxConsecutiveFollowUps 后停止，
+      // 防止 AI 无限连发。
+      //
+      // 只在用户消息队列已空时才尝试追加：
+      // 如果用户连续发了好几条消息，AI 应该优先逐条回复，
+      // 全部回完之后再考虑是否追加。
+      if (_userMessageQueue.isEmpty &&
+          _consecutiveCount < _maxConsecutiveFollowUps) {
+        _consecutiveCount++;
+        await _sendProactiveMessage('follow_up');
+      }
     } catch (e) {
       print('生成回复时出错: $e');
     }
@@ -478,60 +503,8 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
         ? '$cleanJapanese\n\n中文：$cleanChinese'
         : cleanJapanese;
 
-    final List<String> sentences =
-        EmotionAnalyzer.splitSentences(cleanJapanese);
-
-    print('TTS 分句结果（共 ${sentences.length} 句）：');
-    for (int i = 0; i < sentences.length; i++) {
-      print('  [$i] ${sentences[i]}');
-    }
-
-    final List<SpeechEmotion> emotions;
-    if (_emotionAnalysisEnabled) {
-      print('正在进行情绪分析...');
-      emotions = await EmotionAnalyzer.analyzeEmotions(
-        sentences: sentences,
-        character: widget.character,
-      );
-    } else {
-      final fallback = widget.character.emotionAudioMap?.availableEmotions
-                  .contains(SpeechEmotion.neutral) ==
-              true
-          ? SpeechEmotion.neutral
-          : (widget.character.emotionAudioMap?.availableEmotions.first ??
-              SpeechEmotion.neutral);
-      emotions = List.filled(sentences.length, fallback);
-      print('情绪分析已关闭，全部使用 ${fallback.name}');
-    }
-
-    print('开始逐句生成情绪化语音...');
-    final List<String> audioPaths = [];
-
-    for (int i = 0; i < sentences.length; i++) {
-      final String sentence = sentences[i];
-      final SpeechEmotion emotion = emotions[i];
-      final referenceAudio = await _getValidReferenceAudio(emotion);
-
-      print('句子 [$i] 情绪：${emotion.name}，参考音频：${referenceAudio.referWavPath}');
-
-      // 进行发音替换（包括注音词典和用户名的自动替换）
-      final correctedSentence = _applyPronunciationCorrection(sentence);
-
-      final String? audioPath = await ApiService.generateSpeech(
-        text: correctedSentence,
-        referWavPath: referenceAudio.referWavPath,
-        promptText: referenceAudio.promptText,
-        promptLanguage: referenceAudio.promptLanguage,
-        speedFactor: _ttsSpeed,
-      );
-
-      if (audioPath != null) {
-        audioPaths.add(audioPath);
-        print('句子 [$i] 音频生成成功：$audioPath');
-      } else {
-        print('句子 [$i] 音频生成失败，跳过该段');
-      }
-    }
+    // 使用统一的情绪分析 + 逐句 TTS 方法生成音频
+    final List<String> audioPaths = await _generateEmotionAudio(cleanJapanese);
 
     final assistantMessage = Message(
       role: 'assistant',
@@ -544,6 +517,9 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
     if (mounted) {
       setState(() {
         _messages.add(assistantMessage);
+        // 消息已生成并加入列表，立即关闭"对方正在输入..."提示
+        // 后续的音频播放不需要显示输入状态
+        _isLoading = false;
       });
     }
 
@@ -563,13 +539,90 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
   }
 
   Future<void> _sendProactiveMessage(String type) async {
-    // 省略：_sendProactiveMessage 内部逻辑不变
-    // 由于字数限制，这部分不变的代码保持不变即可
+    // ========================================
+    // AI 连续发送多条消息的逻辑
+    // ========================================
+    // 在 AI 回复用户之后，有一定概率再追加一条消息，模拟"话多时连续发好几条"的感觉。
+    // 由 _processMessageQueue 在每次 AI 回复后调用。
+    //
+    // type 参数目前固定传 'follow_up'，预留给以后扩展其他类型（如 'reaction' 等）。
+    //
+    // 触发概率由角色配置中的 proactiveTopicChance 控制：
+    //   - 蝴蝶忍: 0.35
+    //   - 时透无一郎: 0.25
+    //   - 富冈义勇: 0.15
+    // 可在 character_config.dart 中调整每个角色的 proactiveTopicChance。
+    //
+    // 连续发送上限由 _maxConsecutiveFollowUps 控制，防止无限连发。
+    if (!mounted || _isLoading) return;
+
+    // 概率判定：不满足则跳过，不追加消息
+    final double chance = widget.character.proactiveTopicChance;
+    if (Random().nextDouble() >= chance) {
+      print('连续消息概率未命中（${(chance * 100).toStringAsFixed(0)}%），不追加');
+      return;
+    }
+
+    print('连续消息概率命中，AI 将追加一条消息');
+
+    setState(() {
+      _isLoading = true;
+    });
+
+    try {
+      final timeContext = _generateTimeContext();
+      final recentMessages = StorageService.getRecentMessages(_messages);
+
+      // 追加消息使用正常的对话上下文（包含完整历史），
+      // 因为这是同一轮对话中的连续发言，不是隔了很久的主动消息，
+      // AI 接着之前的话题说是合理的。
+      //
+      // proactiveInstruction 传入追加消息的指令，
+      // userMessage 传空字符串表示这不是用户发起的对话。
+      final responseMap = await ApiService.generateResponse(
+          characterPersonality: _effectivePersonality,
+          conversationHistory: recentMessages,
+          userMessage: '',
+          timeContext: timeContext,
+          proactiveInstruction: '你刚刚回复了对方的消息，现在你想再补充一句。\n'
+              '可以是对刚才话题的延伸、突然想到的相关事情、'
+              '或者一个轻松的追加评论。\n'
+              '说话方式和语气保持你的角色风格，自然地接上去，不要重复刚才说过的内容。\n');
+
+      final japaneseText = responseMap['japanese'] ?? '';
+      final chineseText = responseMap['chinese'] ?? '';
+
+      if (japaneseText.isNotEmpty) {
+        // 追加消息和主回复之间加一个短暂延迟，模拟"打字中..."的自然感
+        // _followUpDelayMs 控制延迟时长（毫秒），可根据需要调整
+        await Future.delayed(Duration(milliseconds: _followUpDelayMs));
+        await _sendAIMessage(japaneseText, chineseText);
+      }
+    } catch (e) {
+      print('生成连续消息时出错: $e');
+    }
+
+    if (mounted) {
+      setState(() {
+        _isLoading = false;
+      });
+    }
   }
 
-  Future<void> _sendProactiveGreeting(String greetingType) async {
-    // 省略：不变
-  }
+  // 追加消息和主回复之间的延迟时长（毫秒）
+  // 太短（如 500ms）会让两条消息几乎同时出现，不自然
+  // 太长（如 5000ms）会让用户等太久
+  // 建议 1500~3000ms
+  static const int _followUpDelayMs = 2000;
+
+  // 单次对话中最多连续追加几条消息
+  // 防止 AI 无限连发。设为 1 表示最多追加 1 条（加上主回复共 2 条），
+  // 设为 2 表示最多追加 2 条（共 3 条），以此类推。
+  static const int _maxConsecutiveFollowUps = 4;
+
+  // 距离上次对话超过多少天视为"好久不见"，触发 _generateTimeContext 里的强化 prompt
+  // AI 会在回复用户消息时自然地带上"好久没聊了"的意思。
+  static const int _longAbsenceDays = 14;
 
   Future<void> _playAudioSequentially({
     required List<String> paths,
@@ -723,29 +776,27 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
         print('旧版单段缓存已失效，重新生成');
       }
 
-      print('重新生成音频...');
+      // ========================================
+      // 缓存音频不存在时的重新生成逻辑
+      // ========================================
+      // 使用统一的 _generateEmotionAudio 方法，和发送消息、重新生成按钮走完全相同的流程
+      print('缓存音频不存在，重新生成...');
       setState(() {
         _isPlaying = true;
         _currentPlayingMessage = message;
       });
 
+      // 提取日文部分（去掉中文翻译）
       String japaneseText = message.content;
       if (message.content.contains('\n\n中文：')) {
         japaneseText = message.content.split('\n\n中文：')[0];
       }
 
-      final correctedText = _applyPronunciationCorrection(japaneseText);
+      // 调用统一方法：分句 -> 情绪分析 -> 逐句 TTS
+      final newAudioPaths = await _generateEmotionAudio(japaneseText);
 
-      final audioPath = await ApiService.generateSpeech(
-        text: correctedText,
-        referWavPath: widget.character.referWavPath,
-        promptText: widget.character.promptText,
-        promptLanguage: widget.character.promptLanguage,
-        speedFactor: _ttsSpeed,
-      );
-
-      if (audioPath == null) {
-        print('音频生成失败');
+      if (newAudioPaths.isEmpty) {
+        print('所有句子音频生成均失败');
         if (mounted) {
           setState(() {
             _isPlaying = false;
@@ -755,16 +806,34 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
         return;
       }
 
-      final messageIndex = _messages.indexOf(message);
+      // 更新消息的音频缓存路径，下次点击播放可以直接使用
+      // 使用 _findMessageIndex 按时间戳+内容匹配，避免对象引用失效导致找不到消息
+      final messageIndex = _findMessageIndex(message);
       if (messageIndex != -1) {
-        _messages[messageIndex] = message.copyWith(audioPath: audioPath);
+        final updatedMessage = _messages[messageIndex].copyWith(
+          audioPath: newAudioPaths.first,
+          audioPaths: newAudioPaths,
+        );
+        if (mounted) {
+          setState(() {
+            _messages[messageIndex] = updatedMessage;
+          });
+        }
         await StorageService.saveConversation(widget.character.id, _messages);
-      }
 
-      await _playAudioSequentially(
-        paths: [audioPath],
-        forMessage: message,
-      );
+        print('开始顺序播放 ${newAudioPaths.length} 段情绪化语音...');
+        await _playAudioSequentially(
+          paths: newAudioPaths,
+          forMessage: updatedMessage,
+        );
+      } else {
+        // 即使找不到原消息（极端情况），也尝试播放已生成的音频
+        print('未在消息列表中找到原消息，仍尝试播放');
+        await _playAudioSequentially(
+          paths: newAudioPaths,
+          forMessage: message,
+        );
+      }
     } catch (e) {
       print('播放错误: $e');
       if (mounted) {
@@ -777,6 +846,16 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
   }
 
   Future<void> _regenerateAudio(Message message) async {
+    // ========================================
+    // 重新生成音频的入口
+    // ========================================
+    // 先记录消息在列表中的索引位置，用于后续更新消息对象。
+    // 使用 _findMessageIndex 按时间戳+内容匹配，而非 _messages.indexOf 的对象引用匹配，
+    // 解决"消息对象被替换后 indexOf 返回 -1 导致情绪分析流程被跳过"的问题。
+    // 例如：第一次点重新生成后 _messages[i] 被 copyWith 替换成了新对象，
+    // 但 UI 层持有的 message 引用仍然是旧对象，indexOf 就找不到了。
+    final int messageIndex = _findMessageIndex(message);
+
     try {
       if (mounted) {
         setState(() {
@@ -784,51 +863,17 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
         });
       }
 
+      // 提取日文部分（去掉中文翻译）
       String japaneseText = message.content;
       if (message.content.contains('\n\n中文：')) {
         japaneseText = message.content.split('\n\n中文：')[0];
       }
 
-      print('重新生成情绪化语音: $japaneseText');
+      print('重新生成情绪化语音...');
 
-      final List<String> sentences =
-          EmotionAnalyzer.splitSentences(japaneseText);
-
-      final List<SpeechEmotion> emotions;
-      if (_emotionAnalysisEnabled) {
-        emotions = await EmotionAnalyzer.analyzeEmotions(
-          sentences: sentences,
-          character: widget.character,
-        );
-      } else {
-        final fallback = widget.character.emotionAudioMap?.availableEmotions
-                    .contains(SpeechEmotion.neutral) ==
-                true
-            ? SpeechEmotion.neutral
-            : (widget.character.emotionAudioMap?.availableEmotions.first ??
-                SpeechEmotion.neutral);
-        emotions = List.filled(sentences.length, fallback);
-      }
-
-      final List<String> newAudioPaths = [];
-      for (int i = 0; i < sentences.length; i++) {
-        final referenceAudio = await _getValidReferenceAudio(emotions[i]);
-        final correctedSentence = _applyPronunciationCorrection(sentences[i]);
-
-        final audioPath = await ApiService.generateSpeech(
-          text: correctedSentence,
-          referWavPath: referenceAudio.referWavPath,
-          promptText: referenceAudio.promptText,
-          promptLanguage: referenceAudio.promptLanguage,
-          speedFactor: _ttsSpeed,
-        );
-
-        if (audioPath != null) {
-          newAudioPaths.add(audioPath);
-        } else {
-          print('句子 [$i] 重新生成失败，跳过');
-        }
-      }
+      // 调用统一方法：分句 -> 情绪分析 -> 逐句 TTS
+      final List<String> newAudioPaths =
+          await _generateEmotionAudio(japaneseText);
 
       if (mounted) {
         setState(() {
@@ -841,6 +886,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
         return;
       }
 
+      // 删除旧的缓存音频文件
       final oldPaths = message.audioPaths ??
           (message.audioPath != null ? [message.audioPath!] : []);
       for (final oldPath in oldPaths) {
@@ -854,7 +900,6 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
         }
       }
 
-      final messageIndex = _messages.indexOf(message);
       if (messageIndex != -1) {
         final updatedMessage = _messages[messageIndex].copyWith(
           audioPath: newAudioPaths.first,
@@ -894,6 +939,13 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
         await _playAudioSequentially(
           paths: newAudioPaths,
           forMessage: updatedMessage,
+        );
+      } else {
+        // 找不到原消息时的兜底：仍然播放已生成的音频，但无法更新缓存
+        print('未在消息列表中找到原消息（index=-1），仍尝试播放');
+        await _playAudioSequentially(
+          paths: newAudioPaths,
+          forMessage: message,
         );
       }
     } catch (e) {
@@ -999,6 +1051,105 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
   // 辅助工具方法
   // ========================================
 
+  // ----------------------------------------
+  // 按时间戳和内容查找消息在 _messages 列表中的索引
+  // ----------------------------------------
+  // 为什么不用 _messages.indexOf(message)：
+  //   Message 是不可变对象，每次 copyWith 都会产生新对象。
+  //   当 _playAudio 或 _regenerateAudio 更新消息的 audioPaths 后，
+  //   UI 层（GestureDetector.onTap）持有的 message 引用仍是旧对象，
+  //   再次调用 indexOf 就会因为对象不同而返回 -1，导致后续更新和播放被跳过。
+  //   按时间戳 + 内容匹配可以稳定找到同一条逻辑消息，不受对象替换影响。
+  //
+  // 匹配规则：同时比对 timestamp 和 content，两者都相同才认为是同一条消息。
+  //   - timestamp 精确到毫秒，实际发生碰撞的概率极低
+  //   - 加上 content 双重保险，避免极端情况下的误匹配
+  int _findMessageIndex(Message message) {
+    for (int i = 0; i < _messages.length; i++) {
+      if (_messages[i].timestamp == message.timestamp &&
+          _messages[i].content == message.content) {
+        return i;
+      }
+    }
+    return -1;
+  }
+
+  // ========================================
+  // 统一的情绪分析 + 逐句 TTS 生成方法
+  // ========================================
+  // 三个调用场景（_sendAIMessage / _playAudio / _regenerateAudio）共用此方法，
+  // 确保分句、情绪分析、逐句生成、调试输出的逻辑完全一致，不会出现
+  // 某个入口漏掉情绪分析或使用不同参数的情况。
+  //
+  // 参数：
+  //   japaneseText - 纯日文文本（不含中文翻译部分）
+  //
+  // 返回：
+  //   生成成功的音频文件路径列表，可能为空（全部失败时）
+  //   调用方需要自行处理空列表的情况
+  Future<List<String>> _generateEmotionAudio(String japaneseText) async {
+    // --- 第一步：分句 ---
+    final List<String> sentences = EmotionAnalyzer.splitSentences(japaneseText);
+
+    print('TTS 分句结果（共 ${sentences.length} 句）：');
+    for (int i = 0; i < sentences.length; i++) {
+      print('  [$i] ${sentences[i]}');
+    }
+
+    // --- 第二步：情绪分析 ---
+    // 根据 _emotionAnalysisEnabled 开关决定是调用 DeepSeek 分析还是直接用默认情绪
+    final List<SpeechEmotion> emotions;
+    if (_emotionAnalysisEnabled) {
+      print('正在进行情绪分析...');
+      emotions = await EmotionAnalyzer.analyzeEmotions(
+        sentences: sentences,
+        character: widget.character,
+      );
+    } else {
+      // 情绪分析关闭时，使用角色的默认情绪（优先 neutral）
+      final fallback = widget.character.emotionAudioMap?.availableEmotions
+                  .contains(SpeechEmotion.neutral) ==
+              true
+          ? SpeechEmotion.neutral
+          : (widget.character.emotionAudioMap?.availableEmotions.first ??
+              SpeechEmotion.neutral);
+      emotions = List.filled(sentences.length, fallback);
+      print('情绪分析已关闭，全部使用 ${fallback.name}');
+    }
+
+    // --- 第三步：逐句生成 TTS 音频 ---
+    print('开始逐句生成情绪化语音...');
+    final List<String> audioPaths = [];
+
+    for (int i = 0; i < sentences.length; i++) {
+      final String sentence = sentences[i];
+      final SpeechEmotion emotion = emotions[i];
+      final referenceAudio = await _getValidReferenceAudio(emotion);
+
+      print('句子 [$i] 情绪：${emotion.name}，参考音频：${referenceAudio.referWavPath}');
+
+      // 进行发音替换（包括注音词典和用户名的自动替换）
+      final correctedSentence = _applyPronunciationCorrection(sentence);
+
+      final String? audioPath = await ApiService.generateSpeech(
+        text: correctedSentence,
+        referWavPath: referenceAudio.referWavPath,
+        promptText: referenceAudio.promptText,
+        promptLanguage: referenceAudio.promptLanguage,
+        speedFactor: _ttsSpeed,
+      );
+
+      if (audioPath != null) {
+        audioPaths.add(audioPath);
+        print('句子 [$i] 音频生成成功：$audioPath');
+      } else {
+        print('句子 [$i] 音频生成失败，跳过该段');
+      }
+    }
+
+    return audioPaths;
+  }
+
   Future<EmotionReferenceAudio> _getValidReferenceAudio(
       SpeechEmotion emotion) async {
     final audio = widget.character.getReferenceAudio(emotion);
@@ -1096,6 +1247,13 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
     }
 
     String lastChatInfo = '';
+    // ----------------------------------------
+    // 判断距离上次对话过了多久（用于"好久不见"功能）
+    // ----------------------------------------
+    // 这里找的是最后一条 assistant 消息的时间戳，代表"上次 AI 和用户对话"的时间点。
+    // 之所以找 assistant 而不是 user，是因为如果用户连续发了几条消息还没收到回复，
+    // "上次对话"应该算上一次有来有回的时间，而不是用户刚刚单方面发的消息。
+    bool isLongAbsence = false;
     if (_messages.length >= 2) {
       for (int i = _messages.length - 1; i >= 0; i--) {
         if (_messages[i].role == 'assistant') {
@@ -1109,12 +1267,18 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
             lastChatInfo = '距离上次对话：${difference.inHours}小时前';
           } else if (difference.inDays < 30) {
             lastChatInfo = '距离上次对话：${difference.inDays}天前';
+            // 超过 _longAbsenceDays 天视为"好久不见"
+            if (difference.inDays >= _longAbsenceDays) {
+              isLongAbsence = true;
+            }
           } else if (difference.inDays < 365) {
             final months = (difference.inDays / 30).floor();
             lastChatInfo = '距离上次对话：约${months}个月前';
+            isLongAbsence = true;
           } else {
             final years = (difference.inDays / 365).floor();
             lastChatInfo = '距离上次对话：约${years}年前';
+            isLongAbsence = true;
           }
           break;
         }
@@ -1134,10 +1298,33 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
 【重要提示】
 - 请根据当前时间来调整你的回答和态度
 - 如果用户在不合适的时间说了不合时宜的问候（如中午说"早上好"），可以温和地指出
-- 如果距离上次对话时间很久，可以自然地表达"好久不见"的感觉
-- 可以根据季节和时间提及相关的话题（如冬天提到寒冷、晚上提醒早点休息等）
+- 可以根据季节和时间提及相关的话题（如冬天提到寒冷、晚上提醒早点休息等，但也不必每次都提及）
 - 保持自然，不要刻意强调时间信息，只在合适的时候提及
 ''';
+
+    // ----------------------------------------
+    // "好久不见"强化指令
+    // ----------------------------------------
+    // 当距离上次对话超过 _longAbsenceDays 天时，追加一段更强硬的指令，
+    // 要求 AI 必须在回复的开头自然地表达"好久不见"的意思。
+    //
+    // 为什么不把这个逻辑放在上面的"【重要提示】"里？
+    // 因为如果每次都带着"如果距离很久就说好久不见"这样的弱提示，
+    // AI 大概率会忽略，尤其是 DeepSeek 对条件型指令的遵从度不高。
+    // 只有在确实需要的时候才追加这段强指令，效果更好，也不会干扰正常对话。
+    //
+    // _longAbsenceDays 控制"多少天算好久不见"，可在下方调整。
+    if (isLongAbsence) {
+      context += '''
+【久别重逢】
+你们已经很久没有聊天了（$lastChatInfo）。
+在回复用户这条消息时，你要用自己的说话方式自然地加入"好久没聊了"的感觉。
+注意：
+- 用你角色自己的语气和措辞，不要直接说"好久不见"这四个字，要符合你的性格
+- 这个表达要自然地融入回复，不要生硬地单独一句
+- 同时也要正常回应用户的消息内容，不要只说问候就结束
+''';
+    }
 
     return context;
   }
@@ -1368,11 +1555,8 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
                               kToolbarHeight +
                               12,
                           bottom: 100),
-                      itemCount: _messages.length + (_isLoading ? 1 : 0),
+                      itemCount: _messages.length,
                       itemBuilder: (context, index) {
-                        if (_isLoading && index == _messages.length) {
-                          return _buildTypingIndicator();
-                        }
                         final message = _messages[index];
                         final isUser = message.role == 'user';
                         return _buildMessageBubble(
@@ -1667,7 +1851,9 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
                                 ),
                               ),
                               const SizedBox(width: 12),
-                              // 角色名称
+                              // 角色名称 + 状态提示
+                              // 正在生成回复时显示"对方正在输入..."（类似微信）
+                              // 正常状态显示角色日文名
                               Expanded(
                                 child: Column(
                                   mainAxisAlignment: MainAxisAlignment.center,
@@ -1678,11 +1864,21 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
                                             fontSize: 16,
                                             fontWeight: FontWeight.w600,
                                             color: Color(0xFF2D3142))),
-                                    Text(widget.character.nameJp,
-                                        style: TextStyle(
-                                            fontSize: 12,
-                                            fontFamily: 'Times New Roman',
-                                            color: Colors.grey[600])),
+                                    if (_isLoading)
+                                      // AI 正在生成回复时的提示
+                                      // 颜色可调：目前使用深灰色，和角色日文名的灰色保持统一风格
+                                      Text('对方正在输入...',
+                                          style: TextStyle(
+                                              fontSize: 12,
+                                              color: const Color.fromARGB(
+                                                  255, 42, 42, 42)))
+                                    else
+                                      // 正常状态显示角色日文名
+                                      Text(widget.character.nameJp,
+                                          style: TextStyle(
+                                              fontSize: 12,
+                                              fontFamily: 'Times New Roman',
+                                              color: Colors.grey[600])),
                                   ],
                                 ),
                               ),
