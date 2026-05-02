@@ -15,7 +15,7 @@ dependencies:
   # HTTP请求
   http: ^1.1.0
   
-  audioplayers: ^5.2.1 
+  audioplayers: ^6.6.0 
   
   # 本地存储 - Windows支持
   shared_preferences: ^2.2.2
@@ -23,13 +23,13 @@ dependencies:
   # 文件路径 - Windows支持
   path_provider: ^2.1.1
 
-  window_manager: ^0.3.7    # 窗口管理
+  window_manager: ^0.5.1    # 窗口管理
   image_picker: ^1.0.4      # 图片选择器
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
-  flutter_lints: ^2.0.0
+  flutter_lints: ^6.0.0
 
 flutter:
   uses-material-design: true

@@ -131,12 +131,12 @@ class EmotionAnalyzer {
       // 如果某个角色没有填 hint，这段就省略，让模型只凭标签描述判断。
       final String characterHintSection =
           character.emotionCharacterHint.isNotEmpty
-              ? '角色语气特征说明（供参考）：\n'
+              ? '角色语气特征说明（需严格按此执行）：\n'
                   '${character.emotionCharacterHint}\n'
                   '\n'
               : '';
 
-      final String userPrompt = '${characterHintSection}'
+      final String userPrompt = '$characterHintSection'
           '请为以下 ${sentences.length} 句话逐一标注情绪（按编号顺序输出）：\n'
           '$sentenceList';
 

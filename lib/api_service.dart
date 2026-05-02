@@ -22,6 +22,18 @@ class ApiService {
 
   static const String gptSovitsBaseUrl = 'http://127.0.0.1:9880';
 
+  // ========================================
+  // 中译日校验与重试参数（可调）
+  // ========================================
+  // _maxTranslationRetries：翻译失败时最多重试几次。
+  //   网络抖动、API 偶发返回奇怪格式（如返回中文、返回空、返回带 markdown 的内容）时，
+  //   会自动再调用一次翻译 API。次数过多会拖慢响应速度，建议 2~4 之间。
+  // _japaneseFallbackText：所有重试都失败后兜底用的日语句子。
+  //   存在的意义是：宁可让 AI 随便说一句日语兜底，也绝不能把中文塞给 TTS（GPT-SoVITS）
+  //   导致语音乱掉、字幕也是中文。如果想换文案，改这里即可，但必须是纯日语。
+  static const int _maxTranslationRetries = 3;
+  static const String _japaneseFallbackText = 'ごめん、ちょっと言葉が出てこなかった…もう一度話してくれる？';
+
   // 生成对话回复（日文+中文翻译）
   static Future<Map<String, String>> generateResponse({
     required String characterPersonality,
@@ -99,7 +111,7 @@ class ApiService {
                   ? ''
                   : content;
           final textPart = displayText.isNotEmpty ? '$displayText\n\n' : '';
-          content = '${textPart}【图片内容】${msg.imageDescription}';
+          content = '$textPart【图片内容】${msg.imageDescription}';
         }
         return {
           'role': msg.role,
@@ -141,9 +153,55 @@ class ApiService {
       String rawJapaneseText =
           japaneseData['choices'][0]['message']['content'] as String;
 
-      if (_hasChinese(rawJapaneseText)) {
-        print('检测到中文回复，正在转换为日文...');
-        rawJapaneseText = await _translateToJapanese(rawJapaneseText);
+      // ========================================
+      // 中译日的核心校验逻辑（修复后）
+      // ========================================
+      // 旧版本只判断"是否含中文字符"，但日语本身就有汉字，这个判断本身已经不严谨；
+      // 更严重的是翻译失败时静默回退到原中文，导致 TTS 拿到中文文本生成混乱语音。
+      //
+      // 新版本采用「是否含日语假名（平假名/片假名）」作为「翻译成功」的判定依据：
+      //   - 任何一句正常日语都至少会有一个假名（即使是含大量汉字的句子）
+      //   - 纯中文不可能含假名，因此假名是中日文最可靠的区分点
+      //
+      // 流程：
+      //   1) 如果原文已含假名，认为本身就是日语，跳过翻译
+      //   2) 否则进入翻译循环，最多重试 _maxTranslationRetries 次：
+      //      - 调用 _translateToJapanese 翻译
+      //      - 翻译结果若含假名 -> 成功，break
+      //      - 翻译结果不含假名 -> 视为失败，再来一次
+      //   3) 全部重试都失败时，使用 _japaneseFallbackText 兜底，
+      //      绝不把中文塞给 TTS（这是出问题最直观的根因）
+      if (!_isLikelyJapanese(rawJapaneseText)) {
+        print('回复未检测到日语假名，判定为非日语，开始翻译为日文...');
+        print('  原始内容: $rawJapaneseText');
+
+        String translated = rawJapaneseText;
+        bool success = false;
+
+        for (int attempt = 1; attempt <= _maxTranslationRetries; attempt++) {
+          print('  翻译尝试 $attempt / $_maxTranslationRetries ...');
+          translated = await _translateToJapanese(rawJapaneseText);
+
+          // 校验翻译结果是否为日语：含假名才算成功
+          if (_isLikelyJapanese(translated)) {
+            print('  翻译成功（第 $attempt 次）: $translated');
+            success = true;
+            break;
+          } else {
+            print('  翻译结果仍未检测到假名，视为失败，准备重试');
+            print('  本次返回: $translated');
+          }
+        }
+
+        if (success) {
+          rawJapaneseText = translated;
+        } else {
+          // 多次重试仍失败，使用兜底日语文本
+          // 这样确保 TTS 生成的语音和最终展示的字幕都是日语，
+          // 不会出现 GPT-SoVITS 拿中文去合成的情况
+          print('  翻译多次失败，使用兜底日语文本: $_japaneseFallbackText');
+          rawJapaneseText = _japaneseFallbackText;
+        }
       }
 
       final japaneseText = _removeChinese(rawJapaneseText);
@@ -516,10 +574,43 @@ class ApiService {
     }
   }
 
+  // ========================================
+  // 中文检测（旧函数，保留以防其他地方引用）
+  // ========================================
+  // 注意：本函数仅检测「文本是否包含中文字符（即 CJK 统一汉字）」。
+  // 由于日语本身也用汉字，单凭这个判断不足以区分中日文，
+  // 因此 generateResponse 内部的语种判断已经改为使用 _isLikelyJapanese。
+  // 这个函数本身没有删除，方便其他地方（如调试或将来的扩展）继续调用。
   static bool _hasChinese(String text) {
     return RegExp(r'[\u4e00-\u9fff]').hasMatch(text);
   }
 
+  // ========================================
+  // 日语判定（新增）
+  // ========================================
+  // 判断文本是否「像日语」：只要含至少一个平假名（ぁ-ゖ）或片假名（ァ-ヺ），就视为日语。
+  // 原因：
+  //   - 中文里没有假名，只要出现假名一定不是纯中文
+  //   - 任意一句自然日语几乎一定会出现假名（助词、词尾变化、外来语等）
+  //   - 偶尔会出现一整句全是汉字的日语（例如「日本語」三个字本身），
+  //     但 AI 生成的对话回复几乎不可能全句不含假名，所以这种边缘情况可以接受
+  // 这是当前用来判断"翻译是否成功"的最可靠依据，比 _hasChinese 更严谨。
+  static bool _isLikelyJapanese(String text) {
+    // 平假名范围：U+3040 ~ U+309F
+    // 片假名范围：U+30A0 ~ U+30FF
+    return RegExp(r'[\u3040-\u309f\u30a0-\u30ff]').hasMatch(text);
+  }
+
+  // ========================================
+  // 调用 DeepSeek 把中文翻译成日语
+  // ========================================
+  // 调用方：generateResponse 内部，在判定回复非日语时使用。
+  // 改动点：
+  //   - 增加了对返回内容的清洗（去掉可能残留的代码块、前缀说明等）
+  //   - 把 system prompt 改为更明确的指令，要求只返回日语本体
+  //   - 不再在异常时静默返回原中文，而是返回空字符串，
+  //     由外层 generateResponse 的 _isLikelyJapanese 校验决定是否重试或兜底，
+  //     彻底杜绝把中文继续传给 TTS 的可能
   static Future<String> _translateToJapanese(String chineseText) async {
     try {
       final response = await http.post(
@@ -533,8 +624,14 @@ class ApiService {
           'messages': [
             {
               'role': 'system',
-              'content':
-                  'あなたは翻訳者です。中国語のテキストを自然な日本語に翻訳してください。翻訳結果だけを出力し、説明は不要です。',
+              'content': 'あなたはプロの中日翻訳者です。\n'
+                  'ユーザーが入力した中国語のテキストを、自然で口語的な日本語に翻訳してください。\n'
+                  '\n'
+                  '厳守事項:\n'
+                  '1. 出力は日本語のみ。中国語の文字、説明、注釈、コードブロック、引用符を一切含めないこと。\n'
+                  '2. 「翻訳:」「日本語:」のような前置きを付けない。翻訳本文のみを出力する。\n'
+                  '3. 元のテキストに括弧書きの動作描写（例:（笑顔で））がある場合は日本語の括弧で残してよい。\n'
+                  '4. 必ず平仮名または片仮名を含む自然な日本語で出力すること。',
             },
             {
               'role': 'user',
@@ -548,12 +645,29 @@ class ApiService {
       );
       if (response.statusCode == 200) {
         final data = jsonDecode(utf8.decode(response.bodyBytes));
-        return data['choices'][0]['message']['content'] as String;
+        String result = data['choices'][0]['message']['content'] as String;
+        // 清理模型有时会返回的 markdown 代码块标记和常见前缀
+        // 即使 system prompt 已经禁止，仍偶发出现，这里再兜一层
+        result = result
+            .replaceAll('```japanese', '')
+            .replaceAll('```ja', '')
+            .replaceAll('```', '')
+            .trim();
+        // 去掉一些可能的中文前缀（如「翻译：」「日文：」）
+        // 只在开头匹配，避免误删正文里的内容
+        result = result.replaceFirst(RegExp(r'^(翻訳|翻译|日本語|日文|译文)[:：]\s*'), '');
+        return result.trim();
+      } else {
+        print('日文转换 API 错误: ${response.statusCode}');
+        print('错误内容: ${response.body}');
       }
     } catch (e) {
       print('日文转换失败: $e');
     }
-    return chineseText;
+    // 失败时返回空字符串而不是原中文。
+    // 外层 generateResponse 会用 _isLikelyJapanese 判断这个空串"不是日语"，
+    // 进入下一次重试或兜底文案，从而保证最终一定是日语进 TTS。
+    return '';
   }
 
   static String _removeChinese(String text) {

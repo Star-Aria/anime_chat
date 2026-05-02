@@ -77,178 +77,98 @@ class ProactiveMessageService {
     };
   }
 
+  // ========================================
+  // 根据月份和日期生成当前物候描述（中文）
+  // ========================================
+  // 直接给出确定性的物候描述，避免 AI 凭训练数据的季节联想（看到4月就联想藤花盛开）。
+  // 描述基于日本本州中部气候，与《鬼灭之刃》大正时代背景一致。
+  // 如需修改某月的描述，直接改对应 case 里的字符串即可。
+  static String _getSeasonContext(DateTime date) {
+    final month = date.month;
+    final day = date.day;
+    switch (month) {
+      case 1:
+        return '现在是隆冬（1月）。寒气凛冽，山中残雪未消，梅花的花苞才刚刚开始膨胀。';
+      case 2:
+        return '现在是冬末（2月）。仍然寒冷，但梅花已经开始绽放，春天还远。';
+      case 3:
+        return day <= 20
+            ? '现在是早春（3月上旬至中旬）。梅花正盛开，樱花的花期还要再等等，空气一点点变得温暖。'
+            : '现在是春天（3月下旬）。樱花将要开始绽放，早晚还有些凉意。';
+      case 4:
+        return day <= 10
+            ? '现在是春天（4月上旬）。樱花满开或已开始飘落，花瓣随风飞舞。'
+            : day <= 20
+                ? '现在是春天（4月中旬）。樱花已差不多落尽，新绿开始萌发，紫藤花刚刚开始绽放。'
+                : '现在是春末初夏之交（4月下旬）。樱花早已凋零，紫藤花的花期也接近尾声，正是新绿鲜艳的季节。';
+      case 5:
+        return day <= 10
+            ? '现在是初夏（5月上旬）。新绿正美，紫藤花已经凋谢，风清气爽，是过得很舒服的季节。'
+            : '现在是初夏（5月中旬至下旬）。嫩叶茂盛，日光开始变得强烈。花的季节已经过去，进入绿意盎然的时节。';
+      case 6:
+        return '现在是梅雨季节（6月）。淅淅沥沥的雨连绵不断，绣球花正在盛开，湿气重又闷热。';
+      case 7:
+        return '现在是盛夏（7月）。蝉鸣阵阵，烈日当空，多有午后骤雨。';
+      case 8:
+        return '现在是盛夏（8月）。一年中最热的时期。夜晚能听到虫鸣。';
+      case 9:
+        return '现在是初秋（9月）。白天还很热，但早晚开始凉爽。彼岸花在田野间开放。';
+      case 10:
+        return '现在是秋天（10月）。树叶开始变色，向红叶时节迈进。天空高远而清澈。';
+      case 11:
+        return '现在是晚秋（11月）。红叶正美，落叶层层堆积。早晚已相当寒冷。';
+      case 12:
+        return '现在是冬天（12月）。树木落尽叶子，空气干燥而寒冷，年关将近。';
+      default:
+        return '';
+    }
+  }
+
   // ----------------------------------------
   // 主动消息指令构建
   // ----------------------------------------
-  // 根据对话元信息（距上次对话多久、最后一条是谁发的）生成不同模式的指令。
-  // 不传入对话内容本身，避免 AI 接续旧话题。
+  // 设计原则：保持简单，回到原始版本的措辞。
+  // 唯一相比简单版本的新增内容是物候描述（参考用），不加任何"必须符合"的强制约束。
+  // 实践证明，加入复杂的指令和限制反而会稀释人设、让 AI 迷失角色。
   //
   // 参数：
-  //   conversationMeta - 由 _buildConversationMeta() 生成的元信息字符串，
-  //                      描述距上次对话的时间间隔和最后发言方，不包含对话内容。
-  //                      如果对话记录为空，传空字符串。
-  String _buildProactiveInstruction({String conversationMeta = ''}) {
+  //   date - 与 timeContext 相同的时间戳，用于生成对应的物候描述。
+  //          三个调用点（_onTimerFired / _checkOfflineMessages / debugForceProactive）
+  //          各自传入 displayTimestamp 或 fakeTimestamp。
+  String _buildProactiveInstruction({DateTime? date}) {
     // ----------------------------------------
-    // 基础指令：所有主动消息都必须遵守的通用规则
+    // 基础指令：和最初的简单版本完全一样
     // ----------------------------------------
     final StringBuffer instruction = StringBuffer();
     instruction.writeln('现在你主动给对方发一条消息。');
     instruction.writeln('对方叫凛野，不是炭治郎。称呼用"凛野"或不称呼均可。');
     instruction.writeln('用你的角色说话方式，说一句自然的话。');
+    instruction.writeln('话题必须是全新的：今天发生的事情、想与对方分享的事、任务的情况、突然想到的感想、');
+    instruction.writeln('想邀请对方同做的事、今天的天气感受、季节或自然相关的话题等，言之有物。');
 
     // ----------------------------------------
-    // 根据元信息决定主动消息的"语气模式"
+    // 物候描述：作为参考信息插入，不加强制约束
     // ----------------------------------------
-    // 这里只根据元信息里的关键词来判断场景，不解析具体数值，
-    // 因为元信息字符串是由 _buildConversationMeta() 按固定格式生成的。
-    //
-    // 三种场景：
-    //   1. "好久不见"模式：距上次对话超过 _longAbsenceThresholdDays 天
-    //   2. "追问关心"模式：最后一条是 AI 发的且对方没回复
-    //   3. 普通新话题模式：其他情况
-    if (conversationMeta.contains('【好久不见模式】')) {
-      // ----------------------------------------
-      // 好久不见模式
-      // ----------------------------------------
-      // AI 知道距离上次对话很久了，可以自然地表达"好久不见"的感觉，
-      // 然后接一个新话题，不要只说"好久不见"就完了。
+    // 直接告诉 AI 当前时节有什么景物，避免它凭训练数据的季节联想发挥
+    // （比如看到4月就说藤花盛开，但实际上4月下旬藤花已经开始凋谢）。
+    // 注意：这里用"参考"而不是"必须"，让 AI 自由选择话题，
+    // 不强制聊季节相关内容，避免话题单调。
+    final String seasonCtx = _getSeasonContext(date ?? DateTime.now());
+    if (seasonCtx.isNotEmpty) {
       instruction.writeln('');
-      instruction.writeln(conversationMeta);
-      instruction.writeln('');
-      instruction.writeln('请先自然地表达"好久不见"的感觉（用你自己的说话方式，不要直接说"好久不见"这四个字），');
-      instruction.writeln('然后接一个全新的话题，言之有物。');
-      instruction.writeln('不要只说问候就结束，要有实质内容。');
-    } else if (conversationMeta.contains('【追问关心模式】')) {
-      // ----------------------------------------
-      // 追问关心模式
-      // ----------------------------------------
-      // 上次是 AI 主动发了消息，但对方一直没回复。
-      // AI 可以自然地表达关心（"怎么了吗""忙吗"之类），
-      // 然后可以接一个新话题，不要让对方感到被追问的压力。
-      instruction.writeln('');
-      instruction.writeln(conversationMeta);
-      instruction.writeln('');
-      instruction.writeln('你之前给对方发了消息但对方没有回复。');
-      instruction.writeln('请自然地表达一点关心（比如是不是在忙、有没有怎样之类），用你自己的说话方式，');
-      instruction.writeln('语气要轻松，不要给对方造成"被追问"的压力。');
-      instruction.writeln('然后可以接一个全新的话题，也可以不接，视你的角色性格而定。');
-    } else {
-      // ----------------------------------------
-      // 普通新话题模式（原来的逻辑）
-      // ----------------------------------------
-      instruction.writeln('话题必须是全新的：今天发生的事情、想与对方分享的事、任务的情况、突然想到的感想、');
-      instruction.writeln('想邀请对方同做的事、今天的天气感受、季节或自然相关的话题等，言之有物。');
+      instruction.writeln('（参考：$seasonCtx）');
     }
 
     // ----------------------------------------
-    // 通用限制：所有模式都必须遵守
+    // 通用限制：和最初的简单版本完全一样
     // ----------------------------------------
     instruction.writeln('');
     instruction.writeln('【必须遵守的限制】');
     instruction.writeln('- 禁止提及或引用之前对话中出现过的任何具体事件、节日、人物行为或话题');
     instruction.writeln('- 禁止单纯说"你好""在吗""明天见""祝您愉快"之类空洞的问候');
-    // "好久不见模式"和"追问关心模式"下，这条限制仍然生效，
-    // 但 AI 可以在问候之后接新话题，所以不冲突
-    if (!conversationMeta.contains('【好久不见模式】') &&
-        !conversationMeta.contains('【追问关心模式】')) {
-      instruction.writeln('- 必须开启一个与以往对话毫无关联的全新话题');
-    }
+    instruction.writeln('- 必须开启一个与以往对话毫无关联的全新话题');
 
     return instruction.toString();
-  }
-
-  // ----------------------------------------
-  // 构建对话元信息摘要（不含对话内容）
-  // ----------------------------------------
-  // 从对话历史中提取"距上次对话多久""最后一条是谁发的"等结构化信息，
-  // 供 _buildProactiveInstruction() 判断应该用哪种语气模式。
-  //
-  // 关键设计：只传递时间间隔和发言方，不传递任何对话内容，
-  // 这样 AI 不会接续旧话题，但能感知"好久不见"和"对方没回复"。
-  //
-  // _longAbsenceThresholdDays：
-  //   超过这个天数视为"好久不见"，可以根据需要调整。
-  //   默认 3 天。设得太小会导致频繁触发"好久不见"模式，
-  //   设得太大则需要很久没聊天才会触发。
-  static const int _longAbsenceThresholdDays = 14;
-
-  String _buildConversationMeta(List<Message> messages) {
-    if (messages.isEmpty) return '';
-
-    final now = DateTime.now();
-
-    // 找到最后一条用户消息和最后一条 AI 消息的时间
-    DateTime? lastUserMsgTime;
-    DateTime? lastAssistantMsgTime;
-    String? lastMsgRole; // 整个对话记录中最后一条消息是谁发的
-
-    for (int i = messages.length - 1; i >= 0; i--) {
-      lastMsgRole ??= messages[i].role;
-      if (messages[i].role == 'user' && lastUserMsgTime == null) {
-        lastUserMsgTime = messages[i].timestamp;
-      }
-      if (messages[i].role == 'assistant' && lastAssistantMsgTime == null) {
-        lastAssistantMsgTime = messages[i].timestamp;
-      }
-      if (lastUserMsgTime != null && lastAssistantMsgTime != null) break;
-    }
-
-    // 计算距离上次有人说话过了多久（取用户和 AI 中较晚的那个）
-    final DateTime? lastActivity =
-        (lastUserMsgTime != null && lastAssistantMsgTime != null)
-            ? (lastUserMsgTime.isAfter(lastAssistantMsgTime)
-                ? lastUserMsgTime
-                : lastAssistantMsgTime)
-            : (lastUserMsgTime ?? lastAssistantMsgTime);
-
-    if (lastActivity == null) return '';
-
-    final Duration gap = now.difference(lastActivity);
-
-    // ----------------------------------------
-    // 判断是否进入"好久不见模式"
-    // ----------------------------------------
-    if (gap.inDays >= _longAbsenceThresholdDays) {
-      final String gapDescription = _formatDuration(gap);
-      return '【好久不见模式】距离你们上一次对话已经过了$gapDescription。';
-    }
-
-    // ----------------------------------------
-    // 判断是否进入"追问关心模式"
-    // ----------------------------------------
-    // 条件：最后一条消息是 AI 发的（对方没回复），且距离那条消息已经过了一定时间。
-    // _noReplyThresholdHours 控制"多久没回复才算没回复"，
-    // 太短的话 AI 会在对方刚看完消息还没来得及回复时就追问，不自然。
-    if (lastMsgRole == 'assistant' && lastAssistantMsgTime != null) {
-      final Duration sinceLastAI = now.difference(lastAssistantMsgTime);
-      if (sinceLastAI.inHours >= _noReplyThresholdHours) {
-        final String gapDescription = _formatDuration(sinceLastAI);
-        return '【追问关心模式】你上次给对方发了消息，已经过了$gapDescription，对方还没有回复。';
-      }
-    }
-
-    // 其他情况：普通新话题模式，不需要额外元信息
-    return '';
-  }
-
-  // "多久没回复才触发追问关心模式"的阈值（小时）
-  static const int _noReplyThresholdHours = 72;
-
-  // 格式化时间间隔为自然语言描述
-  static String _formatDuration(Duration duration) {
-    if (duration.inDays >= 365) {
-      final years = (duration.inDays / 365).floor();
-      return '约${years}年';
-    } else if (duration.inDays >= 30) {
-      final months = (duration.inDays / 30).floor();
-      return '约${months}个月';
-    } else if (duration.inDays >= 1) {
-      return '${duration.inDays}天';
-    } else if (duration.inHours >= 1) {
-      return '${duration.inHours}小时';
-    } else {
-      return '${duration.inMinutes}分钟';
-    }
   }
 
   // ----------------------------------------
@@ -339,10 +259,6 @@ class ProactiveMessageService {
         StorageService.getRecentMessages(latestMessages, maxMessages: 5),
       );
 
-      // 从对话记录中提取元信息（距上次对话多久、最后谁发的），
-      // 不传内容本身，避免 AI 接续旧话题
-      final conversationMeta = _buildConversationMeta(latestMessages);
-
       try {
         final responseMap = await ApiService.generateResponse(
           characterPersonality: character.personality,
@@ -350,7 +266,8 @@ class ProactiveMessageService {
           userMessage: '',
           timeContext: timeContext,
           proactiveInstruction: _buildProactiveInstruction(
-            conversationMeta: conversationMeta,
+            // fakeTimestamp 作为 date，让物候描述匹配补发消息的时间点
+            date: fakeTimestamp,
           ),
         );
 
@@ -516,10 +433,6 @@ class ProactiveMessageService {
       StorageService.getRecentMessages(latestMessages, maxMessages: 5),
     );
 
-    // 从对话记录中提取元信息（距上次对话多久、最后谁发的），
-    // 不传内容本身，避免 AI 接续旧话题
-    final conversationMeta = _buildConversationMeta(latestMessages);
-
     final bool isOnlineBeforeCall = _activeCallbacks.containsKey(character.id);
 
     final DateTime displayTimestamp;
@@ -541,7 +454,8 @@ class ProactiveMessageService {
         userMessage: '',
         timeContext: timeContext,
         proactiveInstruction: _buildProactiveInstruction(
-          conversationMeta: conversationMeta,
+          // displayTimestamp 作为 date，让物候描述匹配消息显示的时间点
+          date: displayTimestamp,
         ),
       );
 
@@ -707,9 +621,6 @@ class ProactiveMessageService {
       StorageService.getRecentMessages(latestMessages, maxMessages: 5),
     );
 
-    // 调试触发也使用元信息，这样可以测试"好久不见"和"追问关心"模式
-    final conversationMeta = _buildConversationMeta(latestMessages);
-
     final bool isOnlineBeforeCall = _activeCallbacks.containsKey(character.id);
     final DateTime displayTimestamp;
     if (isOnlineBeforeCall) {
@@ -729,7 +640,8 @@ class ProactiveMessageService {
         userMessage: '',
         timeContext: timeContext,
         proactiveInstruction: _buildProactiveInstruction(
-          conversationMeta: conversationMeta,
+          // displayTimestamp 作为 date，让物候描述匹配消息显示的时间点
+          date: displayTimestamp,
         ),
       );
       final japanese = responseMap['japanese'] ?? '';

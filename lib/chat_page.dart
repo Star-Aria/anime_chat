@@ -101,7 +101,7 @@ const String PRONUNCIATION_MODE = 'replace';
 class ChatPage extends StatefulWidget {
   final Character character;
 
-  const ChatPage({Key? key, required this.character}) : super(key: key);
+  const ChatPage({super.key, required this.character});
 
   @override
   State<ChatPage> createState() => _ChatPageState();
@@ -111,8 +111,8 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
   final TextEditingController _textController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
 
-  AudioPlayer _audioPlayerPrimary = AudioPlayer();
-  AudioPlayer _audioPlayerSecondary = AudioPlayer();
+  final AudioPlayer _audioPlayerPrimary = AudioPlayer();
+  final AudioPlayer _audioPlayerSecondary = AudioPlayer();
   bool _primaryIsActive = true;
   AudioPlayer get _activePlayer =>
       _primaryIsActive ? _audioPlayerPrimary : _audioPlayerSecondary;
@@ -595,7 +595,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
       if (japaneseText.isNotEmpty) {
         // 追加消息和主回复之间加一个短暂延迟，模拟"打字中..."的自然感
         // _followUpDelayMs 控制延迟时长（毫秒），可根据需要调整
-        await Future.delayed(Duration(milliseconds: _followUpDelayMs));
+        await Future.delayed(const Duration(milliseconds: _followUpDelayMs));
         await _sendAIMessage(japaneseText, chineseText);
       }
     } catch (e) {
@@ -1273,11 +1273,11 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
             }
           } else if (difference.inDays < 365) {
             final months = (difference.inDays / 30).floor();
-            lastChatInfo = '距离上次对话：约${months}个月前';
+            lastChatInfo = '距离上次对话：约$months个月前';
             isLongAbsence = true;
           } else {
             final years = (difference.inDays / 365).floor();
-            lastChatInfo = '距离上次对话：约${years}年前';
+            lastChatInfo = '距离上次对话：约$years年前';
             isLongAbsence = true;
           }
           break;
@@ -1286,8 +1286,8 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
     }
 
     String context = '''【当前时间信息】
-现在的时间是：${year}年${month}${day}日（${weekday}）${timeOfDay} ${hour}:${minute}
-当前季节：${season}''';
+现在的时间是：$year年$month$day日（$weekday）$timeOfDay $hour:$minute
+当前季节：$season''';
 
     if (lastChatInfo.isNotEmpty) {
       context += '\n$lastChatInfo';
@@ -1318,7 +1318,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
       context += '''
 【久别重逢】
 你们已经很久没有聊天了（$lastChatInfo）。
-在回复用户这条消息时，你要用自己的说话方式自然地加入"好久没聊了"的感觉。
+在回复用户这条消息时，你可以用自己的说话方式自然地加入"好久没聊了"的感觉，也可以不提。
 注意：
 - 用你角色自己的语气和措辞，不要直接说"好久不见"这四个字，要符合你的性格
 - 这个表达要自然地融入回复，不要生硬地单独一句
@@ -1867,10 +1867,10 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
                                     if (_isLoading)
                                       // AI 正在生成回复时的提示
                                       // 颜色可调：目前使用深灰色，和角色日文名的灰色保持统一风格
-                                      Text('对方正在输入...',
+                                      const Text('对方正在输入...',
                                           style: TextStyle(
                                               fontSize: 12,
-                                              color: const Color.fromARGB(
+                                              color: Color.fromARGB(
                                                   255, 42, 42, 42)))
                                     else
                                       // 正常状态显示角色日文名

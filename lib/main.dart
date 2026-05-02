@@ -41,7 +41,7 @@ void main() async {
 // 应用主组件
 // ========================================
 class MyApp extends StatelessWidget {
-  const MyApp({Key? key}) : super(key: key);
+  const MyApp({super.key});
 
   @override
   Widget build(BuildContext context) {
@@ -52,10 +52,9 @@ class MyApp extends StatelessWidget {
         primaryColor: const Color(0xFF6C63FF),
         scaffoldBackgroundColor: const Color(0xFFF5F7FA),
         fontFamily: 'FangSong', // 默认字体
-        colorScheme: ColorScheme.light(
-          primary: const Color(0xFF6C63FF),
-          secondary: const Color(0xFF00D4AA),
-          background: const Color(0xFFF5F7FA),
+        colorScheme: const ColorScheme.light(
+          primary: Color(0xFF6C63FF),
+          secondary: Color(0xFF00D4AA),
           surface: Colors.white,
         ),
       ),
@@ -121,11 +120,12 @@ class _DebugPanelDialogState extends State<_DebugPanelDialog> {
     });
     final info = await ProactiveMessageService()
         .getDebugInfo(CharacterConfig.characters);
-    if (mounted)
+    if (mounted) {
       setState(() {
         _info = info;
         _loading = false;
       });
+    }
   }
 
   @override
@@ -265,10 +265,15 @@ const Color kBgGradientStart = Color(0xFFFFF5F8); // 左上: 淡粉
 const Color kBgGradientMid = Color(0xFFF0F4FF); // 中间: 淡蓝
 const Color kBgGradientEnd = Color(0xFFF5F0FF); // 右下: 淡紫
 
-// 第一层: 渐变背景上方叠加的三个模糊光斑的颜色
+// 第一层: 渐变背景上方叠加的模糊光斑的颜色 (7 个)
+// 数量多 + 每个淡一点 = 玻璃透过来能看到的色彩更丰富, 但整体基调仍然柔和
 const Color kBgBlobColor1 = Color(0xFFFFB6C1); // 右上 粉
 const Color kBgBlobColor2 = Color(0xFFB6E5FF); // 左下 蓝
 const Color kBgBlobColor3 = Color(0xFFD4B6FF); // 中右 紫
+const Color kBgBlobColor4 = Color(0xFFFFDCC0); // 右下 暖橙
+const Color kBgBlobColor5 = Color(0xFFC0E5D8); // 左中 淡青
+const Color kBgBlobColor6 = Color(0xFFFFD4E8); // 右下 淡粉
+const Color kBgBlobColor7 = Color(0xFFD4E0FF); // 左上 淡蓝紫
 
 // 第三层: 文件夹的底色 (淡粉)
 const Color kFolderColor = Color(0xFFFDF4F4);
@@ -283,10 +288,10 @@ const Color kCardGradientEnd = Color(0xFFFDFBF6);
 
 // 角色卡片阴影的色调 (暖米色, 配合淡粉底不冲突)
 // 阴影用 rgba 形式, 这里定义为 Color 方便后续生成不同 alpha 的版本
-const Color kCardShadowTint = Color.fromARGB(255, 207, 178, 149);
+const Color kCardShadowTint = Color.fromARGB(255, 190, 160, 130);
 
 // 点击流光动效的颜色 (米色, 和卡片整体配色统一)
-const Color kCardSweepColor = Color.fromARGB(131, 255, 241, 211);
+const Color kCardSweepColor = Color.fromARGB(140, 245, 228, 195);
 
 // Logo 渐变色 (粉 -> 蓝紫)
 const Color kLogoGradientStart = Color(0xFFFF9AAF);
@@ -300,7 +305,7 @@ const Color kTitleGradientEnd = Color(0xFF6B9DFF);
 // 角色选择页面 (首页)
 // ========================================
 class CharacterSelectionPage extends StatefulWidget {
-  const CharacterSelectionPage({Key? key}) : super(key: key);
+  const CharacterSelectionPage({super.key});
 
   @override
   State<CharacterSelectionPage> createState() => _CharacterSelectionPageState();
@@ -508,28 +513,51 @@ class _CharacterSelectionPageState extends State<CharacterSelectionPage> {
           ),
 
           // ============================================
-          // 第一层附加: 三个模糊光斑 (blob)
+          // 第一层附加: 七个模糊光斑 (blob)
           // ============================================
-          // 通过三个巨大模糊的圆形增加背景色彩层次,
-          // 这些光斑在半透明容器后面能营造出"玻璃透视背景"的感觉
-          // top/right/left/bottom 的百分比可调, 改变光斑分布
+          // 数量多 + 每个淡, 让玻璃卡片透过后能看到丰富的色彩变化
+          // 位置用像素值, 可以根据窗口大小调整
           _buildBgBlob(
             color: kBgBlobColor1,
-            size: const Size(220, 300),
-            top: -60,
-            right: -40,
+            size: const Size(260, 340),
+            top: -70,
+            right: -50,
           ),
           _buildBgBlob(
             color: kBgBlobColor2,
-            size: const Size(240, 320),
-            bottom: 60,
-            left: -60,
+            size: const Size(280, 360),
+            bottom: 40,
+            left: -70,
           ),
           _buildBgBlob(
             color: kBgBlobColor3,
-            size: const Size(180, 250),
-            top: 200,
-            right: 100,
+            size: const Size(220, 280),
+            top: 160,
+            right: 140,
+          ),
+          _buildBgBlob(
+            color: kBgBlobColor4,
+            size: const Size(220, 280),
+            bottom: 150,
+            right: 30,
+          ),
+          _buildBgBlob(
+            color: kBgBlobColor5,
+            size: const Size(200, 260),
+            top: 220,
+            left: 60,
+          ),
+          _buildBgBlob(
+            color: kBgBlobColor6,
+            size: const Size(180, 230),
+            bottom: 60,
+            right: 200,
+          ),
+          _buildBgBlob(
+            color: kBgBlobColor7,
+            size: const Size(170, 220),
+            top: 40,
+            left: 180,
           ),
 
           // ============================================
@@ -669,40 +697,24 @@ class _CharacterSelectionPageState extends State<CharacterSelectionPage> {
   }
 
   // ----------------------------------------
-  // 消息收取中提示条
+  // 消息收取中提示条（精致玻璃胶囊样式）
   // ----------------------------------------
+  // 走和角色卡片一致的玻璃材质：ClipRRect + BackdropFilter + 半透明白 + 白描边，
+  // 视觉上不再是一条醒目的黄色横幅，而是融入首页整体氛围的一枚小胶囊。
+  // 自动水平居中、宽度自适应内容，高度固定 30px，给下方的 Expanded 波浪容器
+  // 留足空间，避免角色卡片被挤压出现溢出。
+  // ----------------------------------------
+  // 参数总览（都在 _FetchingCapsule 里，想改样式直接改那里）：
+  //   - 胶囊高度、圆角、横向内边距
+  //   - 脉动圆点的颜色、直径、动画周期
+  //   - 文字内容、字号、字色
   Widget _buildFetchingBar() {
     return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
-      margin: const EdgeInsets.only(bottom: 4),
-      decoration: BoxDecoration(
-        color: const Color(0xFFFFF8E1),
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          // 旋转的加载图标
-          // 大小和颜色可调：size 控制图标大小，strokeWidth 控制线条粗细
-          const SizedBox(
-            width: 14,
-            height: 14,
-            child: CircularProgressIndicator(
-              strokeWidth: 2,
-              valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFFFB300)),
-            ),
-          ),
-          const SizedBox(width: 8),
-          Text(
-            '消息收取中...',
-            style: TextStyle(
-              fontSize: 13,
-              color: Colors.orange[800],
-            ),
-          ),
-        ],
-      ),
+      // 容器本身只负责上下留一点外边距，让胶囊和 logo、波浪容器之间有呼吸空间
+      // 数值可调：top 控制离 logo 的距离，bottom 控制离波浪容器顶部的距离
+      margin: const EdgeInsets.only(top: 2, bottom: 6),
+      alignment: Alignment.center,
+      child: const _FetchingCapsule(),
     );
   }
 
@@ -791,7 +803,11 @@ class _CharacterSelectionPageState extends State<CharacterSelectionPage> {
 
     return Container(
       decoration: BoxDecoration(
-        color: kFolderColor,
+        // folder-body 改成半透明的淡粉, 让第一层的背景光斑能透过来
+        // 卡片玻璃折射的就是这个透过来的色彩
+        // 如果这里用实色, 卡片背后就只有纯色, 玻璃效果再强也看不出来
+        // alpha 可调范围 0.4~0.7, 越小越透 (背景越显眼), 越大越实 (玻璃效果越弱)
+        color: kFolderColor.withOpacity(0.55),
         borderRadius: BorderRadius.circular(16),
       ),
       // 不要 clipBehavior! 否则阴影会被裁成大矩形
@@ -832,12 +848,17 @@ class _CharacterSelectionPageState extends State<CharacterSelectionPage> {
                     listPadBottom,
                   ),
                   itemCount: chars.length,
-                  // 即使角色少, 也用 ListView.builder, 超出时能自动滚动
-                  // 如果只有少于等于 3 张, cardHeight 已经填满可见区域, 不会滚动
-                  // 如果超过 3 张, 每张仍用 cardHeight, 能向下滚动
-                  physics: chars.length <= kVisibleCardCount
-                      ? const NeverScrollableScrollPhysics()
-                      : const BouncingScrollPhysics(),
+                  // ----------------------------------------
+                  // 滚动策略
+                  // ----------------------------------------
+                  // 统一使用 BouncingScrollPhysics，任何情况下都允许滚动：
+                  // - 正常情况（空间充足）：cardHeight 已经把列表高度填满，
+                  //   此时 ListView 内容高度 == 可见高度，用户怎么滑都不会动，视觉上和"禁止滚动"一致
+                  // - 收取提示出现时：可用高度减少，卡片底部可能被裁一点，
+                  //   这时列表自然进入"可滚动"状态，用户向下滑就能把被裁的部分拉上来
+                  // - 角色数超过 kVisibleCardCount：本来就需要滚动，和原逻辑一致
+                  // 这样无论高度怎么变，都不会再抛 RenderFlex 溢出异常
+                  physics: const BouncingScrollPhysics(),
                   itemBuilder: (context, index) {
                     final character = chars[index];
                     return Padding(
@@ -1011,8 +1032,10 @@ class _WaveContainerPainter extends CustomPainter {
     canvas.drawPath(path, closeShadowPaint);
     canvas.restore();
 
-    // 再画白色主体
-    final fillPaint = Paint()..color = Colors.white.withOpacity(0.95);
+    // 再画白色主体 (半透明, 让背景光斑透过来)
+    // alpha 0.7: 比实色白淡, 让光斑透出来形成色彩变化, 又不会完全看不清容器形状
+    // 可调范围 0.55~0.85, 越小容器越透 (玻璃卡片折射的色彩越丰富)
+    final fillPaint = Paint()..color = Colors.white.withOpacity(0.7);
     canvas.drawPath(path, fillPaint);
 
     // 最后在波浪顶边画一条淡淡的高光描边, 让波浪更立体
@@ -1192,11 +1215,10 @@ class _CharacterCard extends StatefulWidget {
   final VoidCallback onTap;
 
   const _CharacterCard({
-    Key? key,
     required this.character,
     required this.preview,
     required this.onTap,
-  }) : super(key: key);
+  });
 
   @override
   State<_CharacterCard> createState() => _CharacterCardState();
@@ -1259,95 +1281,93 @@ class _CharacterCardState extends State<_CharacterCard>
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 220),
           curve: Curves.easeOut,
-          // hover 时向上浮 2px, 按下时向下沉 1px
+          // hover 时向上浮 2px, 按下时向下沉 1px (只位移, 不改阴影)
           transform: Matrix4.translationValues(
             0,
             _pressed ? 1 : (_hovering ? -2 : 0),
             0,
           ),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(18),
-            // 135 度线性渐变: 左上白 -> 右下淡米
-            gradient: const LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors: [kCardGradientStart, kCardGradientEnd],
-            ),
-            boxShadow: [
-              // 外层大柔影: 悬浮感 (hover 时更深)
-              BoxShadow(
-                color: kCardShadowTint.withOpacity(_hovering ? 0.32 : 0.25),
-                blurRadius: _hovering ? 24 : 16,
-                offset: Offset(0, _hovering ? 12 : 6),
-                spreadRadius: -4,
-              ),
-              // 外层细近影: 接地感
-              BoxShadow(
-                color: kCardShadowTint.withOpacity(0.15),
-                blurRadius: 5,
-                offset: const Offset(0, 2),
-                spreadRadius: -1,
-              ),
-            ],
-          ),
-          // 用 ClipRRect 裁剪内部, 让流光动画不会溢出卡片圆角
-          // 注意: ClipRRect 只裁剪子元素, 不影响外部的 boxShadow
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(18),
-            child: Stack(
-              children: [
-                // 卡片主体内容 (头像 + 文字 + 箭头)
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
-                  child: _buildCardContent(),
-                ),
-                // 流光层: 用 AnimatedBuilder 驱动 clipPath 从左到右展开
-                Positioned.fill(
-                  child: IgnorePointer(
-                    child: AnimatedBuilder(
-                      animation: _sweepAnimation,
-                      builder: (context, child) {
-                        // 只在动画进行时画流光, 省点性能
-                        if (_sweepController.value == 0) {
-                          return const SizedBox.shrink();
-                        }
-                        return ClipRect(
-                          clipper:
-                              _SweepClipper(progress: _sweepAnimation.value),
-                          // 纯米色填充, 不用渐变
-                          // 之前用 transparent -> 米色 -> transparent 的线性渐变,
-                          // 但 Colors.transparent 在 Flutter 里是 alpha=0 的黑色,
-                          // 插值过程会经过半透明黑, 导致流光两侧出现灰边。
-                          // 现在直接用 kCardSweepColor 实填充, 视觉干净
-                          child: Container(
-                            color: kCardSweepColor,
-                          ),
-                        );
-                      },
-                    ),
-                  ),
-                ),
-                // 顶部内高光: 一条 1px 的白色半透明线, 营造陶瓷顶部受光的感觉
-                Positioned(
-                  top: 0,
-                  left: 0,
-                  right: 0,
-                  height: 1,
-                  child: IgnorePointer(
-                    child: Container(
-                      decoration: BoxDecoration(
-                        gradient: LinearGradient(
-                          colors: [
-                            Colors.white.withOpacity(0),
-                            Colors.white.withOpacity(0.95),
-                            Colors.white.withOpacity(0),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
+          // ========================================
+          // 玻璃卡片核心: ClipRRect + BackdropFilter + 半透明白
+          // ========================================
+          // 这个结构对标 character_settings_page.dart 里的 _buildCard 写法:
+          //   ClipRRect -> BackdropFilter -> Container(半透明白 + 白描边 + 淡阴影)
+          // 没有 BackdropFilter 就没有真正的"模糊背景"效果, 只是一张半透明的贴纸。
+          //
+          // 这里额外包了一层 DecoratedBox 提供极淡的外阴影 (保持轻盈),
+          // 内部 ClipRRect 负责裁剪圆角, BackdropFilter 对卡片背后的内容做高斯模糊,
+          // 最内层的 Container 用半透明白 + 白描边画出玻璃本体。
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(18),
+              // 极淡外阴影: 和设置页一致 (black alpha 0.05, blur 10, offset 4)
+              // 这里 hover 时略微加深一点点, 不是陶瓷那种大阴影
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(_hovering ? 0.08 : 0.05),
+                  blurRadius: _hovering ? 14 : 10,
+                  offset: const Offset(0, 4),
                 ),
               ],
+            ),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(18),
+              child: BackdropFilter(
+                // 高斯模糊背后的内容 - 这才是"玻璃"的关键
+                // sigmaX/sigmaY = 20 和设置页的 GLASS_BLUR_SIGMA 一致
+                // 想让玻璃更模糊就加大, 想看得更清楚就减小
+                filter: ui.ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+                child: Container(
+                  decoration: BoxDecoration(
+                    // 半透明白: alpha 0.38 和设置页 GLASS_BG_OPACITY 一致
+                    // 数值越小越透 (背景颜色越鲜明), 越大越白实
+                    // 可调范围 0.25~0.55
+                    color: Colors.white.withOpacity(0.38),
+                    borderRadius: BorderRadius.circular(18),
+                    // 玻璃细描边: 白色 alpha 0.5, 宽 1.5px
+                    // 这是玻璃"有边缘"的关键, 去掉就像纯雾一样没形状
+                    border: Border.all(
+                      color: Colors.white.withOpacity(0.5),
+                      width: 1.5,
+                    ),
+                  ),
+                  child: Stack(
+                    children: [
+                      // 卡片主体内容 (头像 + 文字 + 箭头)
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+                        child: _buildCardContent(),
+                      ),
+                      // 流光层: 用 AnimatedBuilder 驱动 clipPath 从左到右展开
+                      Positioned.fill(
+                        child: IgnorePointer(
+                          child: AnimatedBuilder(
+                            animation: _sweepAnimation,
+                            builder: (context, child) {
+                              // 只在动画进行时画流光, 省点性能
+                              if (_sweepController.value == 0) {
+                                return const SizedBox.shrink();
+                              }
+                              return ClipRect(
+                                clipper: _SweepClipper(
+                                    progress: _sweepAnimation.value),
+                                // 纯米色填充, 不用渐变
+                                // 之前用 transparent -> 米色 -> transparent 的线性渐变,
+                                // 但 Colors.transparent 在 Flutter 里是 alpha=0 的黑色,
+                                // 插值过程会经过半透明黑, 导致流光两侧出现灰边。
+                                // 现在直接用 kCardSweepColor 实填充, 视觉干净
+                                child: Container(
+                                  color: kCardSweepColor,
+                                ),
+                              );
+                            },
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
             ),
           ),
         ),
@@ -1482,31 +1502,51 @@ class _CharacterCardState extends State<_CharacterCard>
   // ----------------------------------------
   // 中间信息列: 角色名 + 最近聊天内容
   // ----------------------------------------
+  // 说明：外层用 ClipRect 包裹，保证即使卡片整体被挤压到比内容更矮，
+  // 超出的底部文字也会被优雅地裁掉，而不是抛出 "RenderFlex overflowed" 异常。
+  // 内部 Column 使用 mainAxisSize.min，让列表自身不强制占满可用高度，
+  // 配合外层 Center 做垂直居中，视觉上保持和原来一致。
   Widget _buildInfoColumn(_ChatPreview? preview) {
     // 没有聊天记录时的提示
     if (preview == null || preview.lastTime == null) {
-      return Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Text(
-            widget.character.name,
-            style: const TextStyle(
-              fontSize: 14,
-              fontWeight: FontWeight.w500,
-              color: Color(0xFF2D3142),
-            ),
+      return ClipRect(
+        child: OverflowBox(
+          // alignment 控制内容在可用空间不足时被裁掉的方向
+          // Alignment.center: 上下对称裁剪（中间信息保留，上下各裁一点）
+          // Alignment.topCenter: 只裁底部（底部文字会先被裁掉，适合从上往下阅读）
+          alignment: Alignment.topCenter,
+          // 允许 child 在垂直方向使用任意高度，超出部分交给外层 ClipRect 裁剪
+          minHeight: 0,
+          maxHeight: double.infinity,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Text(
+                widget.character.name,
+                style: const TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w500,
+                  color: Color(0xFF2D3142),
+                ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              const SizedBox(height: 3),
+              Text(
+                widget.character.nameJp,
+                style: const TextStyle(
+                  fontSize: 11,
+                  color: Color(0xFFAAAAAA),
+                  fontFamily: 'Times New Roman',
+                ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ],
           ),
-          const SizedBox(height: 3),
-          Text(
-            widget.character.nameJp,
-            style: const TextStyle(
-              fontSize: 11,
-              color: Color(0xFFAAAAAA),
-              fontFamily: 'Times New Roman',
-            ),
-          ),
-        ],
+        ),
       );
     }
 
@@ -1516,48 +1556,57 @@ class _CharacterCardState extends State<_CharacterCard>
         preview.chineseText != null &&
         preview.chineseText!.isNotEmpty;
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: [
-        // 角色名
-        Text(
-          widget.character.name,
-          style: const TextStyle(
-            fontSize: 14,
-            fontWeight: FontWeight.w500,
-            color: Color(0xFF2D3142),
-          ),
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-        ),
-        const SizedBox(height: 3),
-        // 日文一行 (如果是用户消息, 这里显示的是用户的 content)
-        Text(
-          preview.japaneseText ?? '',
-          style: TextStyle(
-            fontSize: 12,
-            color: showBilingual
-                ? const Color(0xFF6A5F85)
-                : const Color(0xFF888888),
-          ),
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-        ),
-        // 中文翻译 (仅 AI 消息且有翻译时显示)
-        if (showBilingual) ...[
-          const SizedBox(height: 1),
-          Text(
-            preview.chineseText!,
-            style: const TextStyle(
-              fontSize: 11,
-              color: Color(0xFFA098B0),
+    return ClipRect(
+      child: OverflowBox(
+        // 同上: 裁剪时保留顶部（角色名），溢出时从底部裁
+        alignment: Alignment.topCenter,
+        minHeight: 0,
+        maxHeight: double.infinity,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            // 角色名
+            Text(
+              widget.character.name,
+              style: const TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w500,
+                color: Color(0xFF2D3142),
+              ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
             ),
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-          ),
-        ],
-      ],
+            const SizedBox(height: 3),
+            // 日文一行 (如果是用户消息, 这里显示的是用户的 content)
+            Text(
+              preview.japaneseText ?? '',
+              style: TextStyle(
+                fontSize: 12,
+                color: showBilingual
+                    ? const Color(0xFF6A5F85)
+                    : const Color(0xFF888888),
+              ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+            // 中文翻译 (仅 AI 消息且有翻译时显示)
+            if (showBilingual) ...[
+              const SizedBox(height: 1),
+              Text(
+                preview.chineseText!,
+                style: const TextStyle(
+                  fontSize: 11,
+                  color: Color(0xFFA098B0),
+                ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ],
+          ],
+        ),
+      ),
     );
   }
 
@@ -1623,6 +1672,151 @@ class _CharacterCardState extends State<_CharacterCard>
     }
     // 更早: MM-DD
     return '${time.month.toString().padLeft(2, '0')}-${time.day.toString().padLeft(2, '0')}';
+  }
+}
+
+// ========================================
+// 消息收取中 - 胶囊组件
+// ========================================
+// 和角色卡片使用同一套玻璃材质语言（ClipRRect + BackdropFilter + 半透明白 + 白描边），
+// 在左侧加一个柔和脉动的小圆点代替传统的旋转 spinner，视觉上更克制也更有品质感。
+// 组件为自适应宽度：宽度由文字内容决定，整条胶囊会在父容器中居中显示。
+//
+// 可调参数一览（想改观感都在这里）：
+// - kCapsuleHeight      胶囊高度
+// - kCapsuleRadius      胶囊圆角（设成高度一半就是纯胶囊形）
+// - kCapsulePaddingH    胶囊内部左右 padding
+// - kDotSize            左侧脉动圆点直径
+// - kDotColor           圆点颜色（默认柔和粉紫，和 logo 呼应）
+// - kDotPulseDuration   圆点一次脉动的时长
+// - kCapsuleText        文字内容
+// - kCapsuleTextSize    文字字号
+// - kCapsuleTextColor   文字颜色
+// - kCapsuleBlurSigma   玻璃高斯模糊强度（和角色卡片保持一致）
+// - kCapsuleBgOpacity   半透明白的透明度（越小越透）
+class _FetchingCapsule extends StatefulWidget {
+  const _FetchingCapsule();
+
+  @override
+  State<_FetchingCapsule> createState() => _FetchingCapsuleState();
+}
+
+class _FetchingCapsuleState extends State<_FetchingCapsule>
+    with SingleTickerProviderStateMixin {
+  // 整条胶囊的几何参数
+  static const double kCapsuleHeight = 30; // 胶囊高度 - 可调
+  static const double kCapsuleRadius = 15; // 圆角半径（= 高度一半 = 纯胶囊形）
+  static const double kCapsulePaddingH = 16; // 胶囊内部左右 padding - 可调
+
+  // 左侧脉动圆点参数
+  static const double kDotSize = 7; // 圆点直径 - 可调
+  static const Color kDotColor =
+      Color(0xFFB85573); // 圆点颜色 - 可调（默认和 folder accent 呼应）
+  static const Duration kDotPulseDuration =
+      Duration(milliseconds: 1100); // 圆点一次脉动的时长 - 可调
+
+  // 文字参数
+  static const String kCapsuleText = '消息收取中'; // 文字内容 - 可调
+  static const double kCapsuleTextSize = 12; // 文字字号 - 可调
+  static const Color kCapsuleTextColor = Color(0xFF6A5F85); // 文字颜色 - 可调
+
+  // 玻璃材质参数
+  static const double kCapsuleBlurSigma = 20; // 高斯模糊强度 - 可调，和角色卡片保持一致
+  static const double kCapsuleBgOpacity = 0.55; // 半透明白透明度 - 可调（越小越透）
+
+  // 脉动动画控制器（循环播放，呼吸感由曲线决定）
+  late final AnimationController _pulseController;
+
+  @override
+  void initState() {
+    super.initState();
+    _pulseController = AnimationController(
+      vsync: this,
+      duration: kDotPulseDuration,
+    )..repeat(reverse: true);
+  }
+
+  @override
+  void dispose() {
+    _pulseController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(kCapsuleRadius),
+      child: BackdropFilter(
+        // 对胶囊背后的渐变 + 光斑做高斯模糊，形成玻璃感
+        filter: ui.ImageFilter.blur(
+          sigmaX: kCapsuleBlurSigma,
+          sigmaY: kCapsuleBlurSigma,
+        ),
+        child: Container(
+          height: kCapsuleHeight,
+          padding: const EdgeInsets.symmetric(horizontal: kCapsulePaddingH),
+          decoration: BoxDecoration(
+            // 半透明白胶囊底色
+            color: Colors.white.withOpacity(kCapsuleBgOpacity),
+            borderRadius: BorderRadius.circular(kCapsuleRadius),
+            // 白描边: 和角色卡片描边保持一致，让玻璃感更统一
+            border: Border.all(
+              color: Colors.white.withOpacity(0.5),
+              width: 1,
+            ),
+            // 极淡外阴影: 让胶囊"浮在"背景上，不要让它和背景糊在一起
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.04),
+                blurRadius: 8,
+                offset: const Offset(0, 2),
+              ),
+            ],
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min, // 宽度自适应内容，不占满父容器
+            children: [
+              // 左侧脉动圆点: 替代传统 spinner，更精致
+              AnimatedBuilder(
+                animation: _pulseController,
+                builder: (context, _) {
+                  // 脉动: 圆点透明度在 0.35 ~ 1.0 之间来回变化
+                  // 想更明显就把下限调低, 想更温和就把下限调高
+                  final double opacity = 0.35 + 0.65 * _pulseController.value;
+                  return Container(
+                    width: kDotSize,
+                    height: kDotSize,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: kDotColor.withOpacity(opacity),
+                      // 圆点外发出一圈淡光晕, 和它的透明度联动
+                      boxShadow: [
+                        BoxShadow(
+                          color: kDotColor.withOpacity(opacity * 0.5),
+                          blurRadius: 6,
+                          spreadRadius: 0.5,
+                        ),
+                      ],
+                    ),
+                  );
+                },
+              ),
+              const SizedBox(width: 8),
+              // 文字: 去掉了省略号, 脉动圆点已经传达了"进行中"的含义
+              const Text(
+                kCapsuleText,
+                style: TextStyle(
+                  fontSize: kCapsuleTextSize,
+                  color: kCapsuleTextColor,
+                  fontWeight: FontWeight.w500,
+                  letterSpacing: 0.5,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 }
 
