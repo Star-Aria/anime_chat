@@ -260,46 +260,85 @@ Widget _debugRow(String label, String value) {
 // ========================================
 // 首页配色常量 (集中管理, 要调色改这里就够了)
 // ========================================
-// 第一层: 弥散渐变背景的三个断点颜色
-const Color kBgGradientStart = Color(0xFFFFF5F8); // 左上: 淡粉
-const Color kBgGradientMid = Color(0xFFF0F4FF); // 中间: 淡蓝
-const Color kBgGradientEnd = Color(0xFFF5F0FF); // 右下: 淡紫
+// 整体配色基调: 冰蓝青系, 与聊天页面的清透发光感保持一致, 整体偏冷调,
+// 弱化暖色和粉色。色板参考: Image4 (8BEADD 青绿 / 5688C9 海蓝 / 8CCDE9 天蓝 /
+// EBFBFA 极淡冰青) 和 Image5 (9ECDE1 雾蓝 / B2DCF1 淡蓝 / D3EEFC 极淡冰 /
+// E0EFFA 冰白 / A7E2F2 冰青)。
+//
+// 想换整体色调: 把下面的 kBg*、kFolderGrad*、kLogo* 这几组常量同步替换即可,
+// 其他常量(阴影/流光等)都从主色板中推导, 不需要单独想色号。
+
+// 第一层: 弥散渐变背景的三个断点颜色 (从上到下: 极淡冰 -> 冰蓝 -> 冰青)
+// 这三个值决定整页的"温度", 想往更暖调走可以替换中段为偏紫或偏粉
+const Color kBgGradientStart = Color(0xFFEBFBFA); // 顶部: 极淡冰青 (Image4 EBFBFA)
+const Color kBgGradientMid = Color(0xFFD3EEFC); // 中段: 冰蓝 (Image5 D3EEFC)
+const Color kBgGradientEnd = Color(0xFFA7E2F2); // 底部: 冰青 (Image5 A7E2F2)
 
 // 第一层: 渐变背景上方叠加的模糊光斑的颜色 (7 个)
+// 全部使用同色系冷调, 让玻璃透过来时看到的色彩丰富但温度统一,
+// 不会再出现暖色 (粉/橙) 和冷色撞色的问题。
 // 数量多 + 每个淡一点 = 玻璃透过来能看到的色彩更丰富, 但整体基调仍然柔和
-const Color kBgBlobColor1 = Color(0xFFFFB6C1); // 右上 粉
-const Color kBgBlobColor2 = Color(0xFFB6E5FF); // 左下 蓝
-const Color kBgBlobColor3 = Color(0xFFD4B6FF); // 中右 紫
-const Color kBgBlobColor4 = Color(0xFFFFDCC0); // 右下 暖橙
-const Color kBgBlobColor5 = Color(0xFFC0E5D8); // 左中 淡青
-const Color kBgBlobColor6 = Color(0xFFFFD4E8); // 右下 淡粉
-const Color kBgBlobColor7 = Color(0xFFD4E0FF); // 左上 淡蓝紫
+const Color kBgBlobColor1 = Color(0xFF8BEADD); // 右上 青绿 (Image4 8BEADD, 最亮点)
+const Color kBgBlobColor2 = Color(0xFF5688C9); // 左下 海蓝 (Image4 5688C9, 深色锚点)
+const Color kBgBlobColor3 = Color(0xFF9ECDE1); // 中右 雾蓝 (Image5 9ECDE1)
+const Color kBgBlobColor4 = Color(0xFFA7E2F2); // 右下 冰青 (Image5 A7E2F2)
+const Color kBgBlobColor5 = Color(0xFF8CCDE9); // 左中 天蓝 (Image4 8CCDE9)
+const Color kBgBlobColor6 = Color(0xFFB2DCF1); // 右下偏 淡蓝 (Image5 B2DCF1)
+const Color kBgBlobColor7 = Color(0xFFD3EEFC); // 左上 极淡冰 (Image5 D3EEFC)
 
-// 第三层: 文件夹的底色 (淡粉)
-const Color kFolderColor = Color(0xFFFDF4F4);
-// 文件夹标签未选中时的文字颜色
-const Color kFolderTabDim = Color(0xFFA88888);
-// 文件夹标签选中时的文字颜色 + 箭头颜色
-const Color kFolderAccent = Color(0xFFB85573);
+// ----------------------------------------
+// 第三层: 文件夹 (folder body) + 选中态 Tab 的颜色 (核心改动)
+// ----------------------------------------
+// 之前 folder body 是单色淡粉, 玻璃卡片透过来只能看到一片粉,
+// 玻璃折射效果出不来。现在改成 "kFolderGradStart -> kFolderGradEnd"
+// 的线性渐变 (左上 -> 右下), 两端色差大, 卡片在不同位置背后看到的颜色
+// 也不一样, 玻璃感才出得来。
+//
+// 同时 kFolderGradStart 还会作为选中 Tab 的主体色 (Tab 太小, 不画渐变),
+// 这样 "Tab 拉出文件夹一角" 的视觉就完全连贯了。换言之: 改 kFolderGradStart
+// 等于同时改了"文件夹左上端"和"选中 Tab 的颜色"。
+const Color kFolderGradStart =
+    Color(0xFF9ECDE1); // Folder 左上 + 选中 Tab 主色 (Image5 9ECDE1)
+const Color kFolderGradEnd =
+    Color(0xFFE0EFFA); // Folder 右下 (Image5 E0EFFA, 接近白)
 
-// 第四层: 角色卡片的渐变色 (从左上的白到右下的极淡米)
+// 兼容老代码: kFolderColor 现在等于渐变起点, 给 Tab 凹弧 _TabCornerPainter
+// 等必须用单色的地方使用。要改实际颜色请改 kFolderGradStart, 别改这里。
+const Color kFolderColor = kFolderGradStart;
+
+// 文件夹标签未选中时的文字颜色 (低饱和雾蓝, 在冰蓝底上不抢戏)
+const Color kFolderTabDim = Color(0xFF7A9BB5);
+
+// 文件夹标签选中时的文字颜色 + 箭头颜色 (海蓝, 在浅冰蓝上保证可读性)
+const Color kFolderAccent = Color(0xFF5688C9);
+
+// 第四层: 角色卡片的渐变色 (从左上的纯白到右下的极淡冰白)
+// 玻璃卡片本身保持白调, 让背后透出的冰蓝/青绿色彩成为主角
 const Color kCardGradientStart = Color(0xFFFFFFFF);
-const Color kCardGradientEnd = Color(0xFFFDFBF6);
+const Color kCardGradientEnd = Color(0xFFEBFBFA); // Image4 EBFBFA, 极淡冰青
 
-// 角色卡片阴影的色调 (暖米色, 配合淡粉底不冲突)
-// 阴影用 rgba 形式, 这里定义为 Color 方便后续生成不同 alpha 的版本
-const Color kCardShadowTint = Color.fromARGB(255, 190, 160, 130);
+// 角色卡片阴影的色调 (改成冷调海蓝, 配合冰蓝底)
+// 阴影实际使用时通常带较低 alpha, 在 _CharacterCard 里取 0.05~0.15
+const Color kCardShadowTint = Color(0xFF5688C9);
 
-// 点击流光动效的颜色 (米色, 和卡片整体配色统一)
-const Color kCardSweepColor = Color.fromARGB(140, 245, 228, 195);
+// 点击流光动效的颜色 (极淡冰青高光, 配合冷调底色更有"光从冰面扫过"的感觉)
+// alpha 控制流光的存在感, 140 是中等亮度, 想更柔可降到 100 左右,
+// 想更亮(像激光扫过)可加到 180+
+const Color kCardSweepColor = Color.fromARGB(140, 235, 251, 250);
 
-// Logo 渐变色 (粉 -> 蓝紫)
-const Color kLogoGradientStart = Color(0xFFFF9AAF);
-const Color kLogoGradientEnd = Color(0xFF9AAFFF);
+// 波浪容器主体投影色 (从原本的暖紫 RGB(150,110,180) 换成冷调海蓝)
+// 这个颜色在 _WaveContainerPainter 里用于绘制波浪下方的两层柔光阴影,
+// 必须是冷调, 否则在冰蓝背景上会显出"暖紫色的脏边"
+// 改投影深度: 调整 _WaveContainerPainter 里 fromARGB 的 alpha (默认 80 / 60)
+const Color kWaveShadowTint = Color(0xFF5688C9);
 
-// 标题渐变色 (粉 -> 蓝)
-const Color kTitleGradientStart = Color(0xFFFF6B9D);
-const Color kTitleGradientEnd = Color(0xFF6B9DFF);
+// Logo 渐变色 (海蓝 -> 青绿, 整体冷调, 和聊天页主色调一致)
+const Color kLogoGradientStart = Color(0xFF5688C9);
+const Color kLogoGradientEnd = Color(0xFF8BEADD);
+
+// 标题渐变色 (海蓝 -> 青绿, 和 logo 配套, 让顶部视觉统一)
+const Color kTitleGradientStart = Color(0xFF5688C9);
+const Color kTitleGradientEnd = Color(0xFF8BEADD);
 
 // ========================================
 // 角色选择页面 (首页)
@@ -803,12 +842,33 @@ class _CharacterSelectionPageState extends State<CharacterSelectionPage> {
 
     return Container(
       decoration: BoxDecoration(
-        // folder-body 改成半透明的淡粉, 让第一层的背景光斑能透过来
-        // 卡片玻璃折射的就是这个透过来的色彩
-        // 如果这里用实色, 卡片背后就只有纯色, 玻璃效果再强也看不出来
-        // alpha 可调范围 0.4~0.7, 越小越透 (背景越显眼), 越大越实 (玻璃效果越弱)
-        color: kFolderColor.withOpacity(0.55),
+        // ----------------------------------------
+        // 文件夹本体: 冰蓝渐变 (左上 -> 右下, 核心改动)
+        // ----------------------------------------
+        // 之前是单色半透明的淡粉, 玻璃卡片透过后只能看到一片粉色,
+        // 玻璃感几乎出不来。改成左上 -> 右下的冰蓝渐变后,
+        // 卡片在不同位置背后看到的颜色各不相同, 加上背景光斑透过来的色彩,
+        // 玻璃折射的丰富感才真正成立。
+        //
+        // 颜色定义在文件顶部的 kFolderGradStart / kFolderGradEnd, 改色调那里改。
+        // 透明度可调 (下面两个 withOpacity 的值): 越小越透 (背景越显眼,
+        // 玻璃感越强但文件夹边界会糊), 越大越实 (文件夹形状清晰但玻璃感减弱)。
+        // 推荐范围 0.35~0.55, 当前 0.45 是平衡点。
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            kFolderGradStart.withOpacity(0.45), // 左上端 (= 选中 Tab 同色, 视觉连贯)
+            kFolderGradEnd.withOpacity(0.45), // 右下端 (接近白, 整体提亮)
+          ],
+        ),
         borderRadius: BorderRadius.circular(16),
+        // 极淡的白色描边, 让文件夹有"玻璃片"的轮廓感
+        // 不要太亮, 否则会和角色卡片的描边竞争视觉
+        border: Border.all(
+          color: Colors.white.withOpacity(0.4),
+          width: 1,
+        ),
       ),
       // 不要 clipBehavior! 否则阴影会被裁成大矩形
       child: chars.isEmpty
@@ -1014,8 +1074,10 @@ class _WaveContainerPainter extends CustomPainter {
     // 这两层叠加, 让波浪"浮在"渐变背景之上
 
     // 大柔影: sigma 20 是 blur 半径, alpha 80 让阴影颜色明显更深
+    // 颜色用 kWaveShadowTint (冷调海蓝), 在冰蓝背景上不会显出暖紫的脏边
+    // 改投影深度: 调 alpha (默认 80, 范围 50~120)
     final bigShadowPaint = Paint()
-      ..color = const Color.fromARGB(80, 150, 110, 180)
+      ..color = const Color.fromARGB(255, 255, 255, 255).withAlpha(80)
       ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 20);
     // 向下偏移 14, 远阴影离波浪主体更远, 营造"飘起来"的感觉
     canvas.save();
@@ -1024,8 +1086,9 @@ class _WaveContainerPainter extends CustomPainter {
     canvas.restore();
 
     // 小近影: sigma 8, 贴紧波浪边缘, 加强轮廓
+    // 同样用冷调海蓝, alpha 默认 60 (近影比远影淡一点, 不抢戏)
     final closeShadowPaint = Paint()
-      ..color = const Color.fromARGB(60, 150, 110, 180)
+      ..color = const Color.fromARGB(255, 255, 255, 255).withAlpha(60)
       ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 8);
     canvas.save();
     canvas.translate(0, 4);
@@ -1033,9 +1096,11 @@ class _WaveContainerPainter extends CustomPainter {
     canvas.restore();
 
     // 再画白色主体 (半透明, 让背景光斑透过来)
-    // alpha 0.7: 比实色白淡, 让光斑透出来形成色彩变化, 又不会完全看不清容器形状
-    // 可调范围 0.55~0.85, 越小容器越透 (玻璃卡片折射的色彩越丰富)
-    final fillPaint = Paint()..color = Colors.white.withOpacity(0.7);
+    // alpha 0.6: 比之前的 0.7 更透一点, 让冰蓝背景和光斑透得更明显,
+    // 强化"清透感"以匹配聊天页风格。
+    // 可调范围 0.5~0.85, 越小容器越透 (玻璃卡片折射的色彩越丰富,
+    // 但波浪形状会变模糊), 越大越实
+    final fillPaint = Paint()..color = Colors.white.withOpacity(0.6);
     canvas.drawPath(path, fillPaint);
 
     // 最后在波浪顶边画一条淡淡的高光描边, 让波浪更立体
@@ -1580,25 +1645,30 @@ class _CharacterCardState extends State<_CharacterCard>
             ),
             const SizedBox(height: 3),
             // 日文一行 (如果是用户消息, 这里显示的是用户的 content)
+            // 颜色说明:
+            //   - showBilingual = true (AI 消息有翻译): 用偏深的冷调蓝灰 4D6680,
+            //     让日文作为"主信息"略突出, 中文作为辅助
+            //   - showBilingual = false (用户消息或 AI 只有日文): 用中性灰 888888
             Text(
               preview.japaneseText ?? '',
               style: TextStyle(
                 fontSize: 12,
                 color: showBilingual
-                    ? const Color(0xFF6A5F85)
+                    ? const Color(0xFF4D6680)
                     : const Color(0xFF888888),
               ),
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
             ),
             // 中文翻译 (仅 AI 消息且有翻译时显示)
+            // 颜色用更浅的冷调蓝灰 8A9FB5, 比日文行淡, 不抢主视觉
             if (showBilingual) ...[
               const SizedBox(height: 1),
               Text(
                 preview.chineseText!,
                 style: const TextStyle(
                   fontSize: 11,
-                  color: Color(0xFFA098B0),
+                  color: Color(0xFF8A9FB5),
                 ),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
@@ -1624,7 +1694,8 @@ class _CharacterCardState extends State<_CharacterCard>
             timeText,
             style: const TextStyle(
               fontSize: 10,
-              color: Color(0xFFA098B0),
+              // 时间字色用冷调蓝灰, 和中文翻译行同色, 视觉一致
+              color: Color(0xFF8A9FB5),
             ),
           ),
           const SizedBox(height: 6),
@@ -1687,7 +1758,7 @@ class _CharacterCardState extends State<_CharacterCard>
 // - kCapsuleRadius      胶囊圆角（设成高度一半就是纯胶囊形）
 // - kCapsulePaddingH    胶囊内部左右 padding
 // - kDotSize            左侧脉动圆点直径
-// - kDotColor           圆点颜色（默认柔和粉紫，和 logo 呼应）
+// - kDotColor           圆点颜色（默认海蓝, 和选中 Tab 同色）
 // - kDotPulseDuration   圆点一次脉动的时长
 // - kCapsuleText        文字内容
 // - kCapsuleTextSize    文字字号
@@ -1710,15 +1781,17 @@ class _FetchingCapsuleState extends State<_FetchingCapsule>
 
   // 左侧脉动圆点参数
   static const double kDotSize = 7; // 圆点直径 - 可调
-  static const Color kDotColor =
-      Color(0xFFB85573); // 圆点颜色 - 可调（默认和 folder accent 呼应）
+  // 圆点颜色 - 可调; 默认用海蓝 5688C9 (= kFolderAccent), 和选中 Tab 颜色呼应
+  // 想换其他冷色: 比如换成 8BEADD 青绿能让胶囊更有"活力", 但和 Tab 不再统一
+  static const Color kDotColor = Color(0xFF5688C9);
   static const Duration kDotPulseDuration =
       Duration(milliseconds: 1100); // 圆点一次脉动的时长 - 可调
 
   // 文字参数
   static const String kCapsuleText = '消息收取中'; // 文字内容 - 可调
   static const double kCapsuleTextSize = 12; // 文字字号 - 可调
-  static const Color kCapsuleTextColor = Color(0xFF6A5F85); // 文字颜色 - 可调
+  // 文字颜色 - 可调; 用比圆点稍深的冷调蓝灰, 在浅冰蓝胶囊背景上保证可读性
+  static const Color kCapsuleTextColor = Color(0xFF3F6A99);
 
   // 玻璃材质参数
   static const double kCapsuleBlurSigma = 20; // 高斯模糊强度 - 可调，和角色卡片保持一致

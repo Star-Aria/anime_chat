@@ -296,7 +296,7 @@ class ProactiveMessageService {
       String characterId,
       String japanese,
       String chinese,
-      List<Message> _ignored,
+      List<Message> ignored,
       DateTime timestamp) async {
     final latestMessages = await StorageService.loadConversation(characterId);
     final updatedMessages = List<Message>.from(latestMessages);
