@@ -164,6 +164,8 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
     if (_userNameOverride != null && _userNameOverride!.isNotEmpty) {
       base += '\n\n[用户称呼设置] 请在对话中用"$_userNameOverride"称呼用户，'
           '忽略以上提示词中的其他称呼设定。';
+    } else {
+      base += '\n\n[用户称呼设置] 对方未设置称呼，请不要使用任何固定名字称呼用户，或直接不称呼。';
     }
 
     return base;

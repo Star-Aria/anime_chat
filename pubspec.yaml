@@ -26,6 +26,8 @@ dependencies:
   window_manager: ^0.5.1    # 窗口管理
   image_picker: ^1.0.4      # 图片选择器
 
+  google_fonts: ^6.1.0
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

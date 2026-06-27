@@ -74,8 +74,9 @@ const Map<String, String> kCharacterSeriesMap = {
   'shinobu': '鬼灭之刃',
   'muichirou': '鬼灭之刃',
   'giyu': '鬼灭之刃',
-  // 以后加新角色, 在这里加映射, 比如:
-  // 'maruyama_aya': 'BanG Dream',
+  // 以后加新角色, 在这里加映射
+  'sakiko': 'BanG Dream',
+  'andy': '未分类',
 };
 
 // ========================================
@@ -86,7 +87,8 @@ const Map<String, String> kCharacterSeriesMap = {
 // 不在这个列表但 kCharacterSeriesMap 里出现过的番剧会自动追加到末尾。
 const List<String> kSeriesOrder = [
   '鬼灭之刃',
-  'BanG Dream', // 占位 Tab, 目前没有角色, 以后加角色时自动填充
+  'BanG Dream',
+  '未分类',
 ];
 
 // 调试面板：显示所有角色的主动消息计时状态
@@ -260,85 +262,128 @@ Widget _debugRow(String label, String value) {
 // ========================================
 // 首页配色常量 (集中管理, 要调色改这里就够了)
 // ========================================
-// 整体配色基调: 冰蓝青系, 与聊天页面的清透发光感保持一致, 整体偏冷调,
-// 弱化暖色和粉色。色板参考: Image4 (8BEADD 青绿 / 5688C9 海蓝 / 8CCDE9 天蓝 /
-// EBFBFA 极淡冰青) 和 Image5 (9ECDE1 雾蓝 / B2DCF1 淡蓝 / D3EEFC 极淡冰 /
-// E0EFFA 冰白 / A7E2F2 冰青)。
+// 当前方案: 顶部头图 + 白色波浪容器 + 蓝粉渐变文件夹
+// 视觉语言:
+//   - 顶部用一张实景图片做"头图 banner", 给画面提供天然的色彩锚点
+//   - 中间白色波浪容器贴齐屏幕左右下三边, 作为色彩中的呼吸留白
+//   - 文件夹用蓝→粉渐变, 取自头图天空蓝 + 樱花粉, 和头图色彩呼应
+//   - 文件夹边缘有蓝→紫→粉的发光描边, 强调"玻璃感"
 //
-// 想换整体色调: 把下面的 kBg*、kFolderGrad*、kLogo* 这几组常量同步替换即可,
-// 其他常量(阴影/流光等)都从主色板中推导, 不需要单独想色号。
-
-// 第一层: 弥散渐变背景的三个断点颜色 (从上到下: 极淡冰 -> 冰蓝 -> 冰青)
-// 这三个值决定整页的"温度", 想往更暖调走可以替换中段为偏紫或偏粉
-const Color kBgGradientStart = Color(0xFFEBFBFA); // 顶部: 极淡冰青 (Image4 EBFBFA)
-const Color kBgGradientMid = Color(0xFFD3EEFC); // 中段: 冰蓝 (Image5 D3EEFC)
-const Color kBgGradientEnd = Color(0xFFA7E2F2); // 底部: 冰青 (Image5 A7E2F2)
-
-// 第一层: 渐变背景上方叠加的模糊光斑的颜色 (7 个)
-// 全部使用同色系冷调, 让玻璃透过来时看到的色彩丰富但温度统一,
-// 不会再出现暖色 (粉/橙) 和冷色撞色的问题。
-// 数量多 + 每个淡一点 = 玻璃透过来能看到的色彩更丰富, 但整体基调仍然柔和
-const Color kBgBlobColor1 = Color(0xFF8BEADD); // 右上 青绿 (Image4 8BEADD, 最亮点)
-const Color kBgBlobColor2 = Color(0xFF5688C9); // 左下 海蓝 (Image4 5688C9, 深色锚点)
-const Color kBgBlobColor3 = Color(0xFF9ECDE1); // 中右 雾蓝 (Image5 9ECDE1)
-const Color kBgBlobColor4 = Color(0xFFA7E2F2); // 右下 冰青 (Image5 A7E2F2)
-const Color kBgBlobColor5 = Color(0xFF8CCDE9); // 左中 天蓝 (Image4 8CCDE9)
-const Color kBgBlobColor6 = Color(0xFFB2DCF1); // 右下偏 淡蓝 (Image5 B2DCF1)
-const Color kBgBlobColor7 = Color(0xFFD3EEFC); // 左上 极淡冰 (Image5 D3EEFC)
+// 想换头图配色: 改 kFolderGradStart / kFolderGradEnd / kEdgeGlow* 这几组,
+// 让文件夹和发光描边的色彩匹配新头图。
 
 // ----------------------------------------
-// 第三层: 文件夹 (folder body) + 选中态 Tab 的颜色 (核心改动)
+// 头图相关
 // ----------------------------------------
-// 之前 folder body 是单色淡粉, 玻璃卡片透过来只能看到一片粉,
-// 玻璃折射效果出不来。现在改成 "kFolderGradStart -> kFolderGradEnd"
-// 的线性渐变 (左上 -> 右下), 两端色差大, 卡片在不同位置背后看到的颜色
-// 也不一样, 玻璃感才出得来。
-//
-// 同时 kFolderGradStart 还会作为选中 Tab 的主体色 (Tab 太小, 不画渐变),
-// 这样 "Tab 拉出文件夹一角" 的视觉就完全连贯了。换言之: 改 kFolderGradStart
-// 等于同时改了"文件夹左上端"和"选中 Tab 的颜色"。
-const Color kFolderGradStart =
-    Color(0xFF9ECDE1); // Folder 左上 + 选中 Tab 主色 (Image5 9ECDE1)
-const Color kFolderGradEnd =
-    Color(0xFFE0EFFA); // Folder 右下 (Image5 E0EFFA, 接近白)
+// 头图本地路径 (用户可以替换成自己的图片)
+// Windows 路径需要原样写入, Flutter 会用 File 读取
+const String kHeroImagePath = r'C:\anime_chat\头图.jpg';
 
-// 兼容老代码: kFolderColor 现在等于渐变起点, 给 Tab 凹弧 _TabCornerPainter
-// 等必须用单色的地方使用。要改实际颜色请改 kFolderGradStart, 别改这里。
+// ----------------------------------------
+// 头图高度: 渲染高度 vs 可见高度 (解耦)
+// ----------------------------------------
+// 之前 kHeroImageHeight 同时控制 "头图渲染多高" 和 "波浪容器从哪开始",
+// 想让头图变高就会压缩下方内容。现在拆成两个独立变量:
+//
+//   kHeroImageHeight:    头图渲染时占据多高 (越大头图本身越大, 能展示更多原图内容)
+//   kHeroVisibleHeight:  头图实际可见到的底部 (= 波浪容器顶部位置)
+//
+// 头图区域 = 屏幕 0 ~ kHeroImageHeight, 但 kHeroVisibleHeight 以下会被
+// 波浪容器遮挡, 所以用户实际看到的头图 = 0 ~ kHeroVisibleHeight (再加波浪起伏)。
+//
+// 调整方式:
+//   - 想让头图区域更大 (展示更多原图): 增大 kHeroImageHeight, 不影响下方布局
+//   - 想让波浪容器从更高位置开始: 减小 kHeroVisibleHeight (但会压缩下方)
+//   - 想让波浪容器从更低位置开始: 增大 kHeroVisibleHeight
+const double kHeroImageHeight = 230.0; // 头图渲染高度 (越大越能展现更多原图)
+const double kHeroVisibleHeight = 145.0; // 波浪容器顶部位置 (= 头图实际可见底部)
+
+// ----------------------------------------
+// 头图显示位置 (BoxFit.cover 模式下, 图片比头图区域大时显示哪一部分)
+// ----------------------------------------
+// 头图区域是宽屏 800x180 (近 4.4:1), 而你的头图原图通常是竖向的,
+// 所以图片会被裁剪。alignment 决定保留哪部分:
+//   - Alignment.topCenter      显示图片顶部 (适合天空主题, 保留蓝天云朵)
+//   - Alignment.center         显示图片中部 (默认, 适合主体居中的图)
+//   - Alignment.bottomCenter   显示图片底部 (适合花树/前景主题)
+//   - Alignment(0, 0.3)        手动指定 y 偏移 (-1=最顶, 0=居中, 1=最底)
+// 想看不同区域: 改这个常量然后热重载即可
+const Alignment kHeroImageAlignment = Alignment(0, 0.2);
+
+// 头图上方覆盖一层白色蒙版, 让 logo / 标题文字浮在上面更清晰
+// 数值 = (顶部 alpha, 底部 alpha), 顶部更透 (露出更多原图), 底部更白 (柔化波浪衔接)
+const double kHeroOverlayTopAlpha = 0.05;
+const double kHeroOverlayBottomAlpha = 0.20;
+
+// 波浪容器向上重叠头图的距离 (= 头图渲染高度 - 头图可见高度)
+// 这是个派生值, 不再独立调整 — 想改头图可见区或渲染区, 改上面的两个常量。
+// 保留这个常量是为了让旧代码 (注释 / painter 内部计算) 仍能直接引用,
+// 不必到处替换成减法表达式。
+const double kWaveOverlap = kHeroImageHeight - kHeroVisibleHeight;
+
+// ----------------------------------------
+// 文件夹 + 选中 Tab 的渐变色
+// ----------------------------------------
+// 蓝 → 粉 双色渐变 (左上 -> 右下), 跨度大、色相对比明显
+// kFolderGradStart 同时作为选中 Tab 的填充色 (实色), 三处 (文件夹左上 + Tab 主体
+// + Tab 凹弧) 永远同色, 视觉上 "Tab 是从文件夹拉出的一角"
+const Color kFolderGradStart = Color(0xFF5BA8DC); // 头图天空蓝
+const Color kFolderGradEnd = Color(0xFFFFD4E5); // 樱花粉
+
+// 兼容老代码: kFolderColor = 渐变起点, 单色场景使用 (Tab 主体 / Tab 凹弧)
 const Color kFolderColor = kFolderGradStart;
 
-// 文件夹标签未选中时的文字颜色 (低饱和雾蓝, 在冰蓝底上不抢戏)
-const Color kFolderTabDim = Color(0xFF7A9BB5);
+// 文件夹标签未选中时的文字颜色 (淡蓝灰, 在浅色头图下方区域不抢戏)
+const Color kFolderTabDim = Color(0xFF7AA0BD);
 
-// 文件夹标签选中时的文字颜色 + 箭头颜色 (海蓝, 在浅冰蓝上保证可读性)
-const Color kFolderAccent = Color(0xFF5688C9);
+// 文件夹标签选中时的文字颜色 + 箭头颜色
+// 选中 Tab 是蓝色实色, 文字用白色更醒目
+const Color kFolderAccent = Color(0xFFFFFFFF);
 
-// 第四层: 角色卡片的渐变色 (从左上的纯白到右下的极淡冰白)
-// 玻璃卡片本身保持白调, 让背后透出的冰蓝/青绿色彩成为主角
+// ----------------------------------------
+// 文件夹边缘发光描边 (蓝 -> 紫 -> 粉 横向三段渐变)
+// ----------------------------------------
+// 用于文件夹四周的发光边, 类似 macOS / Vision Pro 那种玻璃外光
+const Color kEdgeGlowStart = Color(0xFF5BA8DC); // 蓝 (= 文件夹起点)
+const Color kEdgeGlowMid = Color(0xFFC8B5E5); // 中段紫
+const Color kEdgeGlowEnd = Color(0xFFFFB8D0); // 粉 (≈ 文件夹终点)
+
+// ----------------------------------------
+// 角色卡片
+// ----------------------------------------
+// 卡片本身保持纯白玻璃质感, 渐变常量备用 (当前未使用 BackdropFilter 内已自带)
 const Color kCardGradientStart = Color(0xFFFFFFFF);
-const Color kCardGradientEnd = Color(0xFFEBFBFA); // Image4 EBFBFA, 极淡冰青
+const Color kCardGradientEnd = Color(0xFFFAFBFC);
 
-// 角色卡片阴影的色调 (改成冷调海蓝, 配合冰蓝底)
-// 阴影实际使用时通常带较低 alpha, 在 _CharacterCard 里取 0.05~0.15
+// 角色卡片阴影色调 (冷调海蓝, 配合彩色文件夹底)
+// 阴影实际使用时 alpha 较低 (0.05~0.10)
 const Color kCardShadowTint = Color(0xFF5688C9);
 
-// 点击流光动效的颜色 (极淡冰青高光, 配合冷调底色更有"光从冰面扫过"的感觉)
-// alpha 控制流光的存在感, 140 是中等亮度, 想更柔可降到 100 左右,
-// 想更亮(像激光扫过)可加到 180+
-const Color kCardSweepColor = Color.fromARGB(140, 235, 251, 250);
+// 注: 旧的点击流光颜色常量 kCardSweepColor 已被删除。
+//     新动效用 _DiagonalShimmerPainter (倾斜白光带) +
+//     边缘发光波纹 (用角色色 character.color), 不再需要单独的流光色。
+//     如果以后想恢复整片色块扫光, 可在这里加回类似的常量。
 
-// 波浪容器主体投影色 (从原本的暖紫 RGB(150,110,180) 换成冷调海蓝)
-// 这个颜色在 _WaveContainerPainter 里用于绘制波浪下方的两层柔光阴影,
-// 必须是冷调, 否则在冰蓝背景上会显出"暖紫色的脏边"
-// 改投影深度: 调整 _WaveContainerPainter 里 fromARGB 的 alpha (默认 80 / 60)
+// ----------------------------------------
+// 波浪容器主体投影色 (冷调海蓝)
+// 在 _WaveContainerPainter 里实际用 withAlpha 做半透明
+// ----------------------------------------
 const Color kWaveShadowTint = Color(0xFF5688C9);
 
-// Logo 渐变色 (海蓝 -> 青绿, 整体冷调, 和聊天页主色调一致)
+// ----------------------------------------
+// Logo 渐变色 (蓝 -> 粉, 呼应头图主色 + 文件夹渐变)
+// ----------------------------------------
 const Color kLogoGradientStart = Color(0xFF5688C9);
-const Color kLogoGradientEnd = Color(0xFF8BEADD);
+const Color kLogoGradientEnd = Color(0xFFE8A0C0);
 
-// 标题渐变色 (海蓝 -> 青绿, 和 logo 配套, 让顶部视觉统一)
-const Color kTitleGradientStart = Color(0xFF5688C9);
-const Color kTitleGradientEnd = Color(0xFF8BEADD);
+// 标题文字颜色: 白色 + 深蓝阴影 (在头图上保证可读性)
+// 实际渲染时, 文字本体是 kTitleColor, 投影是 kTitleShadowColor
+const Color kTitleColor = Color(0xFFFFFFFF);
+const Color kTitleShadowColor = Color(0xFF1A4870);
+
+// 旧的标题渐变色保留兼容, 当前未使用
+const Color kTitleGradientStart = Color(0xFFFFFFFF);
+const Color kTitleGradientEnd = Color(0xFFFFFFFF);
 
 // ========================================
 // 角色选择页面 (首页)
@@ -537,100 +582,174 @@ class _CharacterSelectionPageState extends State<CharacterSelectionPage> {
       body: Stack(
         children: [
           // ============================================
-          // 第一层: 弥散渐变背景
+          // 第一层: 屏幕底色 + 顶部头图 banner
           // ============================================
-          // 覆盖整个窗口, 提供柔和的粉蓝紫渐变基底
-          Container(
-            decoration: const BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                colors: [kBgGradientStart, kBgGradientMid, kBgGradientEnd],
-                stops: [0.0, 0.5, 1.0],
+          Container(color: const Color(0xFFF5F7FA)),
+
+          _buildHeroImage(),
+
+          // ============================================
+          // 主要内容: Logo / 标题 浮在头图上, 下方是波浪容器
+          // ============================================
+          Column(
+            children: [
+              SizedBox(height: kHeroImageHeight - kWaveOverlap),
+              Expanded(
+                child: _buildWaveContainer(),
+              ),
+            ],
+          ),
+
+          // ============================================
+          // 磨砂玻璃带 + 顶部独立波浪线 (在外层 Stack, 排在波浪容器之上)
+          // ============================================
+          // 关键: 必须放在波浪容器之 *后* 渲染 (在 Stack children 列表里靠后),
+          // 才能让 BackdropFilter 真正模糊它后方的内容 (头图 + 容器顶白)。
+          //
+          // 位置数学:
+          //   - 波浪容器顶部 (Column 中起点) y = kHeroImageHeight - kWaveOverlap
+          //   - painter 内主波浪中线 = waveBaseY = 14
+          //   - 主波浪在屏幕坐标 y = kHeroImageHeight - kWaveOverlap + 14
+          //
+          //   - _FrostedGlassBand 高 _kBandHeight = 50
+          //   - 玻璃带下波浪中线在 widget 内部 _kBandBottomY = 34
+          //   - 让玻璃带下波浪 = 屏幕主波浪 (无缝衔接到容器顶白描边):
+          //       Positioned.top + 34 = kHeroImageHeight - kWaveOverlap + 14
+          //       Positioned.top = kHeroImageHeight - kWaveOverlap - 20
+          //
+          // 所以以下两个 Positioned 都用同样的 top + 高度, 只是渲染内容不同:
+          //   1. 磨砂玻璃带 (上波浪 ~ 下波浪 之间的彩色磨砂内容, 厚 16px)
+          //   2. 顶部独立装饰波浪线 (在上波浪上方 ~6px 处的白色细线)
+          Positioned(
+            top: kHeroImageHeight - kWaveOverlap - 20,
+            left: 0,
+            right: 0,
+            height: 50, // = _kBandHeight
+            child: const _FrostedGlassBand(),
+          ),
+          Positioned(
+            top: kHeroImageHeight - kWaveOverlap - 20,
+            left: 0,
+            right: 0,
+            height: 50, // = _kBandHeight
+            child: const IgnorePointer(
+              child: CustomPaint(
+                painter: _TopGlassLinePainter(),
               ),
             ),
           ),
 
-          // ============================================
-          // 第一层附加: 七个模糊光斑 (blob)
-          // ============================================
-          // 数量多 + 每个淡, 让玻璃卡片透过后能看到丰富的色彩变化
-          // 位置用像素值, 可以根据窗口大小调整
-          _buildBgBlob(
-            color: kBgBlobColor1,
-            size: const Size(260, 340),
-            top: -70,
-            right: -50,
-          ),
-          _buildBgBlob(
-            color: kBgBlobColor2,
-            size: const Size(280, 360),
-            bottom: 40,
-            left: -70,
-          ),
-          _buildBgBlob(
-            color: kBgBlobColor3,
-            size: const Size(220, 280),
-            top: 160,
-            right: 140,
-          ),
-          _buildBgBlob(
-            color: kBgBlobColor4,
-            size: const Size(220, 280),
-            bottom: 150,
-            right: 30,
-          ),
-          _buildBgBlob(
-            color: kBgBlobColor5,
-            size: const Size(200, 260),
-            top: 220,
-            left: 60,
-          ),
-          _buildBgBlob(
-            color: kBgBlobColor6,
-            size: const Size(180, 230),
-            bottom: 60,
-            right: 200,
-          ),
-          _buildBgBlob(
-            color: kBgBlobColor7,
-            size: const Size(170, 220),
-            top: 40,
-            left: 180,
+          // Logo + 标题
+          // 基于头图 *可见区域* (0 ~ kHeroVisibleHeight) 定位, 而不是头图渲染高度
+          // 这样头图变高 (kHeroImageHeight 变大) 时, Logo + 标题位置不会跟着下移
+          Positioned(
+            top: 0,
+            left: 0,
+            right: 0,
+            height: kHeroVisibleHeight,
+            child: Align(
+              alignment: const Alignment(0, -0.35),
+              child: _buildTopHeader(),
+            ),
           ),
 
           // ============================================
-          // 主要内容 (SafeArea 内)
+          // 收取消息提示胶囊 (Stack 最上层浮层)
           // ============================================
-          SafeArea(
-            child: Padding(
-              // 左右 16 的外边距, 顶部 18 给 logo 留空间, 底部 16 和左右一致
-              padding: const EdgeInsets.fromLTRB(16, 18, 16, 16),
-              child: Column(
-                children: [
-                  // ========================================
-                  // 顶部: logo + 标题 (居中, 紧凑)
-                  // ========================================
-                  _buildTopHeader(),
+          // 关键: 必须放在 Stack children 的最后, 才能在视觉层级上盖在
+          // 磨砂玻璃带 / 装饰波浪线 / Logo / 标题之上, 避免被它们遮挡。
+          //
+          // 用 Positioned 绝对定位 (而不是 Column 中的占位 widget):
+          //   - Column 中放它会推动下方波浪容器往下移, 而磨砂带是按
+          //     kHeroImageHeight 计算位置的 (不会跟着移), 导致磨砂带和
+          //     波浪容器错位 — 视觉上 "磨砂玻璃带被推上面被截一截, 胶囊
+          //     夹在中间" 的 bug
+          //   - 改成 Positioned 浮层, fetching bar 只是浮在头图底部 + 波浪
+          //     容器顶部的交界处, 不影响下方任何 widget 的位置
+          //
+          // 位置: top = 头图底部之上 ~30px (= 波浪容器顶之上 ~10px)
+          // 想调位置: 改 top 表达式
+          if (_isFetchingMessages)
+            Positioned(
+              // 基于可见头图区域定位 (头图底部 = 波浪容器顶 = kHeroVisibleHeight)
+              // 想让胶囊位置上移: 把 30 改大 (40-60); 想下移: 改小 (20)
+              top: kHeroVisibleHeight - 30,
+              left: 0,
+              right: 0,
+              child: _buildFetchingBar(),
+            ),
+        ],
+      ),
+    );
+  }
 
-                  const SizedBox(height: 12),
+  // ----------------------------------------
+  // 顶部头图 banner
+  // ----------------------------------------
+  // 加载本地图片作为头图, 顶部覆盖一层白色蒙版让 logo / 标题文字浮在上面更清晰。
+  // 文件加载失败时回退到一个柔和的蓝色渐变, 保证布局不崩。
+  // 想换图片: 改 main.dart 顶部的 kHeroImagePath 常量。
+  // 想调高度: 改 kHeroImageHeight 常量。
+  // 想调蒙版浓度: 改 kHeroOverlayTopAlpha / kHeroOverlayBottomAlpha 常量。
+  Widget _buildHeroImage() {
+    final file = File(kHeroImagePath);
+    final imageExists = file.existsSync();
 
-                  // ========================================
-                  // 消息收取中提示条
-                  // ========================================
-                  // 启动时 ProactiveMessageService 会检查并补发离线期间的主动消息，
-                  // 期间在角色列表上方显示提示条，收取完毕后自动消失。
-                  // 样式参考微信"消息收取中"的横条提示。
-                  if (_isFetchingMessages) _buildFetchingBar(),
-
-                  // ========================================
-                  // 第二层: 波浪顶边的白色容器
-                  // ========================================
-                  // 用 CustomPainter 绘制顶部是波浪的白色背景
-                  // 容器内部放置 Tab + 文件夹 + 角色卡片列表
-                  Expanded(
-                    child: _buildWaveContainer(),
+    return Positioned(
+      top: 0,
+      left: 0,
+      right: 0,
+      height: kHeroImageHeight,
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          // 图片本体 (或回退渐变)
+          if (imageExists)
+            Image.file(
+              file,
+              fit: BoxFit.cover, // cover: 保持比例填满, 多余部分按 alignment 裁掉
+              alignment: kHeroImageAlignment, // 控制显示图片哪一部分
+            )
+          else
+            // 回退方案: 头图文件不存在时, 用一个蓝色渐变占位, 保证布局不崩
+            // 这样即使忘了放头图, 程序也能正常运行, 不会黑屏或报错
+            Container(
+              decoration: const BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [
+                    Color(0xFF5BA8DC),
+                    Color(0xFFA4D5EC),
+                    Color(0xFFD9EBF2),
+                  ],
+                  stops: [0.0, 0.6, 1.0],
+                ),
+              ),
+              alignment: Alignment.center,
+              child: Padding(
+                padding: const EdgeInsets.only(top: 40),
+                child: Text(
+                  '头图未找到\n请确认 $kHeroImagePath 存在',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: Colors.white.withOpacity(0.7),
+                    fontSize: 11,
                   ),
+                ),
+              ),
+            ),
+
+          // 白色蒙版 (上淡下浓的渐变), 让头图柔化, 文字浮上去更清晰
+          // 顶部更透 (能看清更多原图), 底部更白 (和波浪容器无缝衔接)
+          Container(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [
+                  Colors.white.withOpacity(kHeroOverlayTopAlpha),
+                  Colors.white.withOpacity(kHeroOverlayBottomAlpha),
                 ],
               ),
             ),
@@ -681,12 +800,20 @@ class _CharacterSelectionPageState extends State<CharacterSelectionPage> {
   }
 
   // ----------------------------------------
-  // 顶部 Header: logo + 渐变标题
+  // 顶部 Header: logo + 标题 (浮在头图上)
   // ----------------------------------------
+  // Logo: 仿早期无头图版本的简洁实现 — 不加任何光晕层, 只用彩色阴影做立体感
+  //        这样 Logo 看起来干净, 不会因为多层光晕重叠而显灰。
   Widget _buildTopHeader() {
     return Column(
+      mainAxisSize: MainAxisSize.min,
+      mainAxisAlignment: MainAxisAlignment.center,
       children: [
-        // Logo: 52x52 的圆角方块, 粉蓝渐变, 微倾斜
+        // ========================================
+        // Logo: 52x52 圆角方块, 蓝粉渐变, 微倾斜
+        // ========================================
+        // 简洁实现: 直接 Transform.rotate + Container(渐变 + 双层彩色 boxShadow)
+        // 不再叠加白光晕 / 黑阴影, 避免颜色重叠变灰
         Transform.rotate(
           angle: -5 * math.pi / 180, // 逆时针倾斜 5 度
           child: Container(
@@ -699,11 +826,23 @@ class _CharacterSelectionPageState extends State<CharacterSelectionPage> {
                 end: Alignment.bottomRight,
                 colors: [kLogoGradientStart, kLogoGradientEnd],
               ),
+              // ----------------------------------------
+              // 彩色阴影: 双层不同色 + 不同模糊半径, 形成立体感
+              // ----------------------------------------
+              // 用 Logo 主色调 (蓝/粉) 的彩色阴影 (不用黑色, 避免在头图上变灰),
+              // 偏向底部 (offset.dy > 0), Logo 看起来像 "悬浮" 在头图上方
+              // 想要更明显悬浮: 增大 blurRadius 或 offset.dy
+              // 想要更内敛: 减小 alpha
               boxShadow: [
                 BoxShadow(
-                  color: kLogoGradientStart.withOpacity(0.35),
+                  color: kLogoGradientStart.withOpacity(0.5),
+                  blurRadius: 16,
+                  offset: const Offset(0, 8),
+                ),
+                BoxShadow(
+                  color: kLogoGradientEnd.withOpacity(0.4),
                   blurRadius: 24,
-                  offset: const Offset(0, 10),
+                  offset: const Offset(0, 14),
                 ),
               ],
             ),
@@ -714,21 +853,49 @@ class _CharacterSelectionPageState extends State<CharacterSelectionPage> {
             ),
           ),
         ),
-        const SizedBox(height: 8),
-        // 标题: 用 ShaderMask 实现渐变文字
-        ShaderMask(
-          shaderCallback: (bounds) => const LinearGradient(
-            colors: [kTitleGradientStart, kTitleGradientEnd],
-          ).createShader(bounds),
-          child: const Text(
-            'Anime Chat',
-            style: TextStyle(
-              fontSize: 22, // 标题大小 - 可调
-              fontWeight: FontWeight.w500,
-              letterSpacing: 1.4,
-              fontFamily: 'Times New Roman',
-              color: Colors.white, // 这里颜色会被 ShaderMask 覆盖, 只是占位
-            ),
+        // Logo 和标题之间的间距 - 可调, 2 让标题非常贴近 Logo
+        const SizedBox(height: 15),
+
+        // ========================================
+        // 标题 "Anime Chat": Georgia 字体 + 多层阴影 + 强发光
+        // ========================================
+        // 字体: Georgia (Windows / macOS 自带衬线, 比 Times New Roman 笔画更粗,
+        //       适合做展示型标题, 在彩色头图上读起来更稳重)
+        // 想换字体: 改 fontFamily, 备选 'serif' / 'Cambria' / 'Constantia'
+        Text(
+          'Anime Chat',
+          style: TextStyle(
+            fontSize: 24, // 标题大小 - 可调
+            fontWeight: FontWeight.w600,
+            letterSpacing: 1.4,
+            fontFamily: 'Georgia',
+            color: kTitleColor, // 白色文字
+            shadows: [
+              // 大白色光晕 (最外发光)
+              Shadow(
+                color: Colors.white.withOpacity(0.7),
+                offset: const Offset(0, 0),
+                blurRadius: 18,
+              ),
+              // 中白色光晕 (强化发光)
+              Shadow(
+                color: Colors.white.withOpacity(0.85),
+                offset: const Offset(0, 0),
+                blurRadius: 8,
+              ),
+              // 深蓝阴影 (定义形状)
+              Shadow(
+                color: kTitleShadowColor.withOpacity(0.6),
+                offset: const Offset(0, 2),
+                blurRadius: 4,
+              ),
+              // 深蓝硬阴影 (强化字形)
+              Shadow(
+                color: kTitleShadowColor.withOpacity(0.4),
+                offset: const Offset(0, 1),
+                blurRadius: 1,
+              ),
+            ],
           ),
         ),
       ],
@@ -760,27 +927,26 @@ class _CharacterSelectionPageState extends State<CharacterSelectionPage> {
   // ----------------------------------------
   // 第二层波浪容器 + 内部的 Tab 和文件夹
   // ----------------------------------------
+  // 这个容器现在直接贴齐屏幕左右下三边 (外层 Column 没有水平 padding),
+  // 顶部是波浪线和头图无缝衔接 (波浪绘制时会向上扩展, 覆盖头图底部一小段)。
+  // 容器内部给 Tab 和文件夹留水平 padding。
+  //
+  // 注: 磨砂玻璃带 _FrostedGlassBand 和顶部独立波浪线 _TopGlassLinePainter
+  //     是放在外层 build() 的 Stack 里 (波浪容器之上的层), 这样它们能用
+  //     BackdropFilter 真正模糊后方的头图。
   Widget _buildWaveContainer() {
     return CustomPaint(
-      // 用 CustomPainter 绘制"顶部波浪 + 下方矩形"的白色背景 + 柔和投影
       painter: _WaveContainerPainter(),
       child: Padding(
-        // padding-top 50: 给顶部波浪 + Tab 留出视觉空间
-        //                 Tab 底部距波浪最低点约 30-38px
-        // 数值越大文件夹整体越往下压, 文件夹内部高度越小
-        // 要让 3 张卡片刚好塞满, 建议保持在 48-54 之间
-        padding: const EdgeInsets.fromLTRB(18, 50, 18, 18),
+        // 外层 padding:
+        //   left/right 25: 给 Tab 和文件夹两侧留出空间
+        //   top 40:        给顶部波浪线 + Tab 留出视觉空间
+        //   bottom 28:     文件夹底部和屏幕底之间留缝隙
+        padding: const EdgeInsets.fromLTRB(25, 40, 25, 28),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // ========================================
-            // 第三层: 文件夹 Tab 栏
-            // ========================================
             _buildFolderTabs(),
-
-            // ========================================
-            // 第三层: 文件夹本体 + 第四层: 角色卡片列表
-            // ========================================
             Expanded(
               child: _buildFolderBody(),
             ),
@@ -796,7 +962,9 @@ class _CharacterSelectionPageState extends State<CharacterSelectionPage> {
   // 用 Row + Stack 实现每个 Tab 两侧的向内凹陷圆弧 + 未选中和选中的高度差
   Widget _buildFolderTabs() {
     return SizedBox(
-      height: 38, // Tab 栏总高度 (选中态高度) - 可调
+      // Tab 栏总高度 = 选中 Tab 高度 (40, 含向下重叠文件夹的 2px) - 可调
+      // 必须 >= _FolderTab 里 active 时的 height, 否则 Tab 会被裁
+      height: 40,
       child: Padding(
         // 左侧 padding 28: 让最左边 Tab 的左侧凹弧有足够空间, 不超出容器
         padding: const EdgeInsets.only(left: 28, right: 4),
@@ -843,32 +1011,44 @@ class _CharacterSelectionPageState extends State<CharacterSelectionPage> {
     return Container(
       decoration: BoxDecoration(
         // ----------------------------------------
-        // 文件夹本体: 冰蓝渐变 (左上 -> 右下, 核心改动)
+        // 文件夹本体: 蓝 -> 粉 双色渐变 (左上 -> 右下)
         // ----------------------------------------
-        // 之前是单色半透明的淡粉, 玻璃卡片透过后只能看到一片粉色,
-        // 玻璃感几乎出不来。改成左上 -> 右下的冰蓝渐变后,
-        // 卡片在不同位置背后看到的颜色各不相同, 加上背景光斑透过来的色彩,
-        // 玻璃折射的丰富感才真正成立。
-        //
-        // 颜色定义在文件顶部的 kFolderGradStart / kFolderGradEnd, 改色调那里改。
-        // 透明度可调 (下面两个 withOpacity 的值): 越小越透 (背景越显眼,
-        // 玻璃感越强但文件夹边界会糊), 越大越实 (文件夹形状清晰但玻璃感减弱)。
-        // 推荐范围 0.35~0.55, 当前 0.45 是平衡点。
         gradient: LinearGradient(
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
           colors: [
-            kFolderGradStart.withOpacity(0.45), // 左上端 (= 选中 Tab 同色, 视觉连贯)
-            kFolderGradEnd.withOpacity(0.45), // 右下端 (接近白, 整体提亮)
+            kFolderGradStart, // 左上 蓝 (实色, 让卡片背后色彩鲜亮)
+            kFolderGradEnd, // 右下 粉 (实色)
           ],
         ),
         borderRadius: BorderRadius.circular(16),
-        // 极淡的白色描边, 让文件夹有"玻璃片"的轮廓感
-        // 不要太亮, 否则会和角色卡片的描边竞争视觉
+        // ----------------------------------------
+        // 文件夹整圈彩色描边 (1.5px)
+        // ----------------------------------------
+        // 仿聊天气泡的边线: 一条明显的彩色线 + 极浅的同色发光
+        // 用蓝色 (kEdgeGlowStart) 是因为文件夹左上端是蓝色, 整圈的 border 用单色,
+        // 单色描边比渐变描边更"实在"(像气泡边)。
+        //
+        // 关键决策: 描边整圈都画, 但 Tab 选中态的底部会向下重叠文件夹顶部 2px,
+        //          实现 "Tab 和文件夹之间无分界线" 的视觉。
+        //          (具体重叠机制看 _FolderTab 的 height + bottom margin)
         border: Border.all(
-          color: Colors.white.withOpacity(0.4),
-          width: 1,
+          color: kEdgeGlowStart,
+          width: 1.5,
         ),
+        // ----------------------------------------
+        // 文件夹同色微弱发光 (blur 6, alpha 0.4)
+        // ----------------------------------------
+        // 仿聊天气泡的"线 + 微发光": stroke 是清晰的实色线,
+        // 外面有一圈很弱的同色光晕, 发光不会散得很大, 紧贴边线
+        boxShadow: [
+          BoxShadow(
+            color: kEdgeGlowStart.withOpacity(0.4),
+            blurRadius: 6,
+            spreadRadius: 0,
+            offset: const Offset(0, 0),
+          ),
+        ],
       ),
       // 不要 clipBehavior! 否则阴影会被裁成大矩形
       child: chars.isEmpty
@@ -965,14 +1145,15 @@ class _CharacterSelectionPageState extends State<CharacterSelectionPage> {
           Icon(
             Icons.person_outline,
             size: 48,
-            color: kFolderAccent.withOpacity(0.3),
+            // 用半透明白, 在彩色文件夹底上柔和但可见
+            color: Colors.white.withOpacity(0.5),
           ),
           const SizedBox(height: 8),
           Text(
             '$series 暂无角色',
             style: TextStyle(
               fontSize: 13,
-              color: kFolderAccent.withOpacity(0.6),
+              color: Colors.white.withOpacity(0.85),
             ),
           ),
         ],
@@ -1026,7 +1207,10 @@ class _WaveContainerPainter extends CustomPainter {
     const double waveAmp = 14;
 
     // 左右底部的圆角半径
-    const double bottomRadius = 22;
+    // 现在波浪容器贴齐屏幕左右下三边, 底部不需要圆角 (圆角会让屏幕底部出现
+    // 留白小缝, 视觉上不连贯)。改为 0 = 直角。
+    // 想让左右下保留圆角: 改回 22
+    const double bottomRadius = 0;
 
     // 起点: 左上 (x=0, y=waveBaseY)
     path.moveTo(0, waveBaseY);
@@ -1068,47 +1252,63 @@ class _WaveContainerPainter extends CustomPainter {
     path.lineTo(0, waveBaseY);
     path.close();
 
-    // 先画两层柔和的投影, 营造波浪上方的层次感
-    // 第一层: 大而散的深投影 (远距离, 柔光)
-    // 第二层: 近距离细投影 (贴近波浪边缘, 定义形状)
-    // 这两层叠加, 让波浪"浮在"渐变背景之上
-
-    // 大柔影: sigma 20 是 blur 半径, alpha 80 让阴影颜色明显更深
-    // 颜色用 kWaveShadowTint (冷调海蓝), 在冰蓝背景上不会显出暖紫的脏边
-    // 改投影深度: 调 alpha (默认 80, 范围 50~120)
+    // ========================================
+    // 第 0 层 - 远投影 (大半径柔光, 营造"漂浮感")
+    // ========================================
+    // 想让投影更深: 增大 alpha (90-130)
+    // 想让投影更散: 增大 sigma (24-32)
     final bigShadowPaint = Paint()
-      ..color = const Color.fromARGB(255, 255, 255, 255).withAlpha(80)
-      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 20);
-    // 向下偏移 14, 远阴影离波浪主体更远, 营造"飘起来"的感觉
+      ..color = kWaveShadowTint.withAlpha(90)
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 24);
     canvas.save();
-    canvas.translate(0, 14);
+    canvas.translate(0, 16);
     canvas.drawPath(path, bigShadowPaint);
     canvas.restore();
 
-    // 小近影: sigma 8, 贴紧波浪边缘, 加强轮廓
-    // 同样用冷调海蓝, alpha 默认 60 (近影比远影淡一点, 不抢戏)
+    // ========================================
+    // 第 0.5 层 - 近投影 (贴近波浪边缘, 加强轮廓)
+    // ========================================
     final closeShadowPaint = Paint()
-      ..color = const Color.fromARGB(255, 255, 255, 255).withAlpha(60)
-      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 8);
+      ..color = kWaveShadowTint.withAlpha(70)
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 10);
     canvas.save();
-    canvas.translate(0, 4);
+    canvas.translate(0, 6);
     canvas.drawPath(path, closeShadowPaint);
     canvas.restore();
 
-    // 再画白色主体 (半透明, 让背景光斑透过来)
-    // alpha 0.6: 比之前的 0.7 更透一点, 让冰蓝背景和光斑透得更明显,
-    // 强化"清透感"以匹配聊天页风格。
-    // 可调范围 0.5~0.85, 越小容器越透 (玻璃卡片折射的色彩越丰富,
-    // 但波浪形状会变模糊), 越大越实
-    final fillPaint = Paint()..color = Colors.white.withOpacity(0.6);
+    // ========================================
+    // 第 1 层 - 容器主体 (顶部 alpha 渐变 + 下方纯白)
+    // ========================================
+    // 容器主体的 fill 用 ui.Gradient.linear 做垂直 alpha 渐变:
+    //   - 顶部 (y = waveBaseY - waveAmp*1.5 ≈ -7, 波浪起伏最高点): alpha 0 (完全透明)
+    //   - y = 30 (= 屏幕 y=175 = 头图下方略远处): alpha 0.96 (完全实白)
+    //   - y > 30 以下: 保持 alpha 0.96
+    //
+    // 这样波浪容器顶部能透出后方的内容 (头图 + 磨砂玻璃带), 视觉上头图色彩
+    // 慢慢过渡到实白容器, 不再是 "突兀的白色硬边"。
+    //
+    // 想让透明区域更大 (容器顶部更透): 增大 fadeBottomY (默认 30, 范围 25~50)
+    // 想让顶部完全透明区扩展更下: 把 alpha 0 的 stop 从 0.0 改成 0.1~0.2
+    // 想让容器整体更透 (即使下方也不太实): 减小 0.96 → 0.85~0.92
+    const double fadeBottomY = 50; // 渐变结束 y 位置
+    const double fadeTopY = -7; // 渐变起始 y 位置 (波浪起伏最高点)
+    final fillPaint = Paint()
+      ..shader = ui.Gradient.linear(
+        Offset(w / 2, fadeTopY),
+        Offset(w / 2, fadeBottomY),
+        [
+          Colors.white.withOpacity(0.45), // 顶部透明
+          Colors.white.withOpacity(0.96), // 底部实白
+        ],
+        [0.0, 1.0],
+      );
     canvas.drawPath(path, fillPaint);
 
-    // 最后在波浪顶边画一条淡淡的高光描边, 让波浪更立体
-    final strokePaint = Paint()
-      ..color = Colors.white.withOpacity(0.9)
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1;
-    // 只描绘顶部波浪那段, 不描绘底部圆角矩形
+    // ========================================
+    // 第 3 层 - 容器顶部白色高光描边 (= 主波浪线本身)
+    // ========================================
+    // 沿主波浪顶边画一条白色描边, alpha 高一点 (0.95) 让线条清晰可见,
+    // 这条线就是"容器顶部的白色高光", 紧贴第 4 层突出玻璃的底部。
     final topWavePath = Path()..moveTo(0, waveBaseY);
     topWavePath.cubicTo(
       w * 0.1,
@@ -1134,7 +1334,193 @@ class _WaveContainerPainter extends CustomPainter {
       w,
       waveBaseY - waveAmp * 0.5,
     );
-    canvas.drawPath(topWavePath, strokePaint);
+    final topStrokePaint = Paint()
+      ..color = Colors.white.withOpacity(0.95)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2.5;
+    canvas.drawPath(topWavePath, topStrokePaint);
+
+    // 注: 之前 painter 里实现的"第 4 层 突出磨砂玻璃带"和"第 5 层 顶部独立波浪线"
+    // 已经被移出 painter, 改在 _buildWaveContainer 的 Stack 里用
+    // ClipPath + BackdropFilter 实现真正的磨砂玻璃效果 (高斯模糊背景),
+    // 而不是这里 painter 能做到的"半透明纯白填充"。
+    // 见 _FrostedGlassBand 和 _TopGlassLinePainter 类的实现。
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+// ========================================
+// 真磨砂玻璃带 widget (用 ClipPath + BackdropFilter 实现高斯模糊)
+// ========================================
+// 不同于 painter 里画的"半透明白色填充", 这个组件用 BackdropFilter 真的对
+// 它后方的内容(头图)进行高斯模糊, 然后叠加一层半透明白色蒙层,
+// 实现真正的毛玻璃效果。
+//
+// 关键尺寸约定 (widget 内部坐标系, y=0 是 widget 顶部):
+//   - widget 总高 _kBandHeight = 50 (足够容纳上下波浪起伏 + 16px 玻璃区)
+//   - 上波浪线中线 _kBandTopY = 18 (上下起伏 ±14, 范围 4~32)
+//   - 下波浪线中线 _kBandBottomY = 34 (上下起伏 ±14, 范围 20~48)
+//   - 磨砂玻璃区 = 上波浪 (~y18) 到下波浪 (~y34), 厚度只有 16px
+//
+// 关键改动 (vs 之前): 玻璃带从 40px 厚减到 16px 薄, 这样它视觉上只是
+// "头图和实白容器之间的薄过渡层", 不会被误认为是另一个独立的容器层。
+//
+// 屏幕坐标对齐:
+//   - widget 的 Positioned.top 让 "下波浪线 (y=34)" 落在屏幕的
+//     "波浪容器主波浪线" 位置 (= kHeroImageHeight - kWaveOverlap + 14)
+//   - 即 Positioned.top = kHeroImageHeight - kWaveOverlap + 14 - 34
+//                       = kHeroImageHeight - kWaveOverlap - 20
+const double _kBandHeight = 50;
+const double _kBandTopY = 18; // 上波浪中线
+const double _kBandBottomY = 34; // 下波浪中线 (= 屏幕主波浪线位置)
+const double _kBandWaveAmp = 14; // 波浪起伏幅度
+
+class _FrostedGlassBand extends StatelessWidget {
+  const _FrostedGlassBand();
+
+  @override
+  Widget build(BuildContext context) {
+    // 简化版: 普通半透明白色条带 (不再用 BackdropFilter 高斯模糊背景)
+    //
+    // 之前用 ClipPath + BackdropFilter 实现 "真磨砂玻璃" 效果, 但渲染开销大,
+    // 视觉上和直接画一层半透明白色差别不明显, 性价比低。改回用 ClipPath +
+    // 半透明白 Container 的简单方案 — 形状不变, 只是不再做高斯模糊。
+    //
+    // alpha 控制条带白浊度:
+    //   - 0.20-0.30: 中等半透明, 能透出后方头图色彩 (推荐 0.25)
+    //   - 0.40-0.55: 偏白实, 接近实白容器
+    //   - 0.10-0.15: 极透, 几乎看不到条带
+    return ClipPath(
+      clipper: _FrostedGlassClipper(),
+      child: Container(
+        color: Colors.white.withOpacity(0.25),
+      ),
+    );
+  }
+}
+
+// 磨砂玻璃带的形状裁剪器: 上下两条波浪线之间的"带状"区域
+class _FrostedGlassClipper extends CustomClipper<Path> {
+  @override
+  Path getClip(Size size) {
+    final w = size.width;
+    final path = Path();
+
+    // 上波浪 (玻璃带的顶边)
+    path.moveTo(0, _kBandTopY);
+    path.cubicTo(
+      w * 0.1,
+      _kBandTopY - _kBandWaveAmp,
+      w * 0.2,
+      _kBandTopY + _kBandWaveAmp,
+      w * 0.33,
+      _kBandTopY,
+    );
+    path.cubicTo(
+      w * 0.45,
+      _kBandTopY - _kBandWaveAmp,
+      w * 0.55,
+      _kBandTopY + _kBandWaveAmp,
+      w * 0.67,
+      _kBandTopY - _kBandWaveAmp * 0.5,
+    );
+    path.cubicTo(
+      w * 0.8,
+      _kBandTopY - _kBandWaveAmp * 1.5,
+      w * 0.9,
+      _kBandTopY + _kBandWaveAmp * 0.8,
+      w,
+      _kBandTopY - _kBandWaveAmp * 0.5,
+    );
+
+    // 下波浪 (玻璃带的底边, 从右向左反向画闭合)
+    // 这条线在屏幕坐标系上 = 主波浪线 (容器顶白描边位置)
+    path.lineTo(w, _kBandBottomY - _kBandWaveAmp * 0.5);
+    path.cubicTo(
+      w * 0.9,
+      _kBandBottomY + _kBandWaveAmp * 0.8,
+      w * 0.8,
+      _kBandBottomY - _kBandWaveAmp * 1.5,
+      w * 0.67,
+      _kBandBottomY - _kBandWaveAmp * 0.5,
+    );
+    path.cubicTo(
+      w * 0.55,
+      _kBandBottomY + _kBandWaveAmp,
+      w * 0.45,
+      _kBandBottomY - _kBandWaveAmp,
+      w * 0.33,
+      _kBandBottomY,
+    );
+    path.cubicTo(
+      w * 0.2,
+      _kBandBottomY + _kBandWaveAmp,
+      w * 0.1,
+      _kBandBottomY - _kBandWaveAmp,
+      0,
+      _kBandBottomY,
+    );
+    path.close();
+    return path;
+  }
+
+  @override
+  bool shouldReclip(covariant CustomClipper<Path> oldClipper) => false;
+}
+
+// ========================================
+// 玻璃带上方的独立装饰波浪线 painter
+// ========================================
+// 在磨砂玻璃带顶部上方画一条更细的白色波浪描边, 模拟"两层叠加的磨砂玻璃"
+// 效果。
+//
+// 这个 painter 的 widget 大小 = _FrostedGlassBand 大小 (50px), 但只在
+// 上波浪上方 ~4px 处画线, 其他位置透明
+class _TopGlassLinePainter extends CustomPainter {
+  const _TopGlassLinePainter();
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final w = size.width;
+    // 这条线在 widget 内部 y = 上波浪中线 - 4 (上波浪上方 4px)
+    // 改小这个 4 让独立线更靠近上波浪 (但要 >= _kBandWaveAmp 才不会被 widget 顶部裁掉)
+    // 改大让独立线更远离上波浪 (太大会被裁)
+    const double lineY = _kBandTopY - 6;
+
+    final path = Path()..moveTo(0, lineY);
+    path.cubicTo(
+      w * 0.1,
+      lineY - _kBandWaveAmp,
+      w * 0.2,
+      lineY + _kBandWaveAmp,
+      w * 0.33,
+      lineY,
+    );
+    path.cubicTo(
+      w * 0.45,
+      lineY - _kBandWaveAmp,
+      w * 0.55,
+      lineY + _kBandWaveAmp,
+      w * 0.67,
+      lineY - _kBandWaveAmp * 0.5,
+    );
+    path.cubicTo(
+      w * 0.8,
+      lineY - _kBandWaveAmp * 1.5,
+      w * 0.9,
+      lineY + _kBandWaveAmp * 0.8,
+      w,
+      lineY - _kBandWaveAmp * 0.5,
+    );
+
+    // 想让独立线更明显: 增大 alpha (默认 0.9, 范围 0.6~1.0)
+    final paint = Paint()
+      ..color = Colors.white.withOpacity(0.9)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.0;
+    canvas.drawPath(path, paint);
   }
 
   @override
@@ -1145,10 +1531,13 @@ class _WaveContainerPainter extends CustomPainter {
 // 文件夹 Tab 组件
 // ========================================
 // 一个 Tab 分三层:
-// 1. 主体: 淡粉色圆角矩形 (上半圆角, 底边和 folder-body 无缝衔接)
-// 2. 左侧向内凹陷圆弧 (伪元素, 用 CustomPainter 画)
-// 3. 右侧向内凹陷圆弧
+// 1. 主体: 蓝色实色 (= kFolderColor = kFolderGradStart) 圆角矩形
+//    (上半圆角, 底边和 folder-body 渐变左上端无缝衔接,
+//    实现"Tab 是从文件夹拉出的一角"的视觉)
+// 2. 左侧向内凹陷圆弧 (伪元素, 用 CustomPainter 画, 同色)
+// 3. 右侧向内凹陷圆弧 (同色)
 // Tab 未选中时用更低的透明度 + 更矮的高度, 选中时变高变清晰
+// 选中态文字用白色 (kFolderAccent), 未选中用雾蓝灰 (kFolderTabDim)
 class _FolderTab extends StatelessWidget {
   final String label;
   final bool active;
@@ -1162,34 +1551,100 @@ class _FolderTab extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // 未选中的 Tab 高度更矮, 透明度更低
-    final double height = active ? 38 : 32;
-    final double opacity = active ? 1.0 : 0.55;
-    final Color textColor = active ? kFolderAccent : kFolderTabDim;
+    // 未选中的 Tab 高度更矮, 底色更透 (但文字保持清晰)
+    // 选中态额外多 2px (向下重叠文件夹顶部, 隐藏分界线)
+    // ----------------------------------------
+    // 关键: 选中态高度从 38 加到 40 (+2 是用来向下"压住"文件夹顶部 2px,
+    //       让 Tab 底边和文件夹顶边的描边互相覆盖, 看不到 "两条描边并排"
+    //       的分界线, 实现 "Tab 和文件夹是一体" 的视觉。
+    // 未选中态保持 32 不变 (没必要重叠, 它本来就不强调"和文件夹一体")。
+    final double height = active ? 40 : 32;
+    // ----------------------------------------
+    // Tab 底色 (半透明白控制透明度, 文字本身保持清晰)
+    // ----------------------------------------
+    final Color tabFillColor =
+        active ? kFolderColor : kFolderColor.withOpacity(0.55);
+    // 文字色: 选中用白色 (= kFolderAccent), 未选中用深色保证可读性
+    final Color textColor = active ? kFolderAccent : const Color(0xFF3F6A99);
     final FontWeight fontWeight = active ? FontWeight.w600 : FontWeight.w500;
 
     return GestureDetector(
       onTap: onTap,
       behavior: HitTestBehavior.opaque,
-      child: Opacity(
-        opacity: opacity,
-        // 用 Stack 把 Tab 主体 + 两侧凹弧叠起来
-        child: Stack(
-          clipBehavior: Clip.none,
-          alignment: Alignment.bottomCenter,
-          children: [
-            // Tab 主体
-            Container(
-              height: height,
-              padding: const EdgeInsets.symmetric(horizontal: 22),
-              decoration: const BoxDecoration(
-                color: kFolderColor,
-                borderRadius: BorderRadius.only(
-                  topLeft: Radius.circular(14),
-                  topRight: Radius.circular(14),
+      // 不再用 Opacity 包裹! 直接画 Stack, 通过 tabFillColor 控制底色透明度
+      child: Stack(
+        clipBehavior: Clip.none,
+        alignment: Alignment.bottomCenter,
+        children: [
+          // ----------------------------------------
+          // 同色微弱发光 (选中态才画, 仿聊天气泡的"线 + 微发光")
+          // ----------------------------------------
+          // 在 Tab 主体下方放一个发光底层, 让 Tab 边缘有同色光晕,
+          // 视觉上和文件夹的边线发光是同一个连贯的光环
+          if (active)
+            Positioned(
+              left: -2,
+              right: -2,
+              bottom: -2,
+              top: -2,
+              child: IgnorePointer(
+                child: Container(
+                  decoration: BoxDecoration(
+                    borderRadius: const BorderRadius.only(
+                      topLeft: Radius.circular(16),
+                      topRight: Radius.circular(16),
+                    ),
+                    boxShadow: [
+                      BoxShadow(
+                        color: kEdgeGlowStart.withOpacity(0.4),
+                        blurRadius: 6,
+                        spreadRadius: 0,
+                        offset: const Offset(0, 0),
+                      ),
+                    ],
+                  ),
                 ),
               ),
-              alignment: Alignment.center,
+            ),
+          // Tab 主体
+          Container(
+            height: height,
+            padding: const EdgeInsets.symmetric(horizontal: 22),
+            decoration: BoxDecoration(
+              color: tabFillColor,
+              borderRadius: const BorderRadius.only(
+                topLeft: Radius.circular(14),
+                topRight: Radius.circular(14),
+              ),
+              // ----------------------------------------
+              // Tab 描边: 选中态画蓝色实在描边 (顶+左+右, 底不画)
+              // ----------------------------------------
+              // 关键: 用 Border 分别指定四边, 底边 BorderSide.none 让 Tab 底
+              //      和文件夹顶边视觉无缝衔接 (因为同色填充会自然连贯, 中间
+              //      没有线把它们隔开)。
+              // 未选中态不画描边, 只是个半透明色块, 视觉低调。
+              border: active
+                  ? const Border(
+                      top: BorderSide(
+                        color: kEdgeGlowStart,
+                        width: 1.5,
+                      ),
+                      left: BorderSide(
+                        color: kEdgeGlowStart,
+                        width: 1.5,
+                      ),
+                      right: BorderSide(
+                        color: kEdgeGlowStart,
+                        width: 1.5,
+                      ),
+                    )
+                  : null,
+            ),
+            alignment: Alignment.center,
+            child: Padding(
+              // 选中态加 2px 底部 padding 抵消 height +2 的视觉偏移,
+              // 让文字仍然在 Tab 视觉中心
+              padding: EdgeInsets.only(bottom: active ? 2 : 0),
               child: Text(
                 label,
                 style: TextStyle(
@@ -1199,26 +1654,27 @@ class _FolderTab extends StatelessWidget {
                 ),
               ),
             ),
-            // 左侧凹弧: 定位在 Tab 左外侧, 用 CustomPainter 画一段"向内凹陷的圆弧"
-            Positioned(
-              left: -14,
-              bottom: 0,
-              child: CustomPaint(
-                size: const Size(14, 14),
-                painter: _TabCornerPainter(isLeft: true, color: kFolderColor),
-              ),
+          ),
+          // 左侧凹弧: 定位在 Tab 左外侧, 用 CustomPainter 画一段"向内凹陷的圆弧"
+          // 颜色用 tabFillColor (跟 Tab 主体同色同透明度), 保证未选中时凹弧也透
+          Positioned(
+            left: -14,
+            bottom: 0,
+            child: CustomPaint(
+              size: const Size(14, 14),
+              painter: _TabCornerPainter(isLeft: true, color: tabFillColor),
             ),
-            // 右侧凹弧
-            Positioned(
-              right: -14,
-              bottom: 0,
-              child: CustomPaint(
-                size: const Size(14, 14),
-                painter: _TabCornerPainter(isLeft: false, color: kFolderColor),
-              ),
+          ),
+          // 右侧凹弧
+          Positioned(
+            right: -14,
+            bottom: 0,
+            child: CustomPaint(
+              size: const Size(14, 14),
+              painter: _TabCornerPainter(isLeft: false, color: tabFillColor),
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
@@ -1266,14 +1722,18 @@ class _TabCornerPainter extends CustomPainter {
 }
 
 // ========================================
-// 角色卡片组件 (磨砂陶瓷浮雕效果 + 点击流光动效)
+// 角色卡片组件 (玻璃质感 + 三段式点击动效)
 // ========================================
 // 视觉要点:
-// 1. 背景: 从左上白到右下淡米的 135° 线性渐变
-// 2. 外阴影: 两层柔和投影 (悬浮感)
-// 3. 内光: 顶部细高光线 + 底部暗影 (厚度感)
-// 4. 点击动效: 一束米色流光从左到右扫过 (AnimationController 驱动)
-// 5. 按下时卡片微微下沉, 释放后弹起
+// 1. 玻璃质感: BackdropFilter 模糊背景 + 半透明白 + 白色细描边
+// 2. 外阴影: 极淡, 保持轻盈
+// 3. 点击动效 (三段同时触发, 1500ms 总时长):
+//    a. 缩放 (C): 立即缩到 0.97 然后弹回 (松手时)
+//    b. 边缘发光波纹 (F): 角色色光环从卡片边缘扩散 (1100ms)
+//       + 卡片白描边短暂变亮配合
+//    c. 倾斜扫光 (A): 一束渐变白光带从左下扫到右上 (1500ms)
+// 4. 跳转策略: 点击立即跳转聊天页, 动画在后台播放
+//    (用户从聊天页返回时, 看到的是已经播完的卡片, 体感更顺畅)
 class _CharacterCard extends StatefulWidget {
   final Character character;
   final _ChatPreview? preview;
@@ -1291,49 +1751,96 @@ class _CharacterCard extends StatefulWidget {
 
 class _CharacterCardState extends State<_CharacterCard>
     with SingleTickerProviderStateMixin {
-  // 流光动画: 0.0 时光在卡片左侧外, 1.0 时光扫到右侧外
-  late final AnimationController _sweepController;
-  late final Animation<double> _sweepAnimation;
+  // ----------------------------------------
+  // 单一 AnimationController 驱动三段动画
+  // ----------------------------------------
+  // 用 Interval 把不同子动画切到不同时间段, 这样只需要一个 controller,
+  // 不需要管理多个 controller 的同步。
+  // 总时长 1500ms, 想加快/减慢整体动效就改这一个常量。
+  late final AnimationController _activateController;
 
-  // hover 状态 (鼠标悬停时卡片上浮)
+  // 边缘发光波纹: 0% ~ 73% 完成 (1100ms / 1500ms), 后段渐隐
+  late final Animation<double> _glowAnimation;
+  // 倾斜扫光: 0% ~ 100% 完成 (1500ms 全程)
+  late final Animation<double> _shimmerAnimation;
+  // 卡片白描边变亮: 跟边缘发光同步 (0% ~ 73%)
+  late final Animation<double> _borderFlashAnimation;
+
+  // hover 状态 (鼠标悬停时卡片轻微上浮)
   bool _hovering = false;
-
-  // 按下状态 (轻微下沉反馈)
+  // 按下状态 (轻微缩放反馈)
   bool _pressed = false;
 
   @override
   void initState() {
     super.initState();
-    _sweepController = AnimationController(
+    _activateController = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 550),
-      // 流光动画时长 - 可调, 和 ease-out 曲线配合效果最佳
+      // 总动画时长 - 想整体加快/减慢就改这里
+      // - 1500ms: 当前值, 三段动效都看得清
+      // - 1200ms: 节奏更快一点
+      // - 1800ms: 更舒缓
+      duration: const Duration(milliseconds: 1500),
     );
-    _sweepAnimation = CurvedAnimation(
-      parent: _sweepController,
-      curve: Curves.easeOut,
+
+    // 边缘发光: 在 0~73% 时段内走完一个 0->1 的曲线 (实际持续 1100ms)
+    _glowAnimation = CurvedAnimation(
+      parent: _activateController,
+      curve: const Interval(0.0, 0.73, curve: Curves.easeOutCubic),
+    );
+
+    // 扫光: 全程 0~100% (在 1500ms 内走完)
+    // 用 easeInOutCubic 让光带在中段 (卡片可见区) 速度更慢, 更显眼
+    _shimmerAnimation = CurvedAnimation(
+      parent: _activateController,
+      curve: Curves.easeInOutCubic,
+    );
+
+    // 描边变亮: 跟发光波纹同步, 但用更柔和的曲线
+    _borderFlashAnimation = CurvedAnimation(
+      parent: _activateController,
+      curve: const Interval(0.0, 0.73, curve: Curves.easeOut),
     );
   }
 
   @override
   void dispose() {
-    _sweepController.dispose();
+    _activateController.dispose();
     super.dispose();
   }
 
-  void _handleTap() async {
-    // 先完整播放流光动效, 动效结束后再 push 新页面
-    // 这样用户看到的体验是"点击 -> 流光完整扫过 -> 进入聊天页"
-    // 不再用固定延迟 + forward, 而是直接 await forward(), 等动画走完
-    await _sweepController.forward(from: 0.0);
-    if (!mounted) return;
-    widget.onTap();
-    // 从聊天页返回后, 重置流光动画到初始状态
-    _sweepController.value = 0.0;
+  void _handleTap() {
+    // ----------------------------------------
+    // 跳转策略: 让动画播 ~800ms 用户充分看到扫光走过卡片再跳转
+    // ----------------------------------------
+    // Flutter 的 Navigator.push 会立刻把当前页面推到后台, 后台 widget 不再
+    // layout/paint, 用户看不到动画。所以必须先延迟一段, 让动画在前台播放。
+    //
+    // 时间设计 (总时长 1500ms):
+    //   - 800ms 时扫光进度 ≈ 53%, 光带正在卡片中心位置, 视觉效果最强
+    //   - 边缘发光波纹 1100ms (整体 0~73%), 800ms 时已过中段 (= 73%),
+    //     光环达到最大扩散半径
+    //
+    // 跳转时强制 stop + reset controller, 防止后台 tick 导致返回时残留帧
+    //
+    // 想让用户看到更长动效再跳转: 增大 800 (但不要超过 1300, 否则跳转太慢)
+    // 想点击立即跳转 (不要前置动画): 改成 0
+    _activateController.forward(from: 0.0);
+
+    Future.delayed(const Duration(milliseconds: 800), () {
+      if (!mounted) return;
+      // 跳转前停 controller 并复位, 防止后台 tick 导致返回主页时有残帧
+      _activateController.stop();
+      _activateController.value = 0.0;
+      widget.onTap();
+    });
   }
 
   @override
   Widget build(BuildContext context) {
+    // 角色色: 用于边缘发光波纹的颜色
+    final characterColor = Color(int.parse('0xFF${widget.character.color}'));
+
     return MouseRegion(
       onEnter: (_) => setState(() => _hovering = true),
       onExit: (_) => setState(() => _hovering = false),
@@ -1343,100 +1850,196 @@ class _CharacterCardState extends State<_CharacterCard>
         onTapUp: (_) => setState(() => _pressed = false),
         onTapCancel: () => setState(() => _pressed = false),
         onTap: _handleTap,
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 220),
-          curve: Curves.easeOut,
-          // hover 时向上浮 2px, 按下时向下沉 1px (只位移, 不改阴影)
-          transform: Matrix4.translationValues(
-            0,
-            _pressed ? 1 : (_hovering ? -2 : 0),
-            0,
-          ),
-          // ========================================
-          // 玻璃卡片核心: ClipRRect + BackdropFilter + 半透明白
-          // ========================================
-          // 这个结构对标 character_settings_page.dart 里的 _buildCard 写法:
-          //   ClipRRect -> BackdropFilter -> Container(半透明白 + 白描边 + 淡阴影)
-          // 没有 BackdropFilter 就没有真正的"模糊背景"效果, 只是一张半透明的贴纸。
-          //
-          // 这里额外包了一层 DecoratedBox 提供极淡的外阴影 (保持轻盈),
-          // 内部 ClipRRect 负责裁剪圆角, BackdropFilter 对卡片背后的内容做高斯模糊,
-          // 最内层的 Container 用半透明白 + 白描边画出玻璃本体。
-          child: DecoratedBox(
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(18),
-              // 极淡外阴影: 和设置页一致 (black alpha 0.05, blur 10, offset 4)
-              // 这里 hover 时略微加深一点点, 不是陶瓷那种大阴影
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withOpacity(_hovering ? 0.08 : 0.05),
-                  blurRadius: _hovering ? 14 : 10,
-                  offset: const Offset(0, 4),
+        child: AnimatedBuilder(
+          animation: _activateController,
+          builder: (context, child) {
+            return AnimatedScale(
+              // ========================================
+              // 第 C 段: 按下缩放反馈
+              // ========================================
+              // _pressed 时立即缩到 0.97, 释放回 1.0
+              // duration 短一点 (120ms) 让"按下感"即时
+              scale: _pressed ? 0.97 : 1.0,
+              duration: const Duration(milliseconds: 120),
+              curve: Curves.easeOut,
+              child: AnimatedContainer(
+                // hover 时向上浮 2px
+                duration: const Duration(milliseconds: 220),
+                curve: Curves.easeOut,
+                transform: Matrix4.translationValues(
+                  0,
+                  _hovering ? -2 : 0,
+                  0,
                 ),
-              ],
-            ),
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(18),
-              child: BackdropFilter(
-                // 高斯模糊背后的内容 - 这才是"玻璃"的关键
-                // sigmaX/sigmaY = 20 和设置页的 GLASS_BLUR_SIGMA 一致
-                // 想让玻璃更模糊就加大, 想看得更清楚就减小
-                filter: ui.ImageFilter.blur(sigmaX: 20, sigmaY: 20),
-                child: Container(
-                  decoration: BoxDecoration(
-                    // 半透明白: alpha 0.38 和设置页 GLASS_BG_OPACITY 一致
-                    // 数值越小越透 (背景颜色越鲜明), 越大越白实
-                    // 可调范围 0.25~0.55
-                    color: Colors.white.withOpacity(0.38),
-                    borderRadius: BorderRadius.circular(18),
-                    // 玻璃细描边: 白色 alpha 0.5, 宽 1.5px
-                    // 这是玻璃"有边缘"的关键, 去掉就像纯雾一样没形状
-                    border: Border.all(
-                      color: Colors.white.withOpacity(0.5),
-                      width: 1.5,
-                    ),
-                  ),
-                  child: Stack(
-                    children: [
-                      // 卡片主体内容 (头像 + 文字 + 箭头)
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
-                        child: _buildCardContent(),
+                child: _buildCardWithGlow(characterColor),
+              ),
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  // ----------------------------------------
+  // 卡片本体 + 边缘发光波纹层 (Stack 不裁剪, 让发光能溢出边缘)
+  // ----------------------------------------
+  Widget _buildCardWithGlow(Color characterColor) {
+    return Stack(
+      // clipBehavior: Clip.none 让边缘发光波纹能溢出卡片边界
+      // 这是 F 效果的关键 - 没有这个就看不到光晕扩散
+      clipBehavior: Clip.none,
+      children: [
+        // ----------------------------------------
+        // 卡片本体 (DecoratedBox 提供阴影 + ClipRRect 裁剪 BackdropFilter)
+        // ----------------------------------------
+        DecoratedBox(
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(18),
+            // 极淡外阴影: hover 时略加深
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(_hovering ? 0.08 : 0.05),
+                blurRadius: _hovering ? 14 : 10,
+                offset: const Offset(0, 4),
+              ),
+            ],
+          ),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(18),
+            child: BackdropFilter(
+              filter: ui.ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+              child: AnimatedBuilder(
+                animation: _borderFlashAnimation,
+                builder: (context, child) {
+                  // ========================================
+                  // 描边变亮 (跟边缘发光同步)
+                  // ========================================
+                  // 用 _borderFlashAnimation 进度计算 alpha:
+                  //   t=0   (开始): alpha 0.55 (基础)
+                  //   t=0.27 (峰值): alpha 0.95 (最亮)
+                  //   t=0.82 (中段): alpha 0.75
+                  //   t=1.0  (结束): alpha 0.55 (回到基础)
+                  final t = _borderFlashAnimation.value;
+                  final double borderAlpha;
+                  if (t < 0.27) {
+                    // 0 -> 峰值: 0.55 -> 0.95
+                    borderAlpha = 0.55 + (t / 0.27) * 0.40;
+                  } else if (t < 0.82) {
+                    // 峰值 -> 中段: 0.95 -> 0.75
+                    final p = (t - 0.27) / (0.82 - 0.27);
+                    borderAlpha = 0.95 - p * 0.20;
+                  } else {
+                    // 中段 -> 收尾: 0.75 -> 0.55
+                    final p = (t - 0.82) / (1.0 - 0.82);
+                    borderAlpha = 0.75 - p * 0.20;
+                  }
+
+                  return Container(
+                    decoration: BoxDecoration(
+                      // 半透明白: alpha 0.28 让玻璃通透
+                      color: Colors.white.withOpacity(0.28),
+                      borderRadius: BorderRadius.circular(18),
+                      // 描边 alpha 由动画驱动, 静态时是基础 0.55
+                      border: Border.all(
+                        color: Colors.white.withOpacity(borderAlpha),
+                        width: 1.5,
                       ),
-                      // 流光层: 用 AnimatedBuilder 驱动 clipPath 从左到右展开
-                      Positioned.fill(
-                        child: IgnorePointer(
-                          child: AnimatedBuilder(
-                            animation: _sweepAnimation,
-                            builder: (context, child) {
-                              // 只在动画进行时画流光, 省点性能
-                              if (_sweepController.value == 0) {
-                                return const SizedBox.shrink();
-                              }
-                              return ClipRect(
-                                clipper: _SweepClipper(
-                                    progress: _sweepAnimation.value),
-                                // 纯米色填充, 不用渐变
-                                // 之前用 transparent -> 米色 -> transparent 的线性渐变,
-                                // 但 Colors.transparent 在 Flutter 里是 alpha=0 的黑色,
-                                // 插值过程会经过半透明黑, 导致流光两侧出现灰边。
-                                // 现在直接用 kCardSweepColor 实填充, 视觉干净
-                                child: Container(
-                                  color: kCardSweepColor,
-                                ),
-                              );
-                            },
-                          ),
+                    ),
+                    child: child,
+                  );
+                },
+                // child 不依赖动画, 抽出来避免每帧重建
+                child: Stack(
+                  children: [
+                    // 卡片主体内容 (头像 + 文字 + 箭头)
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+                      child: _buildCardContent(),
+                    ),
+
+                    // ----------------------------------------
+                    // 第 A 段: 倾斜扫光层
+                    // ----------------------------------------
+                    Positioned.fill(
+                      child: IgnorePointer(
+                        child: AnimatedBuilder(
+                          animation: _shimmerAnimation,
+                          builder: (context, _) {
+                            final t = _shimmerAnimation.value;
+                            if (t == 0.0) return const SizedBox.shrink();
+                            return CustomPaint(
+                              painter: _DiagonalShimmerPainter(progress: t),
+                            );
+                          },
                         ),
                       ),
-                    ],
-                  ),
+                    ),
+                  ],
                 ),
               ),
             ),
           ),
         ),
-      ),
+
+        // ----------------------------------------
+        // 第 F 段: 边缘发光波纹层 (放在卡片之上, 用 CustomPainter 只画外圈描边)
+        // ----------------------------------------
+        // 之前用 BoxShadow + spreadRadius 模拟"光环扩散", 但 BoxShadow 的 blur
+        // 会让发光区域辐射到卡片内部 (尤其当 blur 较大时), 加上卡片半透明,
+        // 视觉上"卡片整张被发光填充"。
+        //
+        // 现在改用 CustomPaint, 在 painter 里:
+        //   - 画一个比卡片更大的圆角矩形 stroke (不是 fill!)
+        //   - 用 MaskFilter.blur 让描边变成柔光环
+        //   - stroke 是空心的, 内部完全透明, 不会盖住卡片本体
+        Positioned(
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          child: IgnorePointer(
+            child: AnimatedBuilder(
+              animation: _glowAnimation,
+              builder: (context, child) {
+                final t = _glowAnimation.value; // 0.0 ~ 1.0
+                if (t == 0.0) return const SizedBox.shrink();
+
+                // 光环参数随 t 变化:
+                //   t=0.27 (= 20% 整体进度): 峰值 - alpha 1.0, ringExpand 4
+                //   t=0.82 (= 60% 整体进度): 中段 - alpha 0.7, ringExpand 12
+                //   t=1.00 (= 73% 整体进度): 末段 - alpha 0, ringExpand 18
+                final double opacity;
+                final double ringExpand; // 发光环离卡片边缘的距离
+                final double blur; // 发光环的模糊半径
+                if (t < 0.27) {
+                  final p = t / 0.27;
+                  opacity = p;
+                  ringExpand = 4 * p;
+                  blur = 14 * p;
+                } else if (t < 0.82) {
+                  final p = (t - 0.27) / (0.82 - 0.27);
+                  opacity = 1.0 - p * 0.3;
+                  ringExpand = 4 + p * 8;
+                  blur = 14 + p * 12;
+                } else {
+                  final p = (t - 0.82) / (1.0 - 0.82);
+                  opacity = 0.7 * (1 - p);
+                  ringExpand = 12 + p * 6;
+                  blur = 26 + p * 10;
+                }
+
+                return CustomPaint(
+                  painter: _GlowRingPainter(
+                    color: characterColor.withOpacity(0.7 * opacity),
+                    ringExpand: ringExpand,
+                    blur: blur,
+                  ),
+                );
+              },
+            ),
+          ),
+        ),
+      ],
     );
   }
 
@@ -1645,30 +2248,27 @@ class _CharacterCardState extends State<_CharacterCard>
             ),
             const SizedBox(height: 3),
             // 日文一行 (如果是用户消息, 这里显示的是用户的 content)
-            // 颜色说明:
-            //   - showBilingual = true (AI 消息有翻译): 用偏深的冷调蓝灰 4D6680,
-            //     让日文作为"主信息"略突出, 中文作为辅助
-            //   - showBilingual = false (用户消息或 AI 只有日文): 用中性灰 888888
+            // 颜色用冷调蓝灰, 配合玻璃卡片透出的蓝粉底色
             Text(
               preview.japaneseText ?? '',
               style: TextStyle(
                 fontSize: 12,
                 color: showBilingual
-                    ? const Color(0xFF4D6680)
-                    : const Color(0xFF888888),
+                    ? const Color(0xFF1A2942) // 深蓝灰 (主信息, 醒目)
+                    : const Color(0xFF555E6E), // 中蓝灰 (单语时偏柔)
               ),
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
             ),
             // 中文翻译 (仅 AI 消息且有翻译时显示)
-            // 颜色用更浅的冷调蓝灰 8A9FB5, 比日文行淡, 不抢主视觉
+            // 颜色比日文稍淡, 视觉层级清晰
             if (showBilingual) ...[
               const SizedBox(height: 1),
               Text(
                 preview.chineseText!,
                 style: const TextStyle(
                   fontSize: 11,
-                  color: Color(0xFF8A9FB5),
+                  color: Color(0xFF5A6C8A), // 中蓝灰
                 ),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
@@ -1683,9 +2283,12 @@ class _CharacterCardState extends State<_CharacterCard>
   // ----------------------------------------
   // 右侧列: 时间 + 箭头
   // ----------------------------------------
+  // 用 mainAxisSize.min 让 Column 自适应内容高度, 不强占父级 38px,
+  // 避免在卡片高度变化时抛 RenderFlex overflow 异常
   Widget _buildRightColumn(_ChatPreview? preview) {
     final timeText = _formatTime(preview?.lastTime);
     return Column(
+      mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.end,
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
@@ -1694,17 +2297,19 @@ class _CharacterCardState extends State<_CharacterCard>
             timeText,
             style: const TextStyle(
               fontSize: 10,
-              // 时间字色用冷调蓝灰, 和中文翻译行同色, 视觉一致
+              // 时间字色用冷调蓝灰, 和首页主色调一致
               color: Color(0xFF8A9FB5),
             ),
           ),
-          const SizedBox(height: 6),
+          const SizedBox(height: 4), // 时间和箭头间距 - 从 6 减到 4 防溢出
         ],
-        // 右侧箭头 (SVG chevron 效果, Flutter 用 Icons.chevron_right)
+        // 右侧箭头
+        // 颜色用海蓝深色 kAccentDeepBlue (= #3F6A99 ≈ 标题阴影色),
+        // 不能用 kFolderAccent (现在是白色, 在白卡片上看不见!)
         const Icon(
           Icons.chevron_right,
-          size: 20, // 箭头大小 - 可调
-          color: kFolderAccent,
+          size: 18, // 箭头大小 - 可调, 从 20 减到 18 防溢出
+          color: Color(0xFF3F6A99),
         ),
       ],
     );
@@ -1758,7 +2363,7 @@ class _CharacterCardState extends State<_CharacterCard>
 // - kCapsuleRadius      胶囊圆角（设成高度一半就是纯胶囊形）
 // - kCapsulePaddingH    胶囊内部左右 padding
 // - kDotSize            左侧脉动圆点直径
-// - kDotColor           圆点颜色（默认海蓝, 和选中 Tab 同色）
+// - kDotColor           圆点颜色（默认柔和粉紫，和 logo 呼应）
 // - kDotPulseDuration   圆点一次脉动的时长
 // - kCapsuleText        文字内容
 // - kCapsuleTextSize    文字字号
@@ -1781,17 +2386,16 @@ class _FetchingCapsuleState extends State<_FetchingCapsule>
 
   // 左侧脉动圆点参数
   static const double kDotSize = 7; // 圆点直径 - 可调
-  // 圆点颜色 - 可调; 默认用海蓝 5688C9 (= kFolderAccent), 和选中 Tab 颜色呼应
-  // 想换其他冷色: 比如换成 8BEADD 青绿能让胶囊更有"活力", 但和 Tab 不再统一
-  static const Color kDotColor = Color(0xFF5688C9);
+  // 圆点颜色 - 可调; 用海蓝 (= 文件夹起点 / Tab 选中色), 和首页主色统一
+  static const Color kDotColor = Color(0xFF5BA8DC);
   static const Duration kDotPulseDuration =
       Duration(milliseconds: 1100); // 圆点一次脉动的时长 - 可调
 
   // 文字参数
   static const String kCapsuleText = '消息收取中'; // 文字内容 - 可调
   static const double kCapsuleTextSize = 12; // 文字字号 - 可调
-  // 文字颜色 - 可调; 用比圆点稍深的冷调蓝灰, 在浅冰蓝胶囊背景上保证可读性
-  static const Color kCapsuleTextColor = Color(0xFF3F6A99);
+  // 文字颜色 - 可调; 用比圆点更深的海蓝, 在浅色胶囊背景上保证可读性
+  static const Color kCapsuleTextColor = Color(0xFF1F4F70);
 
   // 玻璃材质参数
   static const double kCapsuleBlurSigma = 20; // 高斯模糊强度 - 可调，和角色卡片保持一致
@@ -1894,26 +2498,133 @@ class _FetchingCapsuleState extends State<_FetchingCapsule>
 }
 
 // ========================================
-// 流光动效裁剪器
+// 倾斜扫光 painter (A 段动效)
 // ========================================
-// 根据 progress (0.0 -> 1.0) 从左到右逐渐露出卡片区域
-// progress = 0: 完全隐藏 (裁剪掉整个区域)
-// progress = 1: 完全露出 (裁剪矩形和原矩形一样大)
-class _SweepClipper extends CustomClipper<Rect> {
+// 画一束 -20° 倾斜的渐变光带, 从卡片左外侧扫到右外侧。
+// 用 SkewX 倾斜变换 + 横向 LinearGradient 实现。
+//
+// progress: 0.0 ~ 1.0
+//   0.0 时光带在卡片左外侧 (left 约 -100%)
+//   1.0 时光带已扫到右外侧 (left 约 +200%, 完全离开卡片)
+
+// ========================================
+// 边缘发光环 painter (F 段动效)
+// ========================================
+// 用 stroke (描边) + MaskFilter.blur 画一个柔光环, 只在卡片轮廓外侧,
+// 不会填充内部 (这是 CustomPainter 比 BoxShadow 更可控的地方)
+//
+// 参数:
+//   color:      发光颜色 (含 alpha)
+//   ringExpand: 发光环离卡片边缘的距离 (像素), 越大光环离卡片越远
+//   blur:       高斯模糊半径, 越大光环越柔
+class _GlowRingPainter extends CustomPainter {
+  final Color color;
+  final double ringExpand;
+  final double blur;
+
+  _GlowRingPainter({
+    required this.color,
+    required this.ringExpand,
+    required this.blur,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    // 卡片本身的圆角矩形 (size 就是卡片大小)
+    // 发光环的位置: 比卡片向外扩 ringExpand 像素, 圆角也加上扩展
+    // 这样光环包裹住卡片
+    final ringRect = Rect.fromLTWH(
+      -ringExpand,
+      -ringExpand,
+      size.width + ringExpand * 2,
+      size.height + ringExpand * 2,
+    );
+    final ringRRect = RRect.fromRectAndRadius(
+      ringRect,
+      Radius.circular(18 + ringExpand),
+    );
+
+    // stroke + MaskFilter.blur 实现"只在描边一圈发光"
+    // strokeWidth 控制环的厚度, blur 让描边边缘虚化成光晕
+    final paint = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = math.max(2.0, blur * 0.5) // 环厚度跟模糊半径成正比
+      ..maskFilter = MaskFilter.blur(BlurStyle.normal, blur);
+
+    canvas.drawRRect(ringRRect, paint);
+  }
+
+  @override
+  bool shouldRepaint(covariant _GlowRingPainter oldDelegate) =>
+      oldDelegate.color != color ||
+      oldDelegate.ringExpand != ringExpand ||
+      oldDelegate.blur != blur;
+}
+
+class _DiagonalShimmerPainter extends CustomPainter {
   final double progress;
 
-  _SweepClipper({required this.progress});
+  _DiagonalShimmerPainter({required this.progress});
 
   @override
-  Rect getClip(Size size) {
-    // 让流光宽度比实际 progress 稍宽一点, 末尾能看到完整的淡出
-    // progress = 0 时, clipRect 宽度为 0, 完全看不到流光
-    // progress = 1 时, clipRect 宽度为 size.width, 完全显示
-    return Rect.fromLTWH(0, 0, size.width * progress, size.height);
+  void paint(Canvas canvas, Size size) {
+    // 光带宽度 = 卡片宽度的 70% (跟 demo 一致)
+    final shimmerWidth = size.width * 0.7;
+    // 光带左端在 progress=0 时在屏幕外左侧 (-shimmerWidth),
+    // 在 progress=1 时移到右侧 (+size.width), 总移动距离 = size.width + shimmerWidth
+    final shimmerLeft = -shimmerWidth + progress * (size.width + shimmerWidth);
+
+    // 入场/出场淡入淡出: 光带在前 10% / 后 10% alpha 渐变, 中间 80% 完全可见
+    double envelopeAlpha;
+    if (progress < 0.1) {
+      envelopeAlpha = progress / 0.1;
+    } else if (progress > 0.9) {
+      envelopeAlpha = (1.0 - progress) / 0.1;
+    } else {
+      envelopeAlpha = 1.0;
+    }
+
+    // 光带本身的渐变 (横向): 透明 -> 中段亮白 -> 透明
+    // 三段渐变让中间高亮区集中, 两侧柔和淡出
+    final gradient = ui.Gradient.linear(
+      Offset(shimmerLeft, 0),
+      Offset(shimmerLeft + shimmerWidth, 0),
+      [
+        Colors.white.withOpacity(0.0),
+        Colors.white.withOpacity(0.25 * envelopeAlpha),
+        Colors.white.withOpacity(0.85 * envelopeAlpha),
+        Colors.white.withOpacity(0.25 * envelopeAlpha),
+        Colors.white.withOpacity(0.0),
+      ],
+      [0.0, 0.30, 0.50, 0.70, 1.0],
+    );
+
+    // 倾斜变换 (-20°): 用 transform 让矩形 skew, 整个光带就斜过来了
+    // skew 弧度 = -20 * pi / 180 ≈ -0.349
+    canvas.save();
+    final skewMatrix = Matrix4.identity()..setEntry(0, 1, math.tan(-0.349));
+    // 以卡片中心为变换原点, 这样 skew 后光带不会偏移到屏幕外
+    canvas.translate(size.width / 2, size.height / 2);
+    canvas.transform(skewMatrix.storage);
+    canvas.translate(-size.width / 2, -size.height / 2);
+
+    // 画一个比卡片更大的矩形 (上下各延伸一倍), 让 skew 后光带覆盖整个卡片高度
+    final paint = Paint()..shader = gradient;
+    canvas.drawRect(
+      Rect.fromLTWH(
+        shimmerLeft,
+        -size.height,
+        shimmerWidth,
+        size.height * 3,
+      ),
+      paint,
+    );
+
+    canvas.restore();
   }
 
   @override
-  bool shouldReclip(covariant _SweepClipper oldClipper) {
-    return oldClipper.progress != progress;
-  }
+  bool shouldRepaint(covariant _DiagonalShimmerPainter oldDelegate) =>
+      oldDelegate.progress != progress;
 }

@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'character_config.dart';
 
 // 消息模型
 class Message {
@@ -111,5 +112,35 @@ class StorageService {
       return messages;
     }
     return messages.sublist(messages.length - maxMessages);
+  }
+
+  // ----------------------------------------
+  // 构建最终生效的角色人设字符串
+  // ----------------------------------------
+  // 读取 SharedPreferences 中该角色的用户自定义设置，按优先级叠加：
+  //   1. 若用户在设置页编辑了人设 → 用覆写版本，否则用 character.personality
+  //   2. 若用户在设置页填写了称呼 → 在末尾追加 [用户称呼设置] 指令
+  //
+  // chat_page.dart 的 _effectivePersonality getter 与此逻辑等价（在本地缓存了设置值）。
+  // ProactiveMessageService 在每次触发前调用此方法，确保主动消息也尊重用户的称呼设置。
+  static Future<String> buildEffectivePersonality(Character character) async {
+    final prefs = await SharedPreferences.getInstance();
+    final id = character.id;
+
+    final personalityOverride = prefs.getString('personality_override_$id');
+    String base =
+        (personalityOverride != null && personalityOverride.isNotEmpty)
+            ? personalityOverride
+            : character.personality;
+
+    final userName = prefs.getString('user_name_$id');
+    if (userName != null && userName.isNotEmpty) {
+      base += '\n\n[用户称呼设置] 请在对话中用"$userName"称呼用户，'
+          '忽略以上提示词中的其他称呼设定。';
+    } else {
+      base += '\n\n[用户称呼设置] 对方未设置称呼，请不要使用任何固定名字称呼用户，或直接不称呼。';
+    }
+
+    return base;
   }
 }

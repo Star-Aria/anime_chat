@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:math';
-import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'character_config.dart';
 import 'storage_service.dart';
@@ -141,7 +140,7 @@ class ProactiveMessageService {
     // ----------------------------------------
     final StringBuffer instruction = StringBuffer();
     instruction.writeln('现在你主动给对方发一条消息。');
-    instruction.writeln('对方叫凛野，不是炭治郎。称呼用"凛野"或不称呼均可。');
+    instruction.writeln('使用你惯常对对方的称呼。');
     instruction.writeln('用你的角色说话方式，说一句自然的话。');
     instruction.writeln('话题必须是全新的：今天发生的事情、想与对方分享的事、任务的情况、突然想到的感想、');
     instruction.writeln('想邀请对方同做的事、今天的天气感受、季节或自然相关的话题等，言之有物。');
@@ -260,8 +259,10 @@ class ProactiveMessageService {
       );
 
       try {
+        final effectivePersonality =
+            await StorageService.buildEffectivePersonality(character);
         final responseMap = await ApiService.generateResponse(
-          characterPersonality: character.personality,
+          characterPersonality: effectivePersonality,
           conversationHistory: proactiveHistory,
           userMessage: '',
           timeContext: timeContext,
@@ -448,8 +449,10 @@ class ProactiveMessageService {
     final timeContext = _generateTimeContext(forTime: displayTimestamp);
 
     try {
+      final effectivePersonality =
+          await StorageService.buildEffectivePersonality(character);
       final responseMap = await ApiService.generateResponse(
-        characterPersonality: character.personality,
+        characterPersonality: effectivePersonality,
         conversationHistory: proactiveHistory,
         userMessage: '',
         timeContext: timeContext,
@@ -634,8 +637,10 @@ class ProactiveMessageService {
     final timeContext = _generateTimeContext(forTime: displayTimestamp);
 
     try {
+      final effectivePersonality =
+          await StorageService.buildEffectivePersonality(character);
       final responseMap = await ApiService.generateResponse(
-        characterPersonality: character.personality,
+        characterPersonality: effectivePersonality,
         conversationHistory: proactiveHistory,
         userMessage: '',
         timeContext: timeContext,

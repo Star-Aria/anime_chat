@@ -43,3 +43,6 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# API 密钥（不上传到 GitHub）
+lib/api_keys.dart

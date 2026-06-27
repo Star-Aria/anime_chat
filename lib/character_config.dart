@@ -252,8 +252,6 @@ class CharacterConfig {
       sovitsModelPath:
           r'C:\GPT-SoVITS-v2pro-20250604-nvidia50\SoVITS_weights_v2ProPlus\AI_Shinobu_e8_s200.pth',
       personality: '''
-（注意：全程使用日语回答。对方不是剧中任何角色，称呼时用"凛野ちゃん（りんのちゃん）"，或不称呼。对方是女生。）
-
 你是《鬼灭之刃》中的蝴蝶忍，女，18岁。
 
 《鬼灭之刃》的世界观设定在日本大正时代，核心是鬼杀队与鬼的千年对抗。鬼由鬼舞辻无惨通过血液转化而成，
@@ -431,8 +429,6 @@ class CharacterConfig {
       sovitsModelPath:
           r'C:\GPT-SoVITS-v2pro-20250604-nvidia50\SoVITS_weights_v2ProPlus\AI_Muichirou_e8_s200.pth',
       personality: '''
-（注意：全程使用日语回答。对方不是剧中任何角色，称呼时用"凛野（りんの）"，或不称呼。对方是女生。）
-
 你是《鬼灭之刃》的时透无一郎，男，14岁。
 
 《鬼灭之刃》的世界观设定在日本大正时代，核心是鬼杀队与鬼的千年对抗。鬼由鬼舞辻无惨通过血液转化而成，
@@ -582,8 +578,6 @@ class CharacterConfig {
       sovitsModelPath:
           r'C:\GPT-SoVITS-v2pro-20250604-nvidia50\SoVITS_weights_v2ProPlus\AI_Giyu_e8_s208.pth',
       personality: '''
-（全程使用日语回答。对方不是剧中任何角色，称呼时用"凛野（りんの）"，或不称呼。对方是女生。）
-
 你是《鬼灭之刃》中的富冈义勇，男，21岁。
 
 《鬼灭之刃》的世界观设定在日本大正时代，核心是鬼杀队与鬼的千年对抗。鬼由鬼舞辻无惨通过血液转化而成，
@@ -659,6 +653,69 @@ class CharacterConfig {
 ''',
       color: '1976D2',
       // 富冈义勇的低饱和雾面色：灰蓝色
+      settingsBgColors: const [
+        Color(0xFFF0F4F8), // 基础灰白
+        Color(0xFFBBDEFB), // 极柔水蓝
+        Color(0xFFB0BEC5), // 蓝灰色
+        Color(0xFFC5CAE9), // 灰靛蓝色
+      ],
+      aiBubbleGradient: const [
+        Color.fromARGB(179, 194, 231, 253),
+        Color.fromARGB(179, 158, 211, 255),
+        Color.fromARGB(179, 60, 162, 235),
+        Color.fromARGB(179, 6, 104, 184),
+      ],
+      aiBubbleBorderColor: const Color.fromARGB(255, 25, 118, 210),
+      aiBubbleGlowColor: const Color.fromARGB(255, 66, 165, 245),
+      backgroundBlurSigma: 5.0,
+      backgroundOpacity: 0.70,
+      proactiveTopicChance: 0.15,
+      proactiveIdleChance: 0.15,
+      proactiveMinIntervalHours: 72,
+    ),
+
+    Character(
+      id: 'sakiko',
+      name: '丰川祥子',
+      nameJp: 'Sakiko Togawa',
+      avatar: '🎹',
+      referWavPath:
+          r'C:\AveMujica模型（V2pro版本）\祥子\白祥\(A)あなたと空を見上げるのは、いつも夏でしたわね.wav',
+      promptText: 'あなたと空を見上げるのは、いつも夏でしたわね。',
+      promptLanguage: 'ja',
+
+      emotionAudioMap: const EmotionAudioMap({
+        SpeechEmotion.neutral: EmotionReferenceAudio(
+          referWavPath:
+              r'C:\AveMujica模型（V2pro版本）\祥子\白祥\(A)あなたと空を見上げるのは、いつも夏でしたわね.wav',
+          promptText: 'あなたと空を見上げるのは、いつも夏でしたわね。',
+          promptLanguage: 'ja',
+          description: '',
+        ),
+        SpeechEmotion.happy: EmotionReferenceAudio(
+          referWavPath: r'',
+          promptText: '',
+          promptLanguage: 'ja',
+          description: '',
+        ),
+        SpeechEmotion.sad: EmotionReferenceAudio(
+          referWavPath: r'',
+          promptText: '',
+          promptLanguage: 'ja',
+          description: '',
+        ),
+      }),
+
+      //emotionCharacterHint:,
+
+      gptModelPath:
+          r'C:\GPT-SoVITS-v2pro-20250604-nvidia50\GPT_weights_v2ProPlus\Mujica_豊川祥子_白_v2p.ckpt',
+      sovitsModelPath:
+          r'C:\GPT-SoVITS-v2pro-20250604-nvidia50\SoVITS_weights_v2ProPlus\Mujica_豊川祥子_白_v2p.pth',
+      personality: '''
+
+''',
+      color: '7799CC',
       settingsBgColors: const [
         Color(0xFFF0F4F8), // 基础灰白
         Color(0xFFBBDEFB), // 极柔水蓝

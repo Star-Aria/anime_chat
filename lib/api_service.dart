@@ -3,9 +3,10 @@ import 'dart:io';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 import 'storage_service.dart';
+import 'api_keys.dart';
 
 class ApiService {
-  static const String doubaoApiKey = 'sk-70f5215dc38d48838a52e3f47856679d';
+  static const String doubaoApiKey = ApiKeys.deepseekApiKey;
 
   static const String doubaoModel = 'deepseek-chat';
 
@@ -17,8 +18,7 @@ class ApiService {
   static const String doubaoVisionBaseUrl =
       'https://ark.cn-beijing.volces.com/api/v3';
   static const String doubaoVisionEndpoint = 'ep-20260213104644-59ljp';
-  static const String doubaoVisionApiKey =
-      'ee7239b4-0334-4062-9819-2e365b6dd49d';
+  static const String doubaoVisionApiKey = ApiKeys.doubaoVisionKey;
 
   static const String gptSovitsBaseUrl = 'http://127.0.0.1:9880';
 
