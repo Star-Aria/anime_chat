@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'dart:ui'; // 用于毛玻璃滤镜 ImageFilter
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -159,13 +160,8 @@ class _CharacterSettingsPageState extends State<CharacterSettingsPage> {
 
     if (mounted) {
       setState(() => _hasUnsavedChanges = false);
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('设置已保存'),
-          duration: Duration(seconds: 2),
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
+      final themeColor = Color(int.parse('0xFF${widget.character.color}'));
+      _showSavedOverlay(themeColor);
     }
   }
 
@@ -860,10 +856,26 @@ class _CharacterSettingsPageState extends State<CharacterSettingsPage> {
             value: value,
             onChanged: onChanged,
             activeThumbColor: color,
+            activeTrackColor: color.withValues(alpha: 0.28),
+            inactiveThumbColor: Colors.white,
+            inactiveTrackColor: Colors.black.withValues(alpha: 0.08),
+            trackOutlineColor: WidgetStatePropertyAll(Colors.transparent),
           ),
         ),
       ],
     );
+  }
+
+  void _showSavedOverlay(Color themeColor) {
+    final overlay = Overlay.of(context);
+    late OverlayEntry entry;
+    entry = OverlayEntry(
+      builder: (_) => _SavedOverlay(
+        color: themeColor,
+        onDone: () => entry.remove(),
+      ),
+    );
+    overlay.insert(entry);
   }
 
   Widget _buildSlider({
@@ -940,4 +952,234 @@ class _CharacterSettingsPageState extends State<CharacterSettingsPage> {
       ],
     );
   }
+}
+
+// ========================================
+// 保存成功动画 Overlay
+// ========================================
+class _SavedOverlay extends StatefulWidget {
+  final Color color;
+  final VoidCallback onDone;
+  const _SavedOverlay({required this.color, required this.onDone});
+
+  @override
+  State<_SavedOverlay> createState() => _SavedOverlayState();
+}
+
+class _SavedOverlayState extends State<_SavedOverlay>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _ctrl;
+
+  // 各阶段动画曲线（Interval 控制时间窗口）
+  late final Animation<double> _cardEnter; // 卡片淡入 + 微放大
+  late final Animation<double> _circle;   // 圆圈路径绘制
+  late final Animation<double> _check;    // 对钩路径绘制
+  late final Animation<double> _bounce;   // 对钩完成后弹跳（线性→sin映射）
+  late final Animation<double> _text;     // 文字淡入上移
+  late final Animation<double> _exit;     // 整体淡出
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 2000),
+    );
+
+    _cardEnter = CurvedAnimation(
+      parent: _ctrl,
+      curve: const Interval(0.00, 0.12, curve: Curves.easeOut),
+    );
+    _circle = CurvedAnimation(
+      parent: _ctrl,
+      curve: const Interval(0.05, 0.32, curve: Curves.easeOut),
+    );
+    _check = CurvedAnimation(
+      parent: _ctrl,
+      curve: const Interval(0.28, 0.48, curve: Curves.easeOut),
+    );
+    // 对钩画完后 0→1 线性，配合阻尼弹簧公式产生大弹出→回压→小二次弹→收敛
+    _bounce = CurvedAnimation(
+      parent: _ctrl,
+      curve: const Interval(0.44, 0.72, curve: Curves.linear),
+    );
+    _text = CurvedAnimation(
+      parent: _ctrl,
+      curve: const Interval(0.48, 0.62, curve: Curves.easeOut),
+    );
+    _exit = CurvedAnimation(
+      parent: _ctrl,
+      curve: const Interval(0.72, 1.00, curve: Curves.easeIn),
+    );
+
+    _ctrl.forward().then((_) => widget.onDone());
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _ctrl,
+      builder: (_, __) {
+        final globalOpacity = (1.0 - _exit.value).clamp(0.0, 1.0);
+        // 白框只做入场缩放，不参与弹跳
+        final enterScale = 0.82 + 0.18 * _cardEnter.value;
+        // 阻尼弹簧：仅作用于圆圈+对钩图标；大弹出→回压→小二次弹→收敛
+        final b = _bounce.value;
+        final iconBounce = 1.0 + 0.55 * math.exp(-4.0 * b) * math.sin(4 * math.pi * b);
+
+        return Positioned.fill(
+          child: IgnorePointer(
+            child: Opacity(
+              opacity: globalOpacity,
+              child: Center(
+                child: Transform.scale(
+                  scale: enterScale,
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(24),
+                    child: BackdropFilter(
+                      filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
+                      child: Container(
+                        width: 148,
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 24, vertical: 28),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withValues(alpha: 0.68),
+                          borderRadius: BorderRadius.circular(24),
+                          border: Border.all(
+                            color: Colors.white.withValues(alpha: 0.7),
+                            width: 1.2,
+                          ),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withValues(alpha: 0.08),
+                              blurRadius: 24,
+                              offset: const Offset(0, 6),
+                            ),
+                          ],
+                        ),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Transform.scale(
+                              scale: iconBounce,
+                              child: SizedBox(
+                                width: 64,
+                                height: 64,
+                                child: CustomPaint(
+                                  painter: _CheckCirclePainter(
+                                    circleProgress: _circle.value,
+                                    checkProgress: _check.value,
+                                    color: widget.color,
+                                  ),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(height: 16),
+                            Opacity(
+                              opacity: _text.value,
+                              child: Transform.translate(
+                                offset: Offset(0, 6 * (1 - _text.value)),
+                                child: Text(
+                                  '设置已保存',
+                                  style: TextStyle(
+                                    fontFamily: 'FangSong',
+                                    fontSize: 14,
+                                    color: const Color(0xFF2D3142)
+                                        .withValues(alpha: 0.85),
+                                    letterSpacing: 0.5,
+                                    decoration: TextDecoration.none,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+// ========================================
+// 圆圈 + 对钩路径绘制器
+// ========================================
+class _CheckCirclePainter extends CustomPainter {
+  final double circleProgress; // 0.0→1.0：圆圈从顶部顺时针画完
+  final double checkProgress;  // 0.0→1.0：对钩从左到右画完
+  final Color color;
+
+  const _CheckCirclePainter({
+    required this.circleProgress,
+    required this.checkProgress,
+    required this.color,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final cx = size.width / 2;
+    final cy = size.height / 2;
+    final r = size.width / 2 - 3;
+
+    final paint = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2.6
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round;
+
+    // ── 圆圈：从 12 点方向顺时针 ──
+    if (circleProgress > 0) {
+      canvas.drawArc(
+        Rect.fromCircle(center: Offset(cx, cy), radius: r),
+        -math.pi / 2,                    // 起点：12点
+        2 * math.pi * circleProgress,    // 顺时针扫过的弧度
+        false,
+        paint,
+      );
+    }
+
+    // ── 对钩：两段折线，按进度连续绘制 ──
+    if (checkProgress > 0) {
+      // 对钩三个端点（相对于 size）
+      final p1 = Offset(cx - r * 0.42, cy + r * 0.02); // 左端
+      final p2 = Offset(cx - r * 0.08, cy + r * 0.38); // 折点
+      final p3 = Offset(cx + r * 0.46, cy - r * 0.30); // 右端
+
+      final seg1 = (p2 - p1).distance;
+      final seg2 = (p3 - p2).distance;
+      final total = seg1 + seg2;
+      final drawn = total * checkProgress;
+
+      final path = Path()..moveTo(p1.dx, p1.dy);
+      if (drawn <= seg1) {
+        final t = drawn / seg1;
+        path.lineTo(p1.dx + (p2.dx - p1.dx) * t, p1.dy + (p2.dy - p1.dy) * t);
+      } else {
+        final t = (drawn - seg1) / seg2;
+        path
+          ..lineTo(p2.dx, p2.dy)
+          ..lineTo(p2.dx + (p3.dx - p2.dx) * t, p2.dy + (p3.dy - p2.dy) * t);
+      }
+
+      canvas.drawPath(path, paint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _CheckCirclePainter old) =>
+      old.circleProgress != circleProgress ||
+      old.checkProgress != checkProgress;
 }

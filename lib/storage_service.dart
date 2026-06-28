@@ -11,7 +11,8 @@ class Message {
   final List<String>? audioPaths; // 情绪化 TTS 的多段音频路径列表（新增）
   // 列表顺序与句子切分顺序一一对应
   // 播放时按顺序逐段播放，实现句子级别的情绪化语音
-  final String? imagePath; // 用户发送的图片本地路径（仅用户消息）
+  final String? imagePath; // 用户发送的图片本地路径（单张，旧版兼容字段）
+  final List<String>? imagePaths; // 用户一次性发送的多张图片路径列表（新增）
   final String? imageDescription; // 豆包视觉模型对图片的描述（发给 AI 时用，不显示给用户）
 
   Message({
@@ -21,6 +22,7 @@ class Message {
     this.audioPath,
     this.audioPaths,
     this.imagePath,
+    this.imagePaths,
     this.imageDescription,
   });
 
@@ -30,8 +32,9 @@ class Message {
       'content': content,
       'timestamp': timestamp.toIso8601String(),
       'audioPath': audioPath,
-      'audioPaths': audioPaths, // 序列化多段路径列表
+      'audioPaths': audioPaths,
       'imagePath': imagePath,
+      'imagePaths': imagePaths,
       'imageDescription': imageDescription,
     };
   }
@@ -42,12 +45,13 @@ class Message {
       content: json['content'],
       timestamp: DateTime.parse(json['timestamp']),
       audioPath: json['audioPath'],
-      // 反序列化时，把 JSON 数组转回 List<String>
-      // 旧数据里没有 audioPaths 字段时，这里会是 null，不影响旧消息的播放
       audioPaths: (json['audioPaths'] as List<dynamic>?)
           ?.map((e) => e as String)
           .toList(),
       imagePath: json['imagePath'],
+      imagePaths: (json['imagePaths'] as List<dynamic>?)
+          ?.map((e) => e as String)
+          .toList(),
       imageDescription: json['imageDescription'],
     );
   }
@@ -59,6 +63,7 @@ class Message {
     String? audioPath,
     List<String>? audioPaths,
     String? imagePath,
+    List<String>? imagePaths,
     String? imageDescription,
   }) {
     return Message(
@@ -68,6 +73,7 @@ class Message {
       audioPath: audioPath ?? this.audioPath,
       audioPaths: audioPaths ?? this.audioPaths,
       imagePath: imagePath ?? this.imagePath,
+      imagePaths: imagePaths ?? this.imagePaths,
       imageDescription: imageDescription ?? this.imageDescription,
     );
   }

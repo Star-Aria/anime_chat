@@ -44,9 +44,12 @@ class EmotionAnalyzer {
   //   如果某句分析失败，该位置默认返回该角色的 fallback 情绪（通常是 neutral）。
   //
   // 网络或解析失败时不抛异常，返回全 fallback 列表，不阻断 TTS 流程。
+  // language: 角色语言，'ja'=日语（默认），'zh'=中文
+  // 影响：system prompt 的语种描述，不影响标签名称（标签名永远用英文枚举值）
   static Future<List<SpeechEmotion>> analyzeEmotions({
     required List<String> sentences,
     required Character character,
+    String language = 'ja',
   }) async {
     if (sentences.isEmpty) return [];
 
@@ -102,10 +105,12 @@ class EmotionAnalyzer {
       // ----------------------------------------
       // system prompt：任务说明 + 动态标签列表 + 输出格式要求
       // ----------------------------------------
-      // 标签列表是动态的，只含该角色实际配置了参考音频的情绪，
-      // 模型不会返回"没有对应参考音频"的标签。
-      final String systemPrompt = '你是一个专业的日语语音情绪标注器。\n'
-          '你的任务是为每一句日语文本判断最合适的 TTS 朗读语气，帮助 TTS 系统选择对应的参考语音。\n'
+      // 标签列表是动态的，只含该角色实际配置了参考音频的情绪。
+      // 中文角色使用中文 prompt，日语角色使用日语 prompt，
+      // 但标签名永远用英文枚举值（与代码枚举保持一致）。
+      final String langLabel = language == 'zh' ? '中文' : '日语';
+      final String systemPrompt = '你是一个专业的${langLabel}语音情绪标注器。\n'
+          '你的任务是为每一句${langLabel}文本判断最合适的 TTS 朗读语气，帮助 TTS 系统选择对应的参考语音。\n'
           '\n'
           '可用的情绪标签如下（只能从这些里选，不能使用其他标签）：\n'
           '$labelDescriptions'
@@ -113,7 +118,7 @@ class EmotionAnalyzer {
           '判断原则：\n'
           '1. 判断的是"用什么样的语气朗读这句话最合适"，不是分析字面情感\n'
           '2. 有些角色说刻薄话时用的是平静语气，那就应该标 neutral\n'
-          '3. 括号里的动作描述（如「（照れながら）」）可以参考语气，但不是主体\n'
+          '3. 括号里的动作描述可以参考语气，但不是主体\n'
           '4. 如果一句话有多种可能，选最适合 TTS 朗读效果的那个\n'
           '5. 严格只用上方列出的标签，不能发明新标签\n'
           '\n'
@@ -260,10 +265,10 @@ class EmotionAnalyzer {
   }
 
   // ========================================
-  // 工具方法：将日语文本按句子切分
+  // 工具方法：将文本按句子切分
   // ========================================
-  // 按日语句子结束符（句号、叹号、问号、换行）切分，
-  // 切分结果同时用于情绪分析和逐句 TTS 调用。
+  // language: 'ja'=日语（默认），'zh'=中文
+  // 按对应语言的句子结束符切分，切分结果同时用于情绪分析和逐句 TTS 调用。
   //
   // 注意：和 api_service.dart 里的 _splitTextIntoSegments 用途不同：
   //   - _splitTextIntoSegments 是为了控制单段字数（不超过 30 字）
@@ -271,7 +276,7 @@ class EmotionAnalyzer {
   // 如果某句话超过 30 字，TTS 那边会在 generateSpeech 内部自动处理长句问题。
   //
   // 返回：过滤掉空字符串后的句子列表，至少包含一个元素
-  static List<String> splitSentences(String text) {
+  static List<String> splitSentences(String text, {String language = 'ja'}) {
     // 先清理括号内的动作描述，和 api_service.dart 里的规则保持一致
     String cleaned = text
         .replaceAll(RegExp(r'（[^）]*）'), '') // 全角圆括号
@@ -286,8 +291,13 @@ class EmotionAnalyzer {
     if (cleaned.isEmpty) return [text];
 
     // 按句子结束符切分，lookbehind 保留标点在前面那句末尾
+    // 中文角色额外在逗号、分号处切分，使单句语音更自然
+    final RegExp splitPattern = language == 'zh'
+        ? RegExp(r'(?<=[。！？!?\n，；])')
+        : RegExp(r'(?<=[。！？\n!?])');
+
     final List<String> sentences = [];
-    final parts = cleaned.split(RegExp(r'(?<=[。！？\n!?])'));
+    final parts = cleaned.split(splitPattern);
 
     for (final part in parts) {
       final trimmed = part.trim();

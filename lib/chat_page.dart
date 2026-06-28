@@ -93,6 +93,15 @@ const Map<String, String> PRONUNCIATION_DICT = {
   '風柱': 'かぜばしら',
   '炎柱': 'ほのおばしら',
   '日輪刀': 'にちりんとう',
+  '祥子': 'さきこ',
+  '睦': 'むつみ',
+  '初音': 'はつね',
+  '海鈴': 'うみり',
+  '祐天寺': 'ゆてんじ',
+  '燈': 'ともり',
+  '愛音': 'あのん',
+  '立希': 'たき',
+  '乐奈': 'らな',
 };
 
 const bool ENABLE_PRONUNCIATION_CORRECTION = true;
@@ -127,7 +136,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
   String? _characterAvatarPath;
   String? _backgroundImagePath;
 
-  final List<Map<String, String?>> _userMessageQueue = [];
+  final List<Map<String, dynamic>> _userMessageQueue = [];
   bool _isProcessingQueue = false;
 
   // 当前这轮对话中 AI 已经追加了几条连续消息
@@ -139,7 +148,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
   Message? _currentPlayingMessage;
   Completer<void>? _segmentCompleter;
 
-  String? _pendingImagePath;
+  List<String> _pendingImagePaths = [];
 
   late AnimationController _typingAnimationController;
   late AnimationController _soundWaveController;
@@ -372,29 +381,33 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
 
   Future<void> _sendMessage() async {
     final text = _textController.text.trim();
-    final imagePath = _pendingImagePath;
-    if (text.isEmpty && imagePath == null) return;
+    final imagePaths = List<String>.from(_pendingImagePaths);
+    if (text.isEmpty && imagePaths.isEmpty) return;
 
-    // 用户发了新消息，重置连续追加计数器
-    // 这样 AI 对这条新消息的回复之后，又可以重新开始尝试追加
     _consecutiveCount = 0;
 
-    final displayContent = (imagePath != null && text.isEmpty)
-        ? '[图片]'
-        : (imagePath != null ? '[图片] $text' : text);
+    final imgLabel = imagePaths.length > 1
+        ? '[图片×${imagePaths.length}]'
+        : imagePaths.isNotEmpty
+            ? '[图片]'
+            : '';
+    final displayContent = imagePaths.isNotEmpty
+        ? (text.isEmpty ? imgLabel : '$imgLabel $text')
+        : text;
 
     final userMessage = Message(
       role: 'user',
       content: displayContent,
       timestamp: DateTime.now(),
-      imagePath: imagePath,
+      imagePath: imagePaths.isNotEmpty ? imagePaths.first : null,
+      imagePaths: imagePaths.isNotEmpty ? imagePaths : null,
     );
 
     _textController.clear();
     setState(() {
       _messages.add(userMessage);
-      _userMessageQueue.add({'text': text, 'imagePath': imagePath});
-      _pendingImagePath = null;
+      _userMessageQueue.add({'text': text, 'imagePaths': imagePaths});
+      _pendingImagePaths = [];
     });
 
     _scrollToBottom();
@@ -407,15 +420,14 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
 
   Future<void> _pickImage() async {
     final ImagePicker picker = ImagePicker();
-    final XFile? image = await picker.pickImage(
-      source: ImageSource.gallery,
+    final List<XFile> images = await picker.pickMultiImage(
       maxWidth: 1280,
       maxHeight: 1280,
       imageQuality: 85,
     );
-    if (image != null && mounted) {
+    if (images.isNotEmpty && mounted) {
       setState(() {
-        _pendingImagePath = image.path;
+        _pendingImagePaths.addAll(images.map((e) => e.path));
       });
     }
   }
@@ -434,8 +446,8 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
     });
 
     final item = _userMessageQueue.removeAt(0);
-    final userMessage = item['text'] ?? '';
-    final imagePath = item['imagePath'];
+    final userMessage = (item['text'] as String?) ?? '';
+    final imagePaths = List<String>.from(item['imagePaths'] as List? ?? []);
 
     final timeContext = _generateTimeContext();
     final recentMessages = StorageService.getRecentMessages(_messages);
@@ -446,7 +458,8 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
         conversationHistory: recentMessages,
         userMessage: userMessage,
         timeContext: timeContext,
-        imagePath: imagePath,
+        imagePaths: imagePaths.isNotEmpty ? imagePaths : null,
+        characterLanguage: widget.character.language,
       );
 
       final japaneseText = responseMap['japanese'] ?? '';
@@ -454,8 +467,9 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
 
       final imageDescription = responseMap['imageDescription'] ?? '';
       if (imageDescription.isNotEmpty && _messages.isNotEmpty) {
-        final idx = _messages
-            .lastIndexWhere((m) => m.role == 'user' && m.imagePath != null);
+        final idx = _messages.lastIndexWhere((m) =>
+            m.role == 'user' &&
+            (m.imagePaths?.isNotEmpty == true || m.imagePath != null));
         if (idx != -1) {
           setState(() {
             _messages[idx] =
@@ -494,19 +508,27 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
   }
 
   Future<void> _sendAIMessage(String japanese, String chinese) async {
-    if (japanese.isEmpty) return;
+    final isChineseChar = widget.character.language == 'zh';
 
-    final cleanJapanese = japanese.replaceAll(RegExp(r'\n{2,}'), '\n').trim();
-    final cleanChinese = chinese.replaceAll(RegExp(r'\n{2,}'), '\n').trim();
+    // 中文角色：中文是主内容（TTS 读中文）；日语角色：日语是主内容
+    final primaryText = isChineseChar ? chinese : japanese;
+    if (primaryText.isEmpty) return;
 
-    // 根据设置，组装最终要存入记录的字符串。
-    // 即便当前隐藏了翻译，底层文本仍然保存两部分，以便用户随时在设置里开关
-    final displayContent = cleanChinese.isNotEmpty
-        ? '$cleanJapanese\n\n中文：$cleanChinese'
-        : cleanJapanese;
+    final cleanPrimary = primaryText.replaceAll(RegExp(r'\n{2,}'), '\n').trim();
+    final cleanChinese = isChineseChar
+        ? ''
+        : chinese.replaceAll(RegExp(r'\n{2,}'), '\n').trim();
 
-    // 使用统一的情绪分析 + 逐句 TTS 方法生成音频
-    final List<String> audioPaths = await _generateEmotionAudio(cleanJapanese);
+    // 日语角色保留"日文\n\n中文：中文翻译"格式以便开关显示；
+    // 中文角色直接存储中文文本，无需翻译分隔符
+    final displayContent = isChineseChar
+        ? cleanPrimary
+        : (cleanChinese.isNotEmpty
+            ? '$cleanPrimary\n\n中文：$cleanChinese'
+            : cleanPrimary);
+
+    // 使用统一的情绪分析 + 逐句 TTS 方法生成音频（传入主内容）
+    final List<String> audioPaths = await _generateEmotionAudio(cleanPrimary);
 
     final assistantMessage = Message(
       role: 'assistant',
@@ -586,6 +608,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
           conversationHistory: recentMessages,
           userMessage: '',
           timeContext: timeContext,
+          characterLanguage: widget.character.language,
           proactiveInstruction: '你刚刚回复了对方的消息，现在你想再补充一句。\n'
               '可以是对刚才话题的延伸、突然想到的相关事情、'
               '或者一个轻松的追加评论。\n'
@@ -968,20 +991,54 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
     final widgets = <Widget>[];
 
     // 如果文本中没有拆分出译文，或者译文部分为空
+    // 中文角色的消息不含 '\n\n中文：' 分隔符，走这个分支直接显示中文文本
     if (parts.length != 2) {
       if (_showOriginal) {
-        widgets.add(Text(
-          content,
-          style: const TextStyle(
-            fontFamily: AI_ORIGINAL_FONT_FAMILY,
-            fontSize: AI_ORIGINAL_FONT_SIZE,
-            fontWeight: AI_ORIGINAL_FONT_WEIGHT,
-            color: Color(0xFF2D3142),
-            height: 1.5,
-          ),
-        ));
+        final isChineseChar = widget.character.language == 'zh';
+        if (isChineseChar) {
+          // 中文角色：文字放在磨砂玻璃面板里，和日语角色的翻译框视觉一致
+          widgets.add(
+            ClipRRect(
+              borderRadius: BorderRadius.circular(8),
+              child: BackdropFilter(
+                filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+                child: Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.3),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(
+                      color: Colors.white.withValues(alpha: 0.2),
+                      width: 1,
+                    ),
+                  ),
+                  child: Text(
+                    content,
+                    style: const TextStyle(
+                      fontFamily: AI_TRANSLATION_FONT_FAMILY,
+                      fontSize: AI_TRANSLATION_FONT_SIZE,
+                      fontWeight: AI_TRANSLATION_FONT_WEIGHT,
+                      color: Color(0xFF2D3142),
+                      height: 1.5,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          );
+        } else {
+          widgets.add(Text(
+            content,
+            style: const TextStyle(
+              fontFamily: AI_ORIGINAL_FONT_FAMILY,
+              fontSize: AI_ORIGINAL_FONT_SIZE,
+              fontWeight: AI_ORIGINAL_FONT_WEIGHT,
+              color: Color(0xFF2D3142),
+              height: 1.5,
+            ),
+          ));
+        }
       } else {
-        // 都没开或者只有翻译开但没翻译数据时，进行占位兜底
         widgets.add(Text('[消息内容已隐藏]',
             style: TextStyle(
                 color: Colors.grey[400], fontStyle: FontStyle.italic)));
@@ -1089,9 +1146,12 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
   // 返回：
   //   生成成功的音频文件路径列表，可能为空（全部失败时）
   //   调用方需要自行处理空列表的情况
-  Future<List<String>> _generateEmotionAudio(String japaneseText) async {
-    // --- 第一步：分句 ---
-    final List<String> sentences = EmotionAnalyzer.splitSentences(japaneseText);
+  Future<List<String>> _generateEmotionAudio(String text) async {
+    final String lang = widget.character.language;
+
+    // --- 第一步：分句（按角色语言选择合适的标点）---
+    final List<String> sentences =
+        EmotionAnalyzer.splitSentences(text, language: lang);
 
     print('TTS 分句结果（共 ${sentences.length} 句）：');
     for (int i = 0; i < sentences.length; i++) {
@@ -1106,6 +1166,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
       emotions = await EmotionAnalyzer.analyzeEmotions(
         sentences: sentences,
         character: widget.character,
+        language: lang,
       );
     } else {
       // 情绪分析关闭时，使用角色的默认情绪（优先 neutral）
@@ -1130,7 +1191,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
 
       print('句子 [$i] 情绪：${emotion.name}，参考音频：${referenceAudio.referWavPath}');
 
-      // 进行发音替换（包括注音词典和用户名的自动替换）
+      // 发音替换：日语角色应用注音词典，中文角色只做用户名替换
       final correctedSentence = _applyPronunciationCorrection(sentence);
 
       final String? audioPath = await ApiService.generateSpeech(
@@ -1139,6 +1200,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
         promptText: referenceAudio.promptText,
         promptLanguage: referenceAudio.promptLanguage,
         speedFactor: _ttsSpeed,
+        textLanguage: lang,
       );
 
       if (audioPath != null) {
@@ -1180,8 +1242,9 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
           correctedText.replaceAll(_userNameOverride!, _userNamePronunciation!);
     }
 
-    // 2. 原有的鬼灭之刃专有名词注音纠正逻辑
-    if (ENABLE_PRONUNCIATION_CORRECTION) {
+    // 2. 日语专有名词注音纠正（仅对日语角色生效，中文角色跳过）
+    if (ENABLE_PRONUNCIATION_CORRECTION &&
+        widget.character.language != 'zh') {
       PRONUNCIATION_DICT.forEach((word, pronunciation) {
         if (correctedText.contains(word)) {
           if (PRONUNCIATION_MODE == 'bracket') {
@@ -1613,27 +1676,34 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
                       child: Column(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          if (_pendingImagePath != null)
+                          if (_pendingImagePaths.isNotEmpty)
                             Padding(
                               padding: const EdgeInsets.only(bottom: 8),
-                              child: Row(
-                                children: [
-                                  Stack(
+                              child: SizedBox(
+                                height: 64,
+                                child: ListView.separated(
+                                  scrollDirection: Axis.horizontal,
+                                  itemCount: _pendingImagePaths.length,
+                                  separatorBuilder: (_, __) =>
+                                      const SizedBox(width: 6),
+                                  itemBuilder: (_, i) => Stack(
+                                    clipBehavior: Clip.none,
                                     children: [
                                       ClipRRect(
                                         borderRadius: BorderRadius.circular(8),
                                         child: Image.file(
-                                            File(_pendingImagePath!),
-                                            width: 56,
-                                            height: 56,
-                                            fit: BoxFit.cover),
+                                          File(_pendingImagePaths[i]),
+                                          width: 56,
+                                          height: 56,
+                                          fit: BoxFit.cover,
+                                        ),
                                       ),
                                       Positioned(
-                                        top: 0,
-                                        right: 0,
+                                        top: -4,
+                                        right: -4,
                                         child: GestureDetector(
-                                          onTap: () => setState(
-                                              () => _pendingImagePath = null),
+                                          onTap: () => setState(() =>
+                                              _pendingImagePaths.removeAt(i)),
                                           child: Container(
                                             width: 16,
                                             height: 16,
@@ -1647,12 +1717,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
                                       ),
                                     ],
                                   ),
-                                  const SizedBox(width: 8),
-                                  Text('已选择图片，可直接发送或加文字',
-                                      style: TextStyle(
-                                          fontSize: 12,
-                                          color: Colors.grey[600])),
-                                ],
+                                ),
                               ),
                             ),
                           Row(
@@ -1688,7 +1753,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
                                     style: const TextStyle(
                                         color: Color(0xFF2D3142), fontSize: 14),
                                     decoration: InputDecoration(
-                                      hintText: _pendingImagePath != null
+                                      hintText: _pendingImagePaths.isNotEmpty
                                           ? '给图片配上文字（可选）...'
                                           : '输入消息...',
                                       hintStyle: const TextStyle(
@@ -2184,33 +2249,53 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          if (isUser && message.imagePath != null)
+                          if (isUser &&
+                              (message.imagePaths?.isNotEmpty == true ||
+                                  message.imagePath != null))
                             Padding(
                               padding: const EdgeInsets.only(bottom: 6),
-                              child: ClipRRect(
-                                borderRadius: BorderRadius.circular(8),
-                                child: Image.file(
-                                  File(message.imagePath!),
-                                  width: 180,
-                                  fit: BoxFit.cover,
-                                  errorBuilder: (_, __, ___) => Container(
-                                    width: 180,
-                                    height: 80,
-                                    color: Colors.white24,
-                                    child: const Icon(
-                                        Icons.broken_image_outlined,
-                                        color: Colors.white54),
-                                  ),
-                                ),
+                              child: Wrap(
+                                spacing: 4,
+                                runSpacing: 4,
+                                children: (message.imagePaths ??
+                                        (message.imagePath != null
+                                            ? [message.imagePath!]
+                                            : <String>[]))
+                                    .map((path) {
+                                  final isMulti =
+                                      (message.imagePaths?.length ?? 1) > 1;
+                                  return ClipRRect(
+                                    borderRadius: BorderRadius.circular(8),
+                                    child: Image.file(
+                                      File(path),
+                                      width: isMulti ? 86 : 180,
+                                      height: isMulti ? 86 : null,
+                                      fit: BoxFit.cover,
+                                      errorBuilder: (_, __, ___) => Container(
+                                        width: isMulti ? 86 : 180,
+                                        height: isMulti ? 86 : 80,
+                                        color: Colors.white24,
+                                        child: const Icon(
+                                            Icons.broken_image_outlined,
+                                            color: Colors.white54),
+                                      ),
+                                    ),
+                                  );
+                                }).toList(),
                               ),
                             ),
-                          if (!(isUser && message.content == '[图片]'))
-                            if (!isUser && message.content.contains('\n\n中文：'))
+                          if (!(isUser &&
+                              !message.content.contains(' ') &&
+                              message.content.startsWith('[图片')))
+                            if (!isUser &&
+                                (message.content.contains('\n\n中文：') ||
+                                    widget.character.language == 'zh'))
                               ..._buildTranslatedMessage(message.content)
                             else
                               Text(
-                                isUser && message.content.startsWith('[图片] ')
-                                    ? message.content.substring(5)
+                                isUser && message.content.startsWith('[图片')
+                                    ? message.content.replaceFirst(
+                                        RegExp(r'^\[图片[^\]]*\] ?'), '')
                                     : message.content,
                                 style: TextStyle(
                                   fontSize: 14,

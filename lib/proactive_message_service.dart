@@ -173,7 +173,8 @@ class ProactiveMessageService {
   // ----------------------------------------
   // 生成时间上下文
   // ----------------------------------------
-  String _generateTimeContext({DateTime? forTime}) {
+  // language: 'ja'=日语格式（默认），'zh'=中文格式
+  String _generateTimeContext({DateTime? forTime, String language = 'ja'}) {
     final now = forTime ?? DateTime.now();
     final hour = now.hour;
     String timeOfDay;
@@ -190,7 +191,11 @@ class ProactiveMessageService {
     } else {
       timeOfDay = '深夜';
     }
-    return '現在は${now.year}年${now.month}月${now.day}日、$timeOfDay（${now.hour}:${now.minute.toString().padLeft(2, '0')}）です。';
+    final minute = now.minute.toString().padLeft(2, '0');
+    if (language == 'zh') {
+      return '【时间信息】现在是${now.year}年${now.month}月${now.day}日 $timeOfDay ${now.hour}:$minute。';
+    }
+    return '現在は${now.year}年${now.month}月${now.day}日、$timeOfDay（${now.hour}:$minute）です。';
   }
 
   List<Message> _trimProactiveHistory(List<Message> messages) {
@@ -250,7 +255,8 @@ class ProactiveMessageService {
         earliest: lastProactive.add(Duration(hours: intervalHours)),
         latest: DateTime.now(),
       );
-      final timeContext = _generateTimeContext(forTime: fakeTimestamp);
+      final timeContext = _generateTimeContext(
+          forTime: fakeTimestamp, language: character.language);
 
       final latestMessages =
           await StorageService.loadConversation(character.id);
@@ -267,20 +273,22 @@ class ProactiveMessageService {
           userMessage: '',
           timeContext: timeContext,
           proactiveInstruction: _buildProactiveInstruction(
-            // fakeTimestamp 作为 date，让物候描述匹配补发消息的时间点
             date: fakeTimestamp,
           ),
+          characterLanguage: character.language,
         );
 
         final japanese = responseMap['japanese'] ?? '';
         final chinese = responseMap['chinese'] ?? '';
-        if (_isInvalidProactiveContent(japanese)) {
-          print('[${character.name}] Invalid content, discarding: $japanese');
+        final primaryContent =
+            character.language == 'zh' ? chinese : japanese;
+        if (_isInvalidProactiveContent(primaryContent)) {
+          print('[${character.name}] Invalid content, discarding: $primaryContent');
           continue;
         }
 
         await _saveOfflineMessagesWithTimestamp(
-            character.id, japanese, chinese, latestMessages, fakeTimestamp);
+            character, japanese, chinese, latestMessages, fakeTimestamp);
 
         await prefs.setInt(
             lastProactiveKey, DateTime.now().millisecondsSinceEpoch);
@@ -294,21 +302,29 @@ class ProactiveMessageService {
   }
 
   Future<void> _saveOfflineMessagesWithTimestamp(
-      String characterId,
+      Character character,
       String japanese,
       String chinese,
       List<Message> ignored,
       DateTime timestamp) async {
+    final characterId = character.id;
+    final isChineseChar = character.language == 'zh';
+    final primaryText = isChineseChar ? chinese : japanese;
+    final cleanPrimary = primaryText.replaceAll(RegExp(r'\n{2,}'), '\n').trim();
+    final cleanTranslation = isChineseChar
+        ? ''
+        : chinese.replaceAll(RegExp(r'\n{2,}'), '\n').trim();
+
+    if (cleanPrimary.isEmpty) return;
+
+    final displayContent = isChineseChar
+        ? cleanPrimary
+        : (cleanTranslation.isNotEmpty
+            ? '$cleanPrimary\n\n中文：$cleanTranslation'
+            : cleanPrimary);
+
     final latestMessages = await StorageService.loadConversation(characterId);
     final updatedMessages = List<Message>.from(latestMessages);
-
-    final cleanJp = japanese.replaceAll(RegExp(r'\n{2,}'), '\n').trim();
-    final cleanZh = chinese.replaceAll(RegExp(r'\n{2,}'), '\n').trim();
-
-    if (cleanJp.isEmpty) return;
-
-    final displayContent =
-        cleanZh.isNotEmpty ? '$cleanJp\n\n中文：$cleanZh' : cleanJp;
 
     updatedMessages.add(Message(
       role: 'assistant',
@@ -446,7 +462,8 @@ class ProactiveMessageService {
       );
     }
 
-    final timeContext = _generateTimeContext(forTime: displayTimestamp);
+    final timeContext = _generateTimeContext(
+        forTime: displayTimestamp, language: character.language);
 
     try {
       final effectivePersonality =
@@ -457,15 +474,16 @@ class ProactiveMessageService {
         userMessage: '',
         timeContext: timeContext,
         proactiveInstruction: _buildProactiveInstruction(
-          // displayTimestamp 作为 date，让物候描述匹配消息显示的时间点
           date: displayTimestamp,
         ),
+        characterLanguage: character.language,
       );
 
       final japanese = responseMap['japanese'] ?? '';
       final chinese = responseMap['chinese'] ?? '';
-      if (_isInvalidProactiveContent(japanese)) {
-        print('[${character.name}] Invalid content, discarding: $japanese');
+      final primaryContent = character.language == 'zh' ? chinese : japanese;
+      if (_isInvalidProactiveContent(primaryContent)) {
+        print('[${character.name}] Invalid content, discarding: $primaryContent');
         return;
       }
 
@@ -479,7 +497,7 @@ class ProactiveMessageService {
       } else {
         print('[${character.name}] User not in chat, saving offline');
         await _saveOfflineMessagesWithTimestamp(
-            character.id, japanese, chinese, latestMessages, displayTimestamp);
+            character, japanese, chinese, latestMessages, displayTimestamp);
       }
     } catch (e) {
       print('[${character.name}] Error generating proactive message: $e');
@@ -634,7 +652,8 @@ class ProactiveMessageService {
         latest: DateTime.now().add(const Duration(minutes: 1)),
       );
     }
-    final timeContext = _generateTimeContext(forTime: displayTimestamp);
+    final timeContext = _generateTimeContext(
+        forTime: displayTimestamp, language: character.language);
 
     try {
       final effectivePersonality =
@@ -645,14 +664,15 @@ class ProactiveMessageService {
         userMessage: '',
         timeContext: timeContext,
         proactiveInstruction: _buildProactiveInstruction(
-          // displayTimestamp 作为 date，让物候描述匹配消息显示的时间点
           date: displayTimestamp,
         ),
+        characterLanguage: character.language,
       );
       final japanese = responseMap['japanese'] ?? '';
       final chinese = responseMap['chinese'] ?? '';
-      if (_isInvalidProactiveContent(japanese)) {
-        print('[DEBUG] Invalid content, discarding: $japanese');
+      final primaryContent = character.language == 'zh' ? chinese : japanese;
+      if (_isInvalidProactiveContent(primaryContent)) {
+        print('[DEBUG] Invalid content, discarding: $primaryContent');
         return;
       }
 
@@ -665,7 +685,7 @@ class ProactiveMessageService {
         await callback(japanese, chinese);
       } else {
         await _saveOfflineMessagesWithTimestamp(
-            character.id, japanese, chinese, latestMessages, displayTimestamp);
+            character, japanese, chinese, latestMessages, displayTimestamp);
       }
       print('[DEBUG] Force trigger complete');
     } catch (e) {

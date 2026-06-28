@@ -34,23 +34,34 @@ class ApiService {
   static const int _maxTranslationRetries = 3;
   static const String _japaneseFallbackText = 'ごめん、ちょっと言葉が出てこなかった…もう一度話してくれる？';
 
-  // 生成对话回复（日文+中文翻译）
+  // 生成对话回复
+  // characterLanguage: 'ja' = 日语角色（默认），'zh' = 中文角色
+  // 中文角色：AI 直接以中文回复，跳过日语校验与翻译步骤，
+  //           返回 {'japanese': '', 'chinese': <中文回复>}
+  // 日语角色：保持原有流程，返回 {'japanese': <日文>, 'chinese': <中文翻译>}
   static Future<Map<String, String>> generateResponse({
     required String characterPersonality,
     required List<Message> conversationHistory,
     required String userMessage,
     String? timeContext,
     String? proactiveInstruction,
-    String? imagePath,
+    List<String>? imagePaths,
+    String characterLanguage = 'ja',
   }) async {
     try {
       String imageContext = '';
-      if (imagePath != null && imagePath.isNotEmpty) {
-        print('检测到图片，调用视觉模型中...');
-        final description = await _describeImage(imagePath);
-        if (description.isNotEmpty) {
-          imageContext = '\n\n【图片内容】$description';
-          print('视觉模型描述: $description');
+      if (imagePaths != null && imagePaths.isNotEmpty) {
+        final descriptions = <String>[];
+        for (int i = 0; i < imagePaths.length; i++) {
+          print('调用视觉模型：图片 ${i + 1}/${imagePaths.length}');
+          final desc = await _describeImage(imagePaths[i]);
+          if (desc.isNotEmpty) {
+            descriptions.add(imagePaths.length > 1 ? '图片${i + 1}：$desc' : desc);
+          }
+        }
+        if (descriptions.isNotEmpty) {
+          imageContext = '\n\n【图片内容】${descriptions.join('\n')}';
+          print('视觉模型描述: $imageContext');
         }
       }
 
@@ -65,6 +76,12 @@ class ApiService {
       if (proactiveInstruction != null && proactiveInstruction.isNotEmpty) {
         systemBuffer.writeln();
         systemBuffer.write(proactiveInstruction);
+      }
+
+      // 中文角色：明确要求 AI 用中文回复，不需要日语
+      if (characterLanguage == 'zh') {
+        systemBuffer.writeln();
+        systemBuffer.write('【语言要求】请全程用自然地道的中文回复，不要使用日语或其他语言。');
       }
 
       systemBuffer.writeln();
@@ -105,11 +122,9 @@ class ApiService {
         if (msg.role == 'user' &&
             msg.imageDescription != null &&
             msg.imageDescription!.isNotEmpty) {
-          final displayText = content.startsWith('[图片] ')
-              ? content.substring(5)
-              : content == '[图片]'
-                  ? ''
-                  : content;
+          final displayText = content.startsWith('[图片')
+              ? content.replaceFirst(RegExp(r'^\[图片[^\]]*\] ?'), '')
+              : content;
           final textPart = displayText.isNotEmpty ? '$displayText\n\n' : '';
           content = '$textPart【图片内容】${msg.imageDescription}';
         }
@@ -150,39 +165,40 @@ class ApiService {
       }
 
       final japaneseData = jsonDecode(utf8.decode(japaneseResponse.bodyBytes));
-      String rawJapaneseText =
+      String rawResponseText =
           japaneseData['choices'][0]['message']['content'] as String;
 
       // ========================================
-      // 中译日的核心校验逻辑（修复后）
+      // 中文角色：直接返回中文回复，跳过日语相关流程
       // ========================================
-      // 旧版本只判断"是否含中文字符"，但日语本身就有汉字，这个判断本身已经不严谨；
-      // 更严重的是翻译失败时静默回退到原中文，导致 TTS 拿到中文文本生成混乱语音。
-      //
-      // 新版本采用「是否含日语假名（平假名/片假名）」作为「翻译成功」的判定依据：
-      //   - 任何一句正常日语都至少会有一个假名（即使是含大量汉字的句子）
-      //   - 纯中文不可能含假名，因此假名是中日文最可靠的区分点
-      //
-      // 流程：
-      //   1) 如果原文已含假名，认为本身就是日语，跳过翻译
-      //   2) 否则进入翻译循环，最多重试 _maxTranslationRetries 次：
-      //      - 调用 _translateToJapanese 翻译
-      //      - 翻译结果若含假名 -> 成功，break
-      //      - 翻译结果不含假名 -> 视为失败，再来一次
-      //   3) 全部重试都失败时，使用 _japaneseFallbackText 兜底，
-      //      绝不把中文塞给 TTS（这是出问题最直观的根因）
-      if (!_isLikelyJapanese(rawJapaneseText)) {
-        print('回复未检测到日语假名，判定为非日语，开始翻译为日文...');
-        print('  原始内容: $rawJapaneseText');
+      if (characterLanguage == 'zh') {
+        print('中文角色，直接使用中文回复，跳过日语校验与翻译');
+        return {
+          'japanese': '',
+          'chinese': rawResponseText.trim(),
+          'imageDescription': imageContext.isNotEmpty
+              ? imageContext.replaceFirst('\n\n【图片内容】', '')
+              : '',
+        };
+      }
 
-        String translated = rawJapaneseText;
+      // ========================================
+      // 日语角色：中译日的核心校验逻辑
+      // ========================================
+      // 新版本采用「是否含日语假名（平假名/片假名）」作为「翻译成功」的判定依据：
+      //   - 任何一句正常日语都至少会有一个假名
+      //   - 纯中文不可能含假名，因此假名是中日文最可靠的区分点
+      if (!_isLikelyJapanese(rawResponseText)) {
+        print('回复未检测到日语假名，判定为非日语，开始翻译为日文...');
+        print('  原始内容: $rawResponseText');
+
+        String translated = rawResponseText;
         bool success = false;
 
         for (int attempt = 1; attempt <= _maxTranslationRetries; attempt++) {
           print('  翻译尝试 $attempt / $_maxTranslationRetries ...');
-          translated = await _translateToJapanese(rawJapaneseText);
+          translated = await _translateToJapanese(rawResponseText);
 
-          // 校验翻译结果是否为日语：含假名才算成功
           if (_isLikelyJapanese(translated)) {
             print('  翻译成功（第 $attempt 次）: $translated');
             success = true;
@@ -194,17 +210,14 @@ class ApiService {
         }
 
         if (success) {
-          rawJapaneseText = translated;
+          rawResponseText = translated;
         } else {
-          // 多次重试仍失败，使用兜底日语文本
-          // 这样确保 TTS 生成的语音和最终展示的字幕都是日语，
-          // 不会出现 GPT-SoVITS 拿中文去合成的情况
           print('  翻译多次失败，使用兜底日语文本: $_japaneseFallbackText');
-          rawJapaneseText = _japaneseFallbackText;
+          rawResponseText = _japaneseFallbackText;
         }
       }
 
-      final japaneseText = _removeChinese(rawJapaneseText);
+      final japaneseText = _removeChinese(rawResponseText);
 
       final textForTranslation =
           japaneseText.replaceAll(RegExp(r'（[^）]*）'), '').trim();
@@ -267,6 +280,7 @@ class ApiService {
   }
 
   // 生成语音（GPT-SoVITS api_v2 TTS）- 支持长文本分段
+  // textLanguage: 合成文本的语言，'ja'=日语（默认），'zh'=中文
   static Future<List<String>> generateSpeechSegments({
     required String text,
     required String referWavPath,
@@ -275,6 +289,7 @@ class ApiService {
     // TTS 播放速度倍率，由角色设置页面配置，默认 1.0（正常速度）
     // 范围 0.5（慢速）~ 2.0（快速），传递给 GPT-SoVITS 的 speed_factor 参数
     double speedFactor = 1.0,
+    String textLanguage = 'ja',
   }) async {
     final cleanedText = _stripActionDescriptions(text);
     List<String> segments = _splitTextIntoSegments(cleanedText);
@@ -295,7 +310,7 @@ class ApiService {
             'prompt_text': promptText,
             'prompt_lang': promptLanguage,
             'text': segment,
-            'text_lang': 'ja',
+            'text_lang': textLanguage,
             'top_k': 5,
             'top_p': 0.8,
             'temperature': 0.8,
@@ -482,6 +497,7 @@ class ApiService {
   // ========================================
   // 在 chat_page.dart 的 _sendAIMessage 和 _regenerateAudio 里调用。
   // speedFactor 由聊天页从设置中读取后传入，默认 1.0（正常速度）。
+  // textLanguage: 合成文本的语言，'ja'=日语（默认），'zh'=中文
   static Future<String?> generateSpeech({
     required String text,
     required String referWavPath,
@@ -489,6 +505,7 @@ class ApiService {
     required String promptLanguage,
     // TTS 播放速度倍率，来自设置页「TTS 语速」滑块，默认 1.0
     double speedFactor = 1.0,
+    String textLanguage = 'ja',
   }) async {
     final cleanedText = _stripActionDescriptions(text);
 
@@ -503,7 +520,7 @@ class ApiService {
           'prompt_text': promptText,
           'prompt_lang': promptLanguage,
           'text': cleanedText,
-          'text_lang': 'ja',
+          'text_lang': textLanguage,
           'top_k': 5,
           'top_p': 1.0,
           'temperature': 1.0,
