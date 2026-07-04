@@ -64,15 +64,31 @@ class ProactiveMessageService {
       Character character) async {
     final prefs = await SharedPreferences.getInstance();
     final id = character.id;
+    final sessionId = await StorageService.getActiveSessionId(id);
+    final canUseLegacySettings = sessionId == 'default';
+    String key(String baseKey) =>
+        StorageService.scopedSettingKey(baseKey, id, sessionId);
+
     return {
       // 主动消息总开关：用户可在设置页关闭，默认开启
-      'enabled': prefs.getBool('proactive_enabled_$id') ?? true,
+      'enabled': prefs.getBool(key('proactive_enabled')) ??
+          (canUseLegacySettings
+              ? prefs.getBool('proactive_enabled_$id')
+              : null) ??
+          true,
       // 最短发送间隔：用户可修改，默认使用 character_config.dart 中的值
-      'intervalHours': prefs.getInt('proactive_interval_$id') ??
+      'intervalHours': prefs.getInt(key('proactive_interval')) ??
+          (canUseLegacySettings
+              ? prefs.getInt('proactive_interval_$id')
+              : null) ??
           character.proactiveMinIntervalHours,
       // 触发概率：用户可修改，默认使用 character_config.dart 中的值
-      'chance': prefs.getDouble('proactive_chance_$id') ??
+      'chance': prefs.getDouble(key('proactive_chance')) ??
+          (canUseLegacySettings
+              ? prefs.getDouble('proactive_chance_$id')
+              : null) ??
           character.proactiveIdleChance,
+      'sessionId': sessionId,
     };
   }
 
@@ -222,6 +238,7 @@ class ProactiveMessageService {
       final bool enabled = settings['enabled'] as bool;
       final int intervalHours = settings['intervalHours'] as int;
       final double chance = settings['chance'] as double;
+      final String sessionId = settings['sessionId'] as String;
 
       // 主动消息已被用户关闭时，跳过该角色
       if (!enabled) {
@@ -229,7 +246,8 @@ class ProactiveMessageService {
         continue;
       }
 
-      final lastProactiveKey = 'last_proactive_${character.id}';
+      final lastProactiveKey = StorageService.scopedSettingKey(
+          'last_proactive', character.id, sessionId);
       final lastProactiveMs = prefs.getInt(lastProactiveKey) ?? 0;
 
       if (lastProactiveMs == 0) {
@@ -258,15 +276,20 @@ class ProactiveMessageService {
       final timeContext = _generateTimeContext(
           forTime: fakeTimestamp, language: character.language);
 
-      final latestMessages =
-          await StorageService.loadConversation(character.id);
+      final latestMessages = await StorageService.loadConversation(
+        character.id,
+        sessionId: sessionId,
+      );
       final proactiveHistory = _trimProactiveHistory(
         StorageService.getRecentMessages(latestMessages, maxMessages: 5),
       );
 
       try {
         final effectivePersonality =
-            await StorageService.buildEffectivePersonality(character);
+            await StorageService.buildEffectivePersonality(
+          character,
+          sessionId: sessionId,
+        );
         final responseMap = await ApiService.generateResponse(
           characterPersonality: effectivePersonality,
           conversationHistory: proactiveHistory,
@@ -280,15 +303,21 @@ class ProactiveMessageService {
 
         final japanese = responseMap['japanese'] ?? '';
         final chinese = responseMap['chinese'] ?? '';
-        final primaryContent =
-            character.language == 'zh' ? chinese : japanese;
+        final primaryContent = character.language == 'zh' ? chinese : japanese;
         if (_isInvalidProactiveContent(primaryContent)) {
-          print('[${character.name}] Invalid content, discarding: $primaryContent');
+          print(
+              '[${character.name}] Invalid content, discarding: $primaryContent');
           continue;
         }
 
         await _saveOfflineMessagesWithTimestamp(
-            character, japanese, chinese, latestMessages, fakeTimestamp);
+          character,
+          japanese,
+          chinese,
+          latestMessages,
+          fakeTimestamp,
+          sessionId: sessionId,
+        );
 
         await prefs.setInt(
             lastProactiveKey, DateTime.now().millisecondsSinceEpoch);
@@ -306,14 +335,16 @@ class ProactiveMessageService {
       String japanese,
       String chinese,
       List<Message> ignored,
-      DateTime timestamp) async {
+      DateTime timestamp,
+      {String? sessionId}) async {
     final characterId = character.id;
+    final resolvedSessionId =
+        sessionId ?? await StorageService.getActiveSessionId(characterId);
     final isChineseChar = character.language == 'zh';
     final primaryText = isChineseChar ? chinese : japanese;
     final cleanPrimary = primaryText.replaceAll(RegExp(r'\n{2,}'), '\n').trim();
-    final cleanTranslation = isChineseChar
-        ? ''
-        : chinese.replaceAll(RegExp(r'\n{2,}'), '\n').trim();
+    final cleanTranslation =
+        isChineseChar ? '' : chinese.replaceAll(RegExp(r'\n{2,}'), '\n').trim();
 
     if (cleanPrimary.isEmpty) return;
 
@@ -323,7 +354,10 @@ class ProactiveMessageService {
             ? '$cleanPrimary\n\n中文：$cleanTranslation'
             : cleanPrimary);
 
-    final latestMessages = await StorageService.loadConversation(characterId);
+    final latestMessages = await StorageService.loadConversation(
+      characterId,
+      sessionId: resolvedSessionId,
+    );
     final updatedMessages = List<Message>.from(latestMessages);
 
     updatedMessages.add(Message(
@@ -333,7 +367,11 @@ class ProactiveMessageService {
       audioPath: null,
     ));
 
-    await StorageService.saveConversation(characterId, updatedMessages);
+    await StorageService.saveConversation(
+      characterId,
+      updatedMessages,
+      sessionId: resolvedSessionId,
+    );
 
     final prefs = await SharedPreferences.getInstance();
     final unreadKey = 'unread_$characterId';
@@ -418,6 +456,7 @@ class ProactiveMessageService {
     final bool enabled = settings['enabled'] as bool;
     final int intervalHours = settings['intervalHours'] as int;
     final double chance = settings['chance'] as double;
+    final String sessionId = settings['sessionId'] as String;
 
     // 主动消息已被用户在设置页关闭时，跳过本次触发
     if (!enabled) {
@@ -426,7 +465,8 @@ class ProactiveMessageService {
     }
 
     final prefs = await SharedPreferences.getInstance();
-    final lastProactiveKey = 'last_proactive_${character.id}';
+    final lastProactiveKey = StorageService.scopedSettingKey(
+        'last_proactive', character.id, sessionId);
     final lastProactiveMs = prefs.getInt(lastProactiveKey) ?? 0;
     final lastProactive = DateTime.fromMillisecondsSinceEpoch(lastProactiveMs);
     final hoursSinceLast = DateTime.now().difference(lastProactive).inHours;
@@ -445,7 +485,10 @@ class ProactiveMessageService {
 
     print('[${character.name}] Proactive message triggered');
 
-    final latestMessages = await StorageService.loadConversation(character.id);
+    final latestMessages = await StorageService.loadConversation(
+      character.id,
+      sessionId: sessionId,
+    );
     final proactiveHistory = _trimProactiveHistory(
       StorageService.getRecentMessages(latestMessages, maxMessages: 5),
     );
@@ -467,7 +510,10 @@ class ProactiveMessageService {
 
     try {
       final effectivePersonality =
-          await StorageService.buildEffectivePersonality(character);
+          await StorageService.buildEffectivePersonality(
+        character,
+        sessionId: sessionId,
+      );
       final responseMap = await ApiService.generateResponse(
         characterPersonality: effectivePersonality,
         conversationHistory: proactiveHistory,
@@ -483,7 +529,8 @@ class ProactiveMessageService {
       final chinese = responseMap['chinese'] ?? '';
       final primaryContent = character.language == 'zh' ? chinese : japanese;
       if (_isInvalidProactiveContent(primaryContent)) {
-        print('[${character.name}] Invalid content, discarding: $primaryContent');
+        print(
+            '[${character.name}] Invalid content, discarding: $primaryContent');
         return;
       }
 
@@ -497,7 +544,13 @@ class ProactiveMessageService {
       } else {
         print('[${character.name}] User not in chat, saving offline');
         await _saveOfflineMessagesWithTimestamp(
-            character, japanese, chinese, latestMessages, displayTimestamp);
+          character,
+          japanese,
+          chinese,
+          latestMessages,
+          displayTimestamp,
+          sessionId: sessionId,
+        );
       }
     } catch (e) {
       print('[${character.name}] Error generating proactive message: $e');
@@ -578,8 +631,10 @@ class ProactiveMessageService {
       final int effectiveInterval = settings['intervalHours'] as int;
       final double effectiveChance = settings['chance'] as double;
       final bool proactiveEnabled = settings['enabled'] as bool;
+      final String sessionId = settings['sessionId'] as String;
 
-      final lastProactiveKey = 'last_proactive_${character.id}';
+      final lastProactiveKey = StorageService.scopedSettingKey(
+          'last_proactive', character.id, sessionId);
       final lastProactiveMs = prefs.getInt(lastProactiveKey) ?? 0;
       final unread = prefs.getInt('unread_${character.id}') ?? 0;
 
@@ -637,7 +692,11 @@ class ProactiveMessageService {
     // 通知首页显示"消息收取中..."
     _fetchingCallbacks['__global__']?.call(true);
 
-    final latestMessages = await StorageService.loadConversation(character.id);
+    final sessionId = await StorageService.getActiveSessionId(character.id);
+    final latestMessages = await StorageService.loadConversation(
+      character.id,
+      sessionId: sessionId,
+    );
     final proactiveHistory = _trimProactiveHistory(
       StorageService.getRecentMessages(latestMessages, maxMessages: 5),
     );
@@ -657,7 +716,10 @@ class ProactiveMessageService {
 
     try {
       final effectivePersonality =
-          await StorageService.buildEffectivePersonality(character);
+          await StorageService.buildEffectivePersonality(
+        character,
+        sessionId: sessionId,
+      );
       final responseMap = await ApiService.generateResponse(
         characterPersonality: effectivePersonality,
         conversationHistory: proactiveHistory,
@@ -677,15 +739,24 @@ class ProactiveMessageService {
       }
 
       final prefs = await SharedPreferences.getInstance();
-      await prefs.setInt('last_proactive_${character.id}',
-          DateTime.now().millisecondsSinceEpoch);
+      await prefs.setInt(
+        StorageService.scopedSettingKey(
+            'last_proactive', character.id, sessionId),
+        DateTime.now().millisecondsSinceEpoch,
+      );
 
       final callback = _activeCallbacks[character.id];
       if (callback != null) {
         await callback(japanese, chinese);
       } else {
         await _saveOfflineMessagesWithTimestamp(
-            character, japanese, chinese, latestMessages, displayTimestamp);
+          character,
+          japanese,
+          chinese,
+          latestMessages,
+          displayTimestamp,
+          sessionId: sessionId,
+        );
       }
       print('[DEBUG] Force trigger complete');
     } catch (e) {

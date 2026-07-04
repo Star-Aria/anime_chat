@@ -109,8 +109,8 @@ class EmotionAnalyzer {
       // 中文角色使用中文 prompt，日语角色使用日语 prompt，
       // 但标签名永远用英文枚举值（与代码枚举保持一致）。
       final String langLabel = language == 'zh' ? '中文' : '日语';
-      final String systemPrompt = '你是一个专业的${langLabel}语音情绪标注器。\n'
-          '你的任务是为每一句${langLabel}文本判断最合适的 TTS 朗读语气，帮助 TTS 系统选择对应的参考语音。\n'
+      final String systemPrompt = '你是一个专业的$langLabel语音情绪标注器。\n'
+          '你的任务是为每一句$langLabel文本判断最合适的 TTS 朗读语气，帮助 TTS 系统选择对应的参考语音。\n'
           '\n'
           '可用的情绪标签如下（只能从这些里选，不能使用其他标签）：\n'
           '$labelDescriptions'

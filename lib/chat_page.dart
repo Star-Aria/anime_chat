@@ -2,6 +2,7 @@ import 'dart:ui';
 import 'dart:async';
 import 'dart:math';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -130,6 +131,8 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
   Future<void>? _preloadFuture;
 
   List<Message> _messages = [];
+  List<ChatSession> _chatSessions = [];
+  String? _activeSessionId;
   bool _isLoading = false;
   bool _isPlaying = false;
   bool _modelSwitched = false;
@@ -164,6 +167,8 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
   bool _emotionAnalysisEnabled = true;
   double _ttsSpeed = 1.0;
 
+  String? get _sessionId => _activeSessionId;
+
   String get _effectivePersonality {
     String base =
         (_personalityOverride != null && _personalityOverride!.isNotEmpty)
@@ -184,11 +189,10 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
   void initState() {
     super.initState();
     _initAudioPlayer();
-    _loadConversation();
+    _initializeChatSession();
     _switchModel();
     _loadCharacterAvatar();
     _loadBackgroundImage();
-    _loadCharacterSettings();
 
     _typingAnimationController = AnimationController(
       vsync: this,
@@ -211,18 +215,39 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
   Future<void> _loadCharacterSettings() async {
     final prefs = await SharedPreferences.getInstance();
     final id = widget.character.id;
+    final sessionId = _sessionId;
+    final canUseLegacySettings = sessionId == null || sessionId == 'default';
+    String key(String baseKey) =>
+        StorageService.scopedSettingKey(baseKey, id, sessionId);
 
-    final personalityOverride = prefs.getString('personality_override_$id');
-    final userNameOverride = prefs.getString('user_name_$id');
+    final personalityOverride = prefs.getString(key('personality_override')) ??
+        (canUseLegacySettings
+            ? prefs.getString('personality_override_$id')
+            : null);
+    final userNameOverride = prefs.getString(key('user_name')) ??
+        (canUseLegacySettings ? prefs.getString('user_name_$id') : null);
     final userNamePronunciation =
-        prefs.getString('user_name_pronunciation_$id');
+        prefs.getString(key('user_name_pronunciation')) ??
+            (canUseLegacySettings
+                ? prefs.getString('user_name_pronunciation_$id')
+                : null);
 
-    final showOriginal = prefs.getBool('show_original_$id') ?? true;
-    final showTranslation = prefs.getBool('show_translation_$id') ?? true;
+    final showOriginal = prefs.getBool(key('show_original')) ??
+        (canUseLegacySettings ? prefs.getBool('show_original_$id') : null) ??
+        true;
+    final showTranslation = prefs.getBool(key('show_translation')) ??
+        (canUseLegacySettings ? prefs.getBool('show_translation_$id') : null) ??
+        true;
 
     final emotionAnalysisEnabled =
-        prefs.getBool('emotion_analysis_enabled_$id') ?? true;
-    final ttsSpeed = prefs.getDouble('tts_speed_$id') ?? 1.0;
+        prefs.getBool(key('emotion_analysis_enabled')) ??
+            (canUseLegacySettings
+                ? prefs.getBool('emotion_analysis_enabled_$id')
+                : null) ??
+            true;
+    final ttsSpeed = prefs.getDouble(key('tts_speed')) ??
+        (canUseLegacySettings ? prefs.getDouble('tts_speed_$id') : null) ??
+        1.0;
 
     if (mounted) {
       setState(() {
@@ -300,14 +325,42 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
     }
   }
 
+  Future<void> _initializeChatSession() async {
+    final sessions = await StorageService.loadChatSessions(widget.character.id);
+    final activeSessionId =
+        await StorageService.getActiveSessionId(widget.character.id);
+    if (!mounted) return;
+    setState(() {
+      _chatSessions = sessions;
+      _activeSessionId = activeSessionId;
+    });
+    await _loadCharacterSettings();
+    await _loadConversation();
+  }
+
   Future<void> _loadConversation() async {
-    final messages = await StorageService.loadConversation(widget.character.id);
+    final sessionId = _sessionId ??
+        await StorageService.getActiveSessionId(widget.character.id);
+    final messages = await StorageService.loadConversation(
+      widget.character.id,
+      sessionId: sessionId,
+    );
     if (mounted) {
       setState(() {
+        _activeSessionId = sessionId;
         _messages = messages;
       });
     }
     _scrollToBottom();
+  }
+
+  Future<void> _refreshChatSessions() async {
+    final sessions = await StorageService.loadChatSessions(widget.character.id);
+    if (mounted) {
+      setState(() {
+        _chatSessions = sessions;
+      });
+    }
   }
 
   Future<void> _loadCharacterAvatar() async {
@@ -334,11 +387,56 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
     await Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (context) =>
-            CharacterSettingsPage(character: widget.character),
+        builder: (context) => CharacterSettingsPage(
+          character: widget.character,
+          sessionId: _sessionId,
+        ),
       ),
     );
     await _loadCharacterSettings();
+  }
+
+  Future<void> _createNewChatSession() async {
+    final session = await StorageService.createChatSession(widget.character.id);
+    final sessions = await StorageService.loadChatSessions(widget.character.id);
+    if (!mounted) return;
+    setState(() {
+      _chatSessions = sessions;
+      _activeSessionId = session.id;
+      _messages = [];
+      _userMessageQueue.clear();
+      _pendingImagePaths = [];
+      _isLoading = false;
+      _isProcessingQueue = false;
+    });
+    await _loadCharacterSettings();
+    _scrollToBottom();
+  }
+
+  Future<void> _switchChatSession(String sessionId) async {
+    if (sessionId == _activeSessionId) return;
+    if (_isPlaying) {
+      await _stopAudio();
+    }
+    await StorageService.switchActiveChatSession(
+        widget.character.id, sessionId);
+    final sessions = await StorageService.loadChatSessions(widget.character.id);
+    final messages = await StorageService.loadConversation(
+      widget.character.id,
+      sessionId: sessionId,
+    );
+    if (!mounted) return;
+    setState(() {
+      _chatSessions = sessions;
+      _activeSessionId = sessionId;
+      _messages = messages;
+      _userMessageQueue.clear();
+      _pendingImagePaths = [];
+      _isLoading = false;
+      _isProcessingQueue = false;
+    });
+    await _loadCharacterSettings();
+    _scrollToBottom();
   }
 
   Future<void> _pickBackgroundImage() async {
@@ -411,7 +509,12 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
     });
 
     _scrollToBottom();
-    await StorageService.saveConversation(widget.character.id, _messages);
+    await StorageService.saveConversation(
+      widget.character.id,
+      _messages,
+      sessionId: _sessionId,
+    );
+    await _refreshChatSessions();
 
     if (!_isProcessingQueue) {
       _processMessageQueue();
@@ -475,7 +578,11 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
             _messages[idx] =
                 _messages[idx].copyWith(imageDescription: imageDescription);
           });
-          await StorageService.saveConversation(widget.character.id, _messages);
+          await StorageService.saveConversation(
+            widget.character.id,
+            _messages,
+            sessionId: _sessionId,
+          );
         }
       }
 
@@ -515,9 +622,8 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
     if (primaryText.isEmpty) return;
 
     final cleanPrimary = primaryText.replaceAll(RegExp(r'\n{2,}'), '\n').trim();
-    final cleanChinese = isChineseChar
-        ? ''
-        : chinese.replaceAll(RegExp(r'\n{2,}'), '\n').trim();
+    final cleanChinese =
+        isChineseChar ? '' : chinese.replaceAll(RegExp(r'\n{2,}'), '\n').trim();
 
     // 日语角色保留"日文\n\n中文：中文翻译"格式以便开关显示；
     // 中文角色直接存储中文文本，无需翻译分隔符
@@ -548,7 +654,12 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
     }
 
     _scrollToBottom();
-    await StorageService.saveConversation(widget.character.id, _messages);
+    await StorageService.saveConversation(
+      widget.character.id,
+      _messages,
+      sessionId: _sessionId,
+    );
+    await _refreshChatSessions();
 
     if (audioPaths.isNotEmpty && mounted) {
       print('开始顺序播放 ${audioPaths.length} 段情绪化语音...');
@@ -844,7 +955,11 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
             _messages[messageIndex] = updatedMessage;
           });
         }
-        await StorageService.saveConversation(widget.character.id, _messages);
+        await StorageService.saveConversation(
+          widget.character.id,
+          _messages,
+          sessionId: _sessionId,
+        );
 
         print('开始顺序播放 ${newAudioPaths.length} 段情绪化语音...');
         await _playAudioSequentially(
@@ -935,7 +1050,11 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
             _messages[messageIndex] = updatedMessage;
           });
         }
-        await StorageService.saveConversation(widget.character.id, _messages);
+        await StorageService.saveConversation(
+          widget.character.id,
+          _messages,
+          sessionId: _sessionId,
+        );
 
         if (!mounted) return;
 
@@ -1243,8 +1362,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
     }
 
     // 2. 日语专有名词注音纠正（仅对日语角色生效，中文角色跳过）
-    if (ENABLE_PRONUNCIATION_CORRECTION &&
-        widget.character.language != 'zh') {
+    if (ENABLE_PRONUNCIATION_CORRECTION && widget.character.language != 'zh') {
       PRONUNCIATION_DICT.forEach((word, pronunciation) {
         if (correctedText.contains(word)) {
           if (PRONUNCIATION_MODE == 'bracket') {
@@ -1429,34 +1547,117 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
   }
 
   Future<void> _clearConversation() async {
+    final color = Color(int.parse('0xFF${widget.character.color}'));
     final confirm = await showDialog<bool>(
       context: context,
-      builder: (context) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text('确认清空',
-            style: TextStyle(
-                fontWeight: FontWeight.bold, color: Color(0xFF2D3142))),
-        content: const Text('确定要清空所有对话记录吗？',
-            style: TextStyle(color: Color(0xFF5A5F73))),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: Text('取消', style: TextStyle(color: Colors.grey[600])),
+      barrierColor: Colors.black.withOpacity(0.20),
+      builder: (context) => Dialog(
+        insetPadding: const EdgeInsets.symmetric(horizontal: 40),
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        child: Align(
+          alignment: Alignment.center,
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 440),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(18),
+              child: BackdropFilter(
+                filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+                child: Container(
+                  padding: const EdgeInsets.fromLTRB(20, 18, 20, 16),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF8F7FA).withOpacity(0.90),
+                    borderRadius: BorderRadius.circular(18),
+                    border: Border.all(
+                      color: Colors.white.withOpacity(0.82),
+                      width: 1,
+                    ),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withOpacity(0.22),
+                        blurRadius: 34,
+                        offset: const Offset(0, 18),
+                      ),
+                      BoxShadow(
+                        color: Colors.black.withOpacity(0.08),
+                        blurRadius: 70,
+                        offset: const Offset(0, 34),
+                      ),
+                    ],
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        '清空聊天记录',
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w700,
+                          color: Color(0xFF2D3142),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      const Text(
+                        '确定要清空当前对话的所有聊天记录吗？',
+                        style: TextStyle(
+                          fontSize: 14,
+                          height: 1.45,
+                          color: Color(0xFF2D3142),
+                        ),
+                      ),
+                      const SizedBox(height: 18),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.end,
+                        children: [
+                          TextButton(
+                            onPressed: () => Navigator.pop(context, false),
+                            style: TextButton.styleFrom(
+                              foregroundColor: Colors.grey[700],
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 14,
+                                vertical: 9,
+                              ),
+                            ),
+                            child: const Text('取消'),
+                          ),
+                          const SizedBox(width: 8),
+                          TextButton(
+                            onPressed: () => Navigator.pop(context, true),
+                            style: TextButton.styleFrom(
+                              foregroundColor: Colors.white,
+                              backgroundColor: color,
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 18,
+                                vertical: 9,
+                              ),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(10),
+                              ),
+                            ),
+                            child: const Text('清空'),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
           ),
-          TextButton(
-            onPressed: () => Navigator.pop(context, true),
-            style: TextButton.styleFrom(foregroundColor: Colors.red[700]),
-            child: const Text('确定'),
-          ),
-        ],
+        ),
       ),
     );
 
     if (confirm == true) {
-      await StorageService.clearConversation(widget.character.id);
+      await StorageService.clearConversation(
+        widget.character.id,
+        sessionId: _sessionId,
+      );
       setState(() {
         _messages.clear();
       });
+      await _refreshChatSessions();
       _loadConversation();
     }
   }
@@ -1513,7 +1714,12 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
       _messages.removeAt(index);
     });
 
-    await StorageService.saveConversation(widget.character.id, _messages);
+    await StorageService.saveConversation(
+      widget.character.id,
+      _messages,
+      sessionId: _sessionId,
+    );
+    await _refreshChatSessions();
     print('消息已删除（下标: $index）');
   }
 
@@ -1533,11 +1739,24 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
     final selected = await showMenu<String>(
       context: context,
       position: position,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-      color: Colors.white,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      color: Colors.white.withOpacity(0.96),
+      elevation: 12,
       items: [
         PopupMenuItem<String>(
+          value: 'copy',
+          height: 42,
+          child: Row(
+            children: [
+              Icon(Icons.copy_outlined, size: 18, color: Colors.grey[700]),
+              const SizedBox(width: 10),
+              const Text('复制消息', style: TextStyle(fontSize: 14)),
+            ],
+          ),
+        ),
+        PopupMenuItem<String>(
           value: 'delete',
+          height: 42,
           child: Row(
             children: [
               Icon(Icons.delete_outline, size: 18, color: Colors.red[400]),
@@ -1550,7 +1769,9 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
       ],
     );
 
-    if (selected == 'delete') {
+    if (selected == 'copy') {
+      await Clipboard.setData(ClipboardData(text: message.content));
+    } else if (selected == 'delete') {
       await _deleteMessage(index);
     }
   }
@@ -1559,35 +1780,693 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.transparent,
-      builder: (context) => Container(
-        padding: const EdgeInsets.all(20),
-        decoration: const BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ListTile(
-              leading: const Icon(Icons.image),
-              title: const Text('选择背景图片'),
-              onTap: () {
-                Navigator.pop(context);
-                _pickBackgroundImage();
-              },
-            ),
-            if (_backgroundImagePath != null)
-              ListTile(
-                leading: const Icon(Icons.delete),
-                title: const Text('清除背景图片'),
-                onTap: () {
-                  Navigator.pop(context);
-                  _clearBackgroundImage();
-                },
+      barrierColor: Colors.black.withOpacity(0.16),
+      builder: (context) {
+        final color = Color(int.parse('0xFF${widget.character.color}'));
+        final screenWidth = MediaQuery.of(context).size.width;
+        final panelWidth = min(screenWidth - 56, 520.0);
+
+        Widget buildAction({
+          required IconData icon,
+          required String title,
+          required VoidCallback onTap,
+          Color? foregroundColor,
+        }) {
+          final fg = foregroundColor ?? const Color(0xFF2D3142);
+          return Material(
+            color: Colors.transparent,
+            child: InkWell(
+              borderRadius: BorderRadius.circular(12),
+              onTap: onTap,
+              child: SizedBox(
+                height: 52,
+                child: Row(
+                  children: [
+                    SizedBox(
+                      width: 38,
+                      child: Icon(icon, size: 19, color: fg),
+                    ),
+                    Expanded(
+                      child: Text(
+                        title,
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w500,
+                          color: fg,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
               ),
-          ],
+            ),
+          );
+        }
+
+        return SafeArea(
+          top: false,
+          child: Align(
+            alignment: Alignment.bottomCenter,
+            child: Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(22),
+                child: BackdropFilter(
+                  filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+                  child: Container(
+                    width: panelWidth,
+                    padding: const EdgeInsets.fromLTRB(14, 8, 14, 12),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFF8F7FA).withOpacity(0.90),
+                      borderRadius: BorderRadius.circular(22),
+                      border: Border.all(
+                        color: Colors.white.withOpacity(0.82),
+                        width: 1,
+                      ),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withOpacity(0.24),
+                          blurRadius: 36,
+                          offset: const Offset(0, 18),
+                        ),
+                        BoxShadow(
+                          color: Colors.black.withOpacity(0.10),
+                          blurRadius: 76,
+                          offset: const Offset(0, 34),
+                        ),
+                      ],
+                    ),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Container(
+                          width: 36,
+                          height: 4,
+                          margin: const EdgeInsets.only(bottom: 10),
+                          decoration: BoxDecoration(
+                            color: Colors.black.withOpacity(0.12),
+                            borderRadius: BorderRadius.circular(99),
+                          ),
+                        ),
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(4, 0, 2, 4),
+                          child: Row(
+                            children: [
+                              const Expanded(
+                                child: Text(
+                                  '背景设置',
+                                  style: TextStyle(
+                                    fontSize: 17,
+                                    fontWeight: FontWeight.w700,
+                                    color: Color(0xFF2D3142),
+                                  ),
+                                ),
+                              ),
+                              Icon(Icons.wallpaper,
+                                  color: color.withOpacity(0.72), size: 19),
+                            ],
+                          ),
+                        ),
+                        buildAction(
+                          icon: Icons.image_outlined,
+                          title: '选择背景图片',
+                          onTap: () {
+                            Navigator.pop(context);
+                            _pickBackgroundImage();
+                          },
+                        ),
+                        if (_backgroundImagePath != null)
+                          buildAction(
+                            icon: Icons.delete_outline,
+                            title: '清除背景图片',
+                            foregroundColor: const Color(0xFFE85D75),
+                            onTap: () {
+                              Navigator.pop(context);
+                              _clearBackgroundImage();
+                            },
+                          ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  String _formatSessionTime(DateTime time) {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final day = DateTime(time.year, time.month, time.day);
+    final hour = time.hour.toString().padLeft(2, '0');
+    final minute = time.minute.toString().padLeft(2, '0');
+    if (day == today) return '$hour:$minute';
+    if (day == today.subtract(const Duration(days: 1))) {
+      return '昨天 $hour:$minute';
+    }
+    return '${time.month}月${time.day}日 $hour:$minute';
+  }
+
+  Future<void> _renameChatSession(ChatSession session) async {
+    final color = Color(int.parse('0xFF${widget.character.color}'));
+    final controller = TextEditingController(text: session.title);
+    final newTitle = await showDialog<String>(
+      context: context,
+      barrierColor: Colors.black.withOpacity(0.20),
+      builder: (context) => Dialog(
+        insetPadding: const EdgeInsets.symmetric(horizontal: 40),
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        child: Align(
+          alignment: Alignment.center,
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 440),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(18),
+              child: BackdropFilter(
+                filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+                child: Container(
+                  padding: const EdgeInsets.fromLTRB(20, 18, 20, 16),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF8F7FA).withOpacity(0.90),
+                    borderRadius: BorderRadius.circular(18),
+                    border: Border.all(
+                      color: Colors.white.withOpacity(0.82),
+                      width: 1,
+                    ),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withOpacity(0.22),
+                        blurRadius: 34,
+                        offset: const Offset(0, 18),
+                      ),
+                      BoxShadow(
+                        color: Colors.black.withOpacity(0.08),
+                        blurRadius: 70,
+                        offset: const Offset(0, 34),
+                      ),
+                    ],
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        '重命名对话',
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w700,
+                          color: Color(0xFF2D3142),
+                        ),
+                      ),
+                      const SizedBox(height: 14),
+                      TextField(
+                        controller: controller,
+                        autofocus: true,
+                        maxLength: 30,
+                        style: const TextStyle(
+                          fontSize: 14,
+                          color: Color(0xFF2D3142),
+                        ),
+                        decoration: InputDecoration(
+                          counterText: '',
+                          hintText: '输入对话名称',
+                          filled: true,
+                          fillColor: Colors.white.withOpacity(0.72),
+                          contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 13,
+                            vertical: 11,
+                          ),
+                          enabledBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(10),
+                            borderSide: BorderSide(
+                              color: Colors.black.withOpacity(0.08),
+                              width: 1,
+                            ),
+                          ),
+                          focusedBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(10),
+                            borderSide: BorderSide(color: color, width: 1.2),
+                          ),
+                        ),
+                        onSubmitted: (value) => Navigator.pop(context, value),
+                      ),
+                      const SizedBox(height: 16),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.end,
+                        children: [
+                          TextButton(
+                            onPressed: () => Navigator.pop(context),
+                            style: TextButton.styleFrom(
+                              foregroundColor: Colors.grey[700],
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 14,
+                                vertical: 9,
+                              ),
+                            ),
+                            child: const Text('取消'),
+                          ),
+                          const SizedBox(width: 8),
+                          TextButton(
+                            onPressed: () =>
+                                Navigator.pop(context, controller.text),
+                            style: TextButton.styleFrom(
+                              foregroundColor: Colors.white,
+                              backgroundColor: color,
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 18,
+                                vertical: 9,
+                              ),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(10),
+                              ),
+                            ),
+                            child: const Text('保存'),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
         ),
       ),
+    );
+    controller.dispose();
+
+    if (newTitle == null || newTitle.trim().isEmpty) return;
+    await StorageService.renameChatSession(
+      widget.character.id,
+      session.id,
+      newTitle,
+    );
+    await _refreshChatSessions();
+  }
+
+  Future<void> _deleteChatSession(ChatSession session) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      barrierColor: Colors.black.withOpacity(0.20),
+      builder: (context) => Dialog(
+        insetPadding: const EdgeInsets.symmetric(horizontal: 40),
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        child: Align(
+          alignment: Alignment.center,
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 440),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(18),
+              child: BackdropFilter(
+                filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+                child: Container(
+                  padding: const EdgeInsets.fromLTRB(20, 18, 20, 16),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF8F7FA).withOpacity(0.90),
+                    borderRadius: BorderRadius.circular(18),
+                    border: Border.all(
+                      color: Colors.white.withOpacity(0.82),
+                      width: 1,
+                    ),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withOpacity(0.22),
+                        blurRadius: 34,
+                        offset: const Offset(0, 18),
+                      ),
+                      BoxShadow(
+                        color: Colors.black.withOpacity(0.08),
+                        blurRadius: 70,
+                        offset: const Offset(0, 34),
+                      ),
+                    ],
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        '删除对话',
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w700,
+                          color: Color(0xFF2D3142),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      Text(
+                        '确定要删除“${session.title}”吗？',
+                        style: const TextStyle(
+                          fontSize: 14,
+                          height: 1.45,
+                          color: Color(0xFF2D3142),
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        '聊天记录和这段对话的独立设置都会删除。',
+                        style: TextStyle(
+                          fontSize: 12,
+                          height: 1.4,
+                          color: Colors.grey[600],
+                        ),
+                      ),
+                      const SizedBox(height: 18),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.end,
+                        children: [
+                          TextButton(
+                            onPressed: () => Navigator.pop(context, false),
+                            style: TextButton.styleFrom(
+                              foregroundColor: Colors.grey[700],
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 14,
+                                vertical: 9,
+                              ),
+                            ),
+                            child: const Text('取消'),
+                          ),
+                          const SizedBox(width: 8),
+                          TextButton(
+                            onPressed: () => Navigator.pop(context, true),
+                            style: TextButton.styleFrom(
+                              foregroundColor: Colors.white,
+                              backgroundColor: const Color(0xFFE85D75),
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 18,
+                                vertical: 9,
+                              ),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(10),
+                              ),
+                            ),
+                            child: const Text('删除'),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    if (confirm != true) return;
+
+    if (_isPlaying) {
+      await _stopAudio();
+    }
+
+    final nextActiveId = await StorageService.deleteChatSession(
+      widget.character.id,
+      session.id,
+    );
+    final sessions = await StorageService.loadChatSessions(widget.character.id);
+    final messages = await StorageService.loadConversation(
+      widget.character.id,
+      sessionId: nextActiveId,
+    );
+    if (!mounted) return;
+    setState(() {
+      _chatSessions = sessions;
+      _activeSessionId = nextActiveId;
+      _messages = messages;
+      _userMessageQueue.clear();
+      _pendingImagePaths = [];
+      _isLoading = false;
+      _isProcessingQueue = false;
+    });
+    await _loadCharacterSettings();
+    _scrollToBottom();
+  }
+
+  Future<void> _showChatSessionContextMenu(
+    ChatSession session,
+    Offset globalPosition,
+    BuildContext sheetContext,
+  ) async {
+    final selected = await showMenu<String>(
+      context: context,
+      position: RelativeRect.fromLTRB(
+        globalPosition.dx,
+        globalPosition.dy,
+        globalPosition.dx + 1,
+        globalPosition.dy + 1,
+      ),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      color: Colors.white.withOpacity(0.96),
+      elevation: 12,
+      items: [
+        PopupMenuItem<String>(
+          value: 'rename',
+          height: 42,
+          child: Row(
+            children: [
+              Icon(Icons.drive_file_rename_outline,
+                  size: 18, color: Colors.grey[700]),
+              const SizedBox(width: 10),
+              const Text('重命名'),
+            ],
+          ),
+        ),
+        PopupMenuItem<String>(
+          value: 'delete',
+          height: 42,
+          child: Row(
+            children: [
+              Icon(Icons.delete_outline, size: 18, color: Colors.red[400]),
+              const SizedBox(width: 10),
+              Text('删除', style: TextStyle(color: Colors.red[400])),
+            ],
+          ),
+        ),
+      ],
+    );
+
+    if (selected == 'rename') {
+      if (!mounted || !sheetContext.mounted) return;
+      Navigator.pop(sheetContext);
+      await _renameChatSession(session);
+    } else if (selected == 'delete') {
+      if (!mounted || !sheetContext.mounted) return;
+      Navigator.pop(sheetContext);
+      await _deleteChatSession(session);
+    }
+  }
+
+  void _showChatSessionMenu() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      barrierColor: Colors.black.withOpacity(0.16),
+      builder: (context) {
+        final color = Color(int.parse('0xFF${widget.character.color}'));
+        final screenWidth = MediaQuery.of(context).size.width;
+        final panelWidth = min(screenWidth - 56, 620.0);
+
+        return SafeArea(
+          top: false,
+          child: Align(
+            alignment: Alignment.bottomCenter,
+            child: Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(22),
+                child: BackdropFilter(
+                  filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+                  child: Container(
+                    width: panelWidth,
+                    constraints: BoxConstraints(
+                      maxHeight: MediaQuery.of(context).size.height * 0.54,
+                    ),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFF8F7FA).withOpacity(0.90),
+                      borderRadius: BorderRadius.circular(22),
+                      border: Border.all(
+                        color: Colors.white.withOpacity(0.82),
+                        width: 1,
+                      ),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withOpacity(0.24),
+                          blurRadius: 36,
+                          offset: const Offset(0, 18),
+                        ),
+                        BoxShadow(
+                          color: Colors.black.withOpacity(0.10),
+                          blurRadius: 76,
+                          offset: const Offset(0, 34),
+                        ),
+                      ],
+                    ),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const SizedBox(height: 8),
+                        Container(
+                          width: 36,
+                          height: 4,
+                          decoration: BoxDecoration(
+                            color: Colors.black.withOpacity(0.12),
+                            borderRadius: BorderRadius.circular(99),
+                          ),
+                        ),
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(18, 12, 14, 10),
+                          child: Row(
+                            children: [
+                              const Expanded(
+                                child: Text(
+                                  '对话',
+                                  style: TextStyle(
+                                    fontSize: 17,
+                                    fontWeight: FontWeight.w700,
+                                    color: Color(0xFF2D3142),
+                                  ),
+                                ),
+                              ),
+                              Tooltip(
+                                message: '新建对话',
+                                child: Material(
+                                  color: color.withOpacity(0.10),
+                                  borderRadius: BorderRadius.circular(10),
+                                  child: InkWell(
+                                    borderRadius: BorderRadius.circular(10),
+                                    onTap: () async {
+                                      Navigator.pop(context);
+                                      await _createNewChatSession();
+                                    },
+                                    child: SizedBox(
+                                      width: 34,
+                                      height: 34,
+                                      child: Icon(Icons.add_comment_outlined,
+                                          color: color, size: 18),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        Flexible(
+                          child: ListView.separated(
+                            shrinkWrap: true,
+                            padding: const EdgeInsets.fromLTRB(10, 0, 10, 10),
+                            itemCount: _chatSessions.length,
+                            separatorBuilder: (_, __) => Divider(
+                              height: 1,
+                              indent: 12,
+                              endIndent: 12,
+                              color: Colors.black.withOpacity(0.06),
+                            ),
+                            itemBuilder: (context, index) {
+                              final session = _chatSessions[index];
+                              final selected = session.id == _activeSessionId;
+                              return GestureDetector(
+                                behavior: HitTestBehavior.opaque,
+                                onSecondaryTapDown: (details) =>
+                                    _showChatSessionContextMenu(
+                                  session,
+                                  details.globalPosition,
+                                  context,
+                                ),
+                                child: Material(
+                                  color: Colors.transparent,
+                                  child: InkWell(
+                                    borderRadius: BorderRadius.circular(12),
+                                    onTap: () async {
+                                      Navigator.pop(context);
+                                      await _switchChatSession(session.id);
+                                    },
+                                    child: AnimatedContainer(
+                                      duration:
+                                          const Duration(milliseconds: 140),
+                                      curve: Curves.easeOut,
+                                      height: 56,
+                                      padding: const EdgeInsets.symmetric(
+                                          horizontal: 10),
+                                      decoration: BoxDecoration(
+                                        color: selected
+                                            ? color.withOpacity(0.10)
+                                            : Colors.transparent,
+                                        borderRadius: BorderRadius.circular(12),
+                                      ),
+                                      child: Row(
+                                        children: [
+                                          Expanded(
+                                            child: GestureDetector(
+                                              behavior: HitTestBehavior.opaque,
+                                              onDoubleTap: () async {
+                                                Navigator.pop(context);
+                                                await _renameChatSession(
+                                                    session);
+                                              },
+                                              child: Column(
+                                                mainAxisAlignment:
+                                                    MainAxisAlignment.center,
+                                                crossAxisAlignment:
+                                                    CrossAxisAlignment.start,
+                                                children: [
+                                                  Text(
+                                                    session.title,
+                                                    maxLines: 1,
+                                                    overflow:
+                                                        TextOverflow.ellipsis,
+                                                    style: TextStyle(
+                                                      fontSize: 14,
+                                                      fontWeight: selected
+                                                          ? FontWeight.w700
+                                                          : FontWeight.w500,
+                                                      color: const Color(
+                                                          0xFF2D3142),
+                                                    ),
+                                                  ),
+                                                  const SizedBox(height: 3),
+                                                  Text(
+                                                    _formatSessionTime(
+                                                        session.updatedAt),
+                                                    style: TextStyle(
+                                                      fontSize: 12,
+                                                      color: Colors.grey[500],
+                                                    ),
+                                                  ),
+                                                ],
+                                              ),
+                                            ),
+                                          ),
+                                          const SizedBox(width: 10),
+                                          AnimatedOpacity(
+                                            duration: const Duration(
+                                                milliseconds: 140),
+                                            opacity: selected ? 1 : 0,
+                                            child: Icon(Icons.check,
+                                                color: color, size: 20),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              );
+                            },
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+      },
     );
   }
 
@@ -1951,6 +2830,12 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
                               ),
                               // 右侧操作按钮
                               IconButton(
+                                icon: const Icon(Icons.forum_outlined,
+                                    color: Color(0xFF2D3142)),
+                                onPressed: _showChatSessionMenu,
+                                tooltip: '对话列表',
+                              ),
+                              IconButton(
                                 icon: const Icon(Icons.wallpaper,
                                     color: Color(0xFF2D3142)),
                                 onPressed: _showBackgroundMenu,
@@ -1962,9 +2847,10 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
                                   onPressed: _stopAudio,
                                 ),
                               IconButton(
-                                icon: Icon(Icons.delete_outline,
-                                    color: Colors.grey[700]),
+                                icon: const Icon(Icons.delete_outline,
+                                    color: Color(0xFF2D3142)),
                                 onPressed: _clearConversation,
+                                tooltip: '清空聊天记录',
                               ),
                               IconButton(
                                 icon: const Icon(Icons.settings_outlined,

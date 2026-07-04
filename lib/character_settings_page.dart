@@ -3,6 +3,7 @@ import 'dart:ui'; // 用于毛玻璃滤镜 ImageFilter
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'character_config.dart';
+import 'storage_service.dart';
 
 // ========================================
 // 自定义配置区域：设置页面视觉与排版
@@ -37,8 +38,10 @@ const double GLASS_SHADOW_OPACITY = 0.05; // 容器底部极微弱投影，保�
 // ========================================
 class CharacterSettingsPage extends StatefulWidget {
   final Character character;
+  final String? sessionId;
 
-  const CharacterSettingsPage({super.key, required this.character});
+  const CharacterSettingsPage(
+      {super.key, required this.character, this.sessionId});
 
   @override
   State<CharacterSettingsPage> createState() => _CharacterSettingsPageState();
@@ -62,6 +65,9 @@ class _CharacterSettingsPageState extends State<CharacterSettingsPage> {
   bool _isLoading = true;
   bool _hasUnsavedChanges = false;
 
+  String _key(String baseKey) => StorageService.scopedSettingKey(
+      baseKey, widget.character.id, widget.sessionId);
+
   @override
   void initState() {
     super.initState();
@@ -82,28 +88,59 @@ class _CharacterSettingsPageState extends State<CharacterSettingsPage> {
   Future<void> _loadSettings() async {
     final prefs = await SharedPreferences.getInstance();
     final id = widget.character.id;
+    final canUseLegacySettings =
+        widget.sessionId == null || widget.sessionId == 'default';
 
-    _userNameController.text = prefs.getString('user_name_$id') ?? '';
+    _userNameController.text = prefs.getString(_key('user_name')) ??
+        (canUseLegacySettings ? prefs.getString('user_name_$id') : null) ??
+        '';
     _userNamePronunciationController.text =
-        prefs.getString('user_name_pronunciation_$id') ?? '';
+        prefs.getString(_key('user_name_pronunciation')) ??
+            (canUseLegacySettings
+                ? prefs.getString('user_name_pronunciation_$id')
+                : null) ??
+            '';
 
-    final savedOverride = prefs.getString('personality_override_$id') ?? '';
+    final savedOverride = prefs.getString(_key('personality_override')) ??
+        (canUseLegacySettings
+            ? prefs.getString('personality_override_$id')
+            : null) ??
+        '';
     _personalityController.text =
         savedOverride.isNotEmpty ? savedOverride : widget.character.personality;
 
-    _proactiveEnabled = prefs.getBool('proactive_enabled_$id') ?? true;
-    _proactiveIntervalHours = (prefs.getInt('proactive_interval_$id') ??
+    _proactiveEnabled = prefs.getBool(_key('proactive_enabled')) ??
+        (canUseLegacySettings
+            ? prefs.getBool('proactive_enabled_$id')
+            : null) ??
+        true;
+    _proactiveIntervalHours = (prefs.getInt(_key('proactive_interval')) ??
+            (canUseLegacySettings
+                ? prefs.getInt('proactive_interval_$id')
+                : null) ??
             widget.character.proactiveMinIntervalHours)
         .toDouble();
-    _proactiveChance = prefs.getDouble('proactive_chance_$id') ??
+    _proactiveChance = prefs.getDouble(_key('proactive_chance')) ??
+        (canUseLegacySettings
+            ? prefs.getDouble('proactive_chance_$id')
+            : null) ??
         widget.character.proactiveIdleChance;
 
-    _ttsSpeed = prefs.getDouble('tts_speed_$id') ?? 1.0;
-    _emotionAnalysisEnabled =
-        prefs.getBool('emotion_analysis_enabled_$id') ?? true;
+    _ttsSpeed = prefs.getDouble(_key('tts_speed')) ??
+        (canUseLegacySettings ? prefs.getDouble('tts_speed_$id') : null) ??
+        1.0;
+    _emotionAnalysisEnabled = prefs.getBool(_key('emotion_analysis_enabled')) ??
+        (canUseLegacySettings
+            ? prefs.getBool('emotion_analysis_enabled_$id')
+            : null) ??
+        true;
 
-    _showOriginal = prefs.getBool('show_original_$id') ?? true;
-    _showTranslation = prefs.getBool('show_translation_$id') ?? true;
+    _showOriginal = prefs.getBool(_key('show_original')) ??
+        (canUseLegacySettings ? prefs.getBool('show_original_$id') : null) ??
+        true;
+    _showTranslation = prefs.getBool(_key('show_translation')) ??
+        (canUseLegacySettings ? prefs.getBool('show_translation_$id') : null) ??
+        true;
 
     if (mounted) {
       setState(() => _isLoading = false);
@@ -122,41 +159,40 @@ class _CharacterSettingsPageState extends State<CharacterSettingsPage> {
 
   Future<void> _saveSettings() async {
     final prefs = await SharedPreferences.getInstance();
-    final id = widget.character.id;
 
     final userName = _userNameController.text.trim();
     if (userName.isEmpty) {
-      await prefs.remove('user_name_$id');
+      await prefs.remove(_key('user_name'));
     } else {
-      await prefs.setString('user_name_$id', userName);
+      await prefs.setString(_key('user_name'), userName);
     }
 
     final userPronunciation = _userNamePronunciationController.text.trim();
     if (userPronunciation.isEmpty) {
-      await prefs.remove('user_name_pronunciation_$id');
+      await prefs.remove(_key('user_name_pronunciation'));
     } else {
-      await prefs.setString('user_name_pronunciation_$id', userPronunciation);
+      await prefs.setString(_key('user_name_pronunciation'), userPronunciation);
     }
 
     final personalityText = _personalityController.text;
     if (personalityText.isEmpty ||
         personalityText == widget.character.personality) {
-      await prefs.remove('personality_override_$id');
+      await prefs.remove(_key('personality_override'));
     } else {
-      await prefs.setString('personality_override_$id', personalityText);
+      await prefs.setString(_key('personality_override'), personalityText);
     }
 
-    await prefs.setBool('proactive_enabled_$id', _proactiveEnabled);
+    await prefs.setBool(_key('proactive_enabled'), _proactiveEnabled);
     await prefs.setInt(
-        'proactive_interval_$id', _proactiveIntervalHours.round());
-    await prefs.setDouble('proactive_chance_$id', _proactiveChance);
+        _key('proactive_interval'), _proactiveIntervalHours.round());
+    await prefs.setDouble(_key('proactive_chance'), _proactiveChance);
 
-    await prefs.setDouble('tts_speed_$id', _ttsSpeed);
+    await prefs.setDouble(_key('tts_speed'), _ttsSpeed);
     await prefs.setBool(
-        'emotion_analysis_enabled_$id', _emotionAnalysisEnabled);
+        _key('emotion_analysis_enabled'), _emotionAnalysisEnabled);
 
-    await prefs.setBool('show_original_$id', _showOriginal);
-    await prefs.setBool('show_translation_$id', _showTranslation);
+    await prefs.setBool(_key('show_original'), _showOriginal);
+    await prefs.setBool(_key('show_translation'), _showTranslation);
 
     if (mounted) {
       setState(() => _hasUnsavedChanges = false);
@@ -972,11 +1008,11 @@ class _SavedOverlayState extends State<_SavedOverlay>
 
   // 各阶段动画曲线（Interval 控制时间窗口）
   late final Animation<double> _cardEnter; // 卡片淡入 + 微放大
-  late final Animation<double> _circle;   // 圆圈路径绘制
-  late final Animation<double> _check;    // 对钩路径绘制
-  late final Animation<double> _bounce;   // 对钩完成后弹跳（线性→sin映射）
-  late final Animation<double> _text;     // 文字淡入上移
-  late final Animation<double> _exit;     // 整体淡出
+  late final Animation<double> _circle; // 圆圈路径绘制
+  late final Animation<double> _check; // 对钩路径绘制
+  late final Animation<double> _bounce; // 对钩完成后弹跳（线性→sin映射）
+  late final Animation<double> _text; // 文字淡入上移
+  late final Animation<double> _exit; // 整体淡出
 
   @override
   void initState() {
@@ -1031,7 +1067,8 @@ class _SavedOverlayState extends State<_SavedOverlay>
         final enterScale = 0.82 + 0.18 * _cardEnter.value;
         // 阻尼弹簧：仅作用于圆圈+对钩图标；大弹出→回压→小二次弹→收敛
         final b = _bounce.value;
-        final iconBounce = 1.0 + 0.55 * math.exp(-4.0 * b) * math.sin(4 * math.pi * b);
+        final iconBounce =
+            1.0 + 0.55 * math.exp(-4.0 * b) * math.sin(4 * math.pi * b);
 
         return Positioned.fill(
           child: IgnorePointer(
@@ -1118,7 +1155,7 @@ class _SavedOverlayState extends State<_SavedOverlay>
 // ========================================
 class _CheckCirclePainter extends CustomPainter {
   final double circleProgress; // 0.0→1.0：圆圈从顶部顺时针画完
-  final double checkProgress;  // 0.0→1.0：对钩从左到右画完
+  final double checkProgress; // 0.0→1.0：对钩从左到右画完
   final Color color;
 
   const _CheckCirclePainter({
@@ -1144,8 +1181,8 @@ class _CheckCirclePainter extends CustomPainter {
     if (circleProgress > 0) {
       canvas.drawArc(
         Rect.fromCircle(center: Offset(cx, cy), radius: r),
-        -math.pi / 2,                    // 起点：12点
-        2 * math.pi * circleProgress,    // 顺时针扫过的弧度
+        -math.pi / 2, // 起点：12点
+        2 * math.pi * circleProgress, // 顺时针扫过的弧度
         false,
         paint,
       );
