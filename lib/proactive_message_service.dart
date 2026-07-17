@@ -57,6 +57,7 @@ class ProactiveMessageService {
   //   'enabled'       - bool   主动消息总开关
   //   'intervalHours' - int    两次发送之间的最短间隔（小时）
   //   'chance'        - double 触发时实际发送的概率（0.0~1.0）
+  //   'contentInstruction' - String 主动消息内容方向
   //
   // 在 _onTimerFired() 和 _checkOfflineMessages() 的开头调用，
   // 确保每次触发前都读取最新的用户设置，无需重启 App。
@@ -88,6 +89,12 @@ class ProactiveMessageService {
               ? prefs.getDouble('proactive_chance_$id')
               : null) ??
           character.proactiveIdleChance,
+      'contentInstruction':
+          prefs.getString(key('proactive_content_instruction')) ??
+              (canUseLegacySettings
+                  ? prefs.getString('proactive_content_instruction_$id')
+                  : null) ??
+              character.proactiveContentInstruction,
       'sessionId': sessionId,
     };
   }
@@ -150,7 +157,10 @@ class ProactiveMessageService {
   //   date - 与 timeContext 相同的时间戳，用于生成对应的物候描述。
   //          三个调用点（_onTimerFired / _checkOfflineMessages / debugForceProactive）
   //          各自传入 displayTimestamp 或 fakeTimestamp。
-  String _buildProactiveInstruction({DateTime? date}) {
+  String _buildProactiveInstruction({
+    DateTime? date,
+    String? contentInstruction,
+  }) {
     // ----------------------------------------
     // 基础指令：和最初的简单版本完全一样
     // ----------------------------------------
@@ -172,6 +182,14 @@ class ProactiveMessageService {
     if (seasonCtx.isNotEmpty) {
       instruction.writeln('');
       instruction.writeln('（参考：$seasonCtx）');
+    }
+
+    final contentGuide = contentInstruction?.trim() ?? '';
+    if (contentGuide.isNotEmpty) {
+      instruction.writeln('');
+      instruction.writeln('【主动消息内容方向】');
+      instruction.writeln(contentGuide);
+      instruction.writeln('如果上面的季节参考与这里的作品世界观或内容方向冲突，以本段内容方向为准。');
     }
 
     // ----------------------------------------
@@ -238,6 +256,8 @@ class ProactiveMessageService {
       final bool enabled = settings['enabled'] as bool;
       final int intervalHours = settings['intervalHours'] as int;
       final double chance = settings['chance'] as double;
+      final String contentInstruction =
+          settings['contentInstruction'] as String;
       final String sessionId = settings['sessionId'] as String;
 
       // 主动消息已被用户关闭时，跳过该角色
@@ -297,6 +317,7 @@ class ProactiveMessageService {
           timeContext: timeContext,
           proactiveInstruction: _buildProactiveInstruction(
             date: fakeTimestamp,
+            contentInstruction: contentInstruction,
           ),
           characterLanguage: character.language,
         );
@@ -456,6 +477,7 @@ class ProactiveMessageService {
     final bool enabled = settings['enabled'] as bool;
     final int intervalHours = settings['intervalHours'] as int;
     final double chance = settings['chance'] as double;
+    final String contentInstruction = settings['contentInstruction'] as String;
     final String sessionId = settings['sessionId'] as String;
 
     // 主动消息已被用户在设置页关闭时，跳过本次触发
@@ -521,6 +543,7 @@ class ProactiveMessageService {
         timeContext: timeContext,
         proactiveInstruction: _buildProactiveInstruction(
           date: displayTimestamp,
+          contentInstruction: contentInstruction,
         ),
         characterLanguage: character.language,
       );
@@ -692,7 +715,9 @@ class ProactiveMessageService {
     // 通知首页显示"消息收取中..."
     _fetchingCallbacks['__global__']?.call(true);
 
-    final sessionId = await StorageService.getActiveSessionId(character.id);
+    final settings = await _getEffectiveSettings(character);
+    final String sessionId = settings['sessionId'] as String;
+    final String contentInstruction = settings['contentInstruction'] as String;
     final latestMessages = await StorageService.loadConversation(
       character.id,
       sessionId: sessionId,
@@ -727,6 +752,7 @@ class ProactiveMessageService {
         timeContext: timeContext,
         proactiveInstruction: _buildProactiveInstruction(
           date: displayTimestamp,
+          contentInstruction: contentInstruction,
         ),
         characterLanguage: character.language,
       );

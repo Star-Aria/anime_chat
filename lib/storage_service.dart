@@ -233,6 +233,7 @@ class StorageService {
     await prefs.remove(_sessionConversationKey(characterId, sessionId));
     for (final baseKey in [
       'user_name',
+      'user_name_translation',
       'user_name_pronunciation',
       'personality_override',
       'tts_speed',
@@ -242,6 +243,8 @@ class StorageService {
       'proactive_enabled',
       'proactive_interval',
       'proactive_chance',
+      'proactive_follow_up_chance',
+      'proactive_content_instruction',
       'last_proactive',
     ]) {
       await prefs.remove(scopedSettingKey(baseKey, characterId, sessionId));
@@ -423,9 +426,20 @@ class StorageService {
     final userName =
         prefs.getString(scopedSettingKey('user_name', id, resolvedSessionId)) ??
             (canUseLegacySettings ? prefs.getString('user_name_$id') : null);
+    final userNameTranslation = prefs.getString(
+            scopedSettingKey('user_name_translation', id, resolvedSessionId)) ??
+        (canUseLegacySettings
+            ? prefs.getString('user_name_translation_$id')
+            : null);
     if (userName != null && userName.isNotEmpty) {
-      base += '\n\n[用户称呼设置] 请在对话中用"$userName"称呼用户，'
+      base += '\n\n[用户称呼设置]\n'
+          '用户设置的唯一称呼是"$userName"。\n'
+          '称呼用户时必须逐字原样使用"$userName"，禁止私自添加、删除或替换任何前后缀。\n'
+          '如果用户希望带后缀，会直接在设置页写成完整称呼，例如"凛野さん"；否则禁止自行添加さん、ちゃん、くん、君、様、先生、小姐等称呼后缀。\n'
           '忽略以上提示词中的其他称呼设定。';
+      if (userNameTranslation != null && userNameTranslation.isNotEmpty) {
+        base += '\n中文翻译中显示用户称呼时，必须使用"$userNameTranslation"。';
+      }
     } else {
       base += '\n\n[用户称呼设置] 对方未设置称呼，请不要使用任何固定名字称呼用户，或直接不称呼。';
     }

@@ -308,7 +308,7 @@ const double kHeroVisibleHeight = 145.0; // 波浪容器顶部位置 (= 头图�
 //   - Alignment.bottomCenter   显示图片底部 (适合花树/前景主题)
 //   - Alignment(0, 0.3)        手动指定 y 偏移 (-1=最顶, 0=居中, 1=最底)
 // 想看不同区域: 改这个常量然后热重载即可
-const Alignment kHeroImageAlignment = Alignment(0, 0.2);
+const Alignment kHeroImageAlignment = Alignment(0, 0.4);
 
 // 头图上方覆盖一层白色蒙版, 让 logo / 标题文字浮在上面更清晰
 // 数值 = (顶部 alpha, 底部 alpha), 顶部更透 (露出更多原图), 底部更白 (柔化波浪衔接)
@@ -1884,6 +1884,8 @@ class _CharacterCardState extends State<_CharacterCard>
   // 卡片本体 + 边缘发光波纹层 (Stack 不裁剪, 让发光能溢出边缘)
   // ----------------------------------------
   Widget _buildCardWithGlow(Color characterColor) {
+    final glowColor = Color.lerp(characterColor, Colors.white, 0.18)!
+        .withBlue((characterColor.blue + 34).clamp(0, 255).toInt());
     return Stack(
       // clipBehavior: Clip.none 让边缘发光波纹能溢出卡片边界
       // 这是 F 效果的关键 - 没有这个就看不到光晕扩散
@@ -2030,9 +2032,9 @@ class _CharacterCardState extends State<_CharacterCard>
 
                 return CustomPaint(
                   painter: _GlowRingPainter(
-                    color: characterColor.withOpacity(0.7 * opacity),
-                    ringExpand: ringExpand,
-                    blur: blur,
+                    color: glowColor.withOpacity(0.78 * opacity),
+                    ringExpand: ringExpand * 0.82,
+                    blur: blur * 0.72,
                   ),
                 );
               },

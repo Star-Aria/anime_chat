@@ -49,12 +49,15 @@ class CharacterSettingsPage extends StatefulWidget {
 
 class _CharacterSettingsPageState extends State<CharacterSettingsPage> {
   late TextEditingController _userNameController;
+  late TextEditingController _userNameTranslationController;
   late TextEditingController _userNamePronunciationController;
   late TextEditingController _personalityController;
+  late TextEditingController _proactiveContentController;
 
   bool _proactiveEnabled = true;
   double _proactiveIntervalHours = 1.0;
   double _proactiveChance = 1.0;
+  double _proactiveFollowUpChance = 1.0;
 
   double _ttsSpeed = 1.0;
   bool _emotionAnalysisEnabled = true;
@@ -72,16 +75,20 @@ class _CharacterSettingsPageState extends State<CharacterSettingsPage> {
   void initState() {
     super.initState();
     _userNameController = TextEditingController();
+    _userNameTranslationController = TextEditingController();
     _userNamePronunciationController = TextEditingController();
     _personalityController = TextEditingController();
+    _proactiveContentController = TextEditingController();
     _loadSettings();
   }
 
   @override
   void dispose() {
     _userNameController.dispose();
+    _userNameTranslationController.dispose();
     _userNamePronunciationController.dispose();
     _personalityController.dispose();
+    _proactiveContentController.dispose();
     super.dispose();
   }
 
@@ -94,6 +101,12 @@ class _CharacterSettingsPageState extends State<CharacterSettingsPage> {
     _userNameController.text = prefs.getString(_key('user_name')) ??
         (canUseLegacySettings ? prefs.getString('user_name_$id') : null) ??
         '';
+    _userNameTranslationController.text =
+        prefs.getString(_key('user_name_translation')) ??
+            (canUseLegacySettings
+                ? prefs.getString('user_name_translation_$id')
+                : null) ??
+            '';
     _userNamePronunciationController.text =
         prefs.getString(_key('user_name_pronunciation')) ??
             (canUseLegacySettings
@@ -125,6 +138,18 @@ class _CharacterSettingsPageState extends State<CharacterSettingsPage> {
             ? prefs.getDouble('proactive_chance_$id')
             : null) ??
         widget.character.proactiveIdleChance;
+    _proactiveFollowUpChance =
+        prefs.getDouble(_key('proactive_follow_up_chance')) ??
+            (canUseLegacySettings
+                ? prefs.getDouble('proactive_follow_up_chance_$id')
+                : null) ??
+            widget.character.proactiveTopicChance;
+    _proactiveContentController.text =
+        prefs.getString(_key('proactive_content_instruction')) ??
+            (canUseLegacySettings
+                ? prefs.getString('proactive_content_instruction_$id')
+                : null) ??
+            widget.character.proactiveContentInstruction;
 
     _ttsSpeed = prefs.getDouble(_key('tts_speed')) ??
         (canUseLegacySettings ? prefs.getDouble('tts_speed_$id') : null) ??
@@ -147,8 +172,10 @@ class _CharacterSettingsPageState extends State<CharacterSettingsPage> {
     }
 
     _userNameController.addListener(_markUnsaved);
+    _userNameTranslationController.addListener(_markUnsaved);
     _userNamePronunciationController.addListener(_markUnsaved);
     _personalityController.addListener(_markUnsaved);
+    _proactiveContentController.addListener(_markUnsaved);
   }
 
   void _markUnsaved() {
@@ -165,6 +192,13 @@ class _CharacterSettingsPageState extends State<CharacterSettingsPage> {
       await prefs.remove(_key('user_name'));
     } else {
       await prefs.setString(_key('user_name'), userName);
+    }
+
+    final userNameTranslation = _userNameTranslationController.text.trim();
+    if (userNameTranslation.isEmpty) {
+      await prefs.remove(_key('user_name_translation'));
+    } else {
+      await prefs.setString(_key('user_name_translation'), userNameTranslation);
     }
 
     final userPronunciation = _userNamePronunciationController.text.trim();
@@ -186,6 +220,16 @@ class _CharacterSettingsPageState extends State<CharacterSettingsPage> {
     await prefs.setInt(
         _key('proactive_interval'), _proactiveIntervalHours.round());
     await prefs.setDouble(_key('proactive_chance'), _proactiveChance);
+    await prefs.setDouble(
+        _key('proactive_follow_up_chance'), _proactiveFollowUpChance);
+    final proactiveContentText = _proactiveContentController.text.trim();
+    if (proactiveContentText.isEmpty ||
+        proactiveContentText == widget.character.proactiveContentInstruction) {
+      await prefs.remove(_key('proactive_content_instruction'));
+    } else {
+      await prefs.setString(
+          _key('proactive_content_instruction'), proactiveContentText);
+    }
 
     await prefs.setDouble(_key('tts_speed'), _ttsSpeed);
     await prefs.setBool(
@@ -267,6 +311,14 @@ class _CharacterSettingsPageState extends State<CharacterSettingsPage> {
     }
   }
 
+  void _resetProactiveContentToDefault() {
+    setState(() {
+      _proactiveContentController.text =
+          widget.character.proactiveContentInstruction;
+      _hasUnsavedChanges = true;
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final themeColor = Color(int.parse('0xFF${widget.character.color}'));
@@ -303,6 +355,15 @@ class _CharacterSettingsPageState extends State<CharacterSettingsPage> {
                               label: '你的称呼 ',
                               hint: '例如：凛野',
                               helperText: '你希望AI称呼你使用的名字',
+                              maxLines: 1,
+                            ),
+                            const SizedBox(height: 16),
+                            _buildTextField(
+                              controller: _userNameTranslationController,
+                              label: '中文翻译称呼 ',
+                              hint: '例如：凛野小姐 / 凛野同学 / 凛野酱',
+                              helperText:
+                                  '只影响中文翻译显示。日文原文仍严格使用上面的称呼原文。',
                               maxLines: 1,
                             ),
                             const SizedBox(height: 16),
@@ -362,7 +423,7 @@ class _CharacterSettingsPageState extends State<CharacterSettingsPage> {
                               ),
                               _buildSlider(
                                 title: '触发概率',
-                                description: '定时器到点时实际发送消息的概率',
+                                description: '定时器到点时实际发送离线/主动消息的概率',
                                 value: _proactiveChance,
                                 min: 0.0,
                                 max: 1.0,
@@ -375,7 +436,65 @@ class _CharacterSettingsPageState extends State<CharacterSettingsPage> {
                                   _hasUnsavedChanges = true;
                                 }),
                               ),
+                              Padding(
+                                padding:
+                                    const EdgeInsets.symmetric(vertical: 8.0),
+                                child: Divider(
+                                    height: 1,
+                                    thickness: 0.5,
+                                    color: Colors.black.withOpacity(0.05)),
+                              ),
+                              _buildTextField(
+                                controller: _proactiveContentController,
+                                label: '主动消息内容方向',
+                                hint: '例如：多聊排练、舞台和音乐，不要聊其他番剧设定...',
+                                helperText:
+                                    '控制这个角色主动发消息时更容易聊哪些话题；留空或恢复默认时使用角色配置。',
+                                maxLines: 7,
+                                useFangSong: true,
+                              ),
+                              const SizedBox(height: 12),
+                              SizedBox(
+                                width: double.infinity,
+                                child: OutlinedButton.icon(
+                                  icon: const Icon(Icons.restore, size: 16),
+                                  label: const Text('恢复默认内容方向',
+                                      style: TextStyle(
+                                          fontFamily: SETTINGS_ITEM_TITLE_FONT,
+                                          fontSize: 13)),
+                                  onPressed: _resetProactiveContentToDefault,
+                                  style: OutlinedButton.styleFrom(
+                                    foregroundColor: themeColor,
+                                    side: BorderSide(
+                                        color: themeColor.withOpacity(0.35)),
+                                    padding:
+                                        const EdgeInsets.symmetric(vertical: 10),
+                                    backgroundColor:
+                                        Colors.white.withOpacity(0.5),
+                                  ),
+                                ),
+                              ),
                             ],
+                          ]),
+                          const SizedBox(height: 20),
+                          _buildSectionTitle(
+                              '连续消息设置', Icons.more_horiz_outlined),
+                          _buildCard([
+                            _buildSlider(
+                              title: '连续消息概率',
+                              description: 'AI 回复后继续补充一条消息的概率',
+                              value: _proactiveFollowUpChance,
+                              min: 0.0,
+                              max: 1.0,
+                              divisions: 20,
+                              displayLabel:
+                                  '${(_proactiveFollowUpChance * 100).round()}%',
+                              color: themeColor,
+                              onChanged: (v) => setState(() {
+                                _proactiveFollowUpChance = v;
+                                _hasUnsavedChanges = true;
+                              }),
+                            ),
                           ]),
                           const SizedBox(height: 20),
                           _buildSectionTitle('语音与显示设置', Icons.tune_outlined),
@@ -925,10 +1044,12 @@ class _CharacterSettingsPageState extends State<CharacterSettingsPage> {
     required Color color,
     required ValueChanged<double> onChanged,
   }) {
+    final mutedColor = Color.lerp(color, const Color(0xFF6B7280), 0.28)!;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Expanded(
               child: Column(
@@ -952,37 +1073,78 @@ class _CharacterSettingsPageState extends State<CharacterSettingsPage> {
             ),
             const SizedBox(width: 12),
             Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              constraints: const BoxConstraints(minWidth: 74),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
               decoration: BoxDecoration(
-                color: color.withOpacity(0.15),
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: color.withOpacity(0.3)),
+                borderRadius: BorderRadius.circular(999),
+                gradient: LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [
+                    Colors.white.withOpacity(0.82),
+                    color.withOpacity(0.16),
+                  ],
+                ),
+                border: Border.all(color: color.withOpacity(0.28), width: 0.8),
+                boxShadow: [
+                  BoxShadow(
+                    color: color.withOpacity(0.10),
+                    blurRadius: 10,
+                    offset: const Offset(0, 3),
+                  ),
+                ],
               ),
               child: Text(
                 displayLabel,
+                textAlign: TextAlign.center,
                 style: TextStyle(
                     fontFamily: SETTINGS_ITEM_TITLE_FONT,
-                    fontSize: 13,
+                    fontSize: 12.5,
                     fontWeight: FontWeight.w600,
-                    color: color), // 标签值保留主题色
+                    color: mutedColor),
               ),
             ),
           ],
         ),
-        SliderTheme(
-          data: SliderThemeData(
-            activeTrackColor: color,
-            inactiveTrackColor: color.withOpacity(0.2), // 轨道恢复颜色
-            thumbColor: color,
-            overlayColor: color.withOpacity(0.12),
-            trackHeight: 3.0,
+        const SizedBox(height: 12),
+        Container(
+          height: 38,
+          padding: const EdgeInsets.symmetric(horizontal: 8),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(999),
+            color: Colors.white.withOpacity(0.32),
+            border: Border.all(color: Colors.white.withOpacity(0.52)),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.025),
+                blurRadius: 8,
+                offset: const Offset(0, 3),
+              ),
+            ],
           ),
-          child: Slider(
-            value: value,
-            min: min,
-            max: max,
-            divisions: divisions,
-            onChanged: onChanged,
+          child: SliderTheme(
+            data: SliderThemeData(
+              activeTrackColor: color.withOpacity(0.48),
+              inactiveTrackColor: Colors.black.withOpacity(0.07),
+              thumbColor: Colors.white,
+              overlayColor: color.withOpacity(0.10),
+              trackHeight: 5.0,
+              trackShape: const RoundedRectSliderTrackShape(),
+              thumbShape: const RoundSliderThumbShape(
+                enabledThumbRadius: 8.5,
+                elevation: 2,
+                pressedElevation: 4,
+              ),
+              overlayShape: const RoundSliderOverlayShape(overlayRadius: 18),
+              tickMarkShape: SliderTickMarkShape.noTickMark,
+            ),
+            child: Slider(
+              value: value,
+              min: min,
+              max: max,
+              divisions: divisions,
+              onChanged: onChanged,
+            ),
           ),
         ),
       ],

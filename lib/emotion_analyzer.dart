@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
+import 'api_keys.dart';
 import 'character_config.dart';
 
 // ========================================
@@ -25,10 +26,10 @@ import 'character_config.dart';
 
 class EmotionAnalyzer {
   // ----------------------------------------
-  // DeepSeek API 配置（和 api_service.dart 保持同步）
+  // DeepSeek API 配置（和 api_service.dart 使用同一份 key）
   // ----------------------------------------
-  // 如果 API Key 或 base URL 有变化，在 api_service.dart 里改完后同步更新这里。
-  static const String _apiKey = 'sk-70f5215dc38d48838a52e3f47856679d';
+  // 如果 API Key 有变化，只需要修改 api_keys.dart。
+  static const String _apiKey = ApiKeys.deepseekApiKey;
   static const String _model = 'deepseek-chat';
   static const String _baseUrl = 'https://api.deepseek.com/v1';
 

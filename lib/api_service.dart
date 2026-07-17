@@ -34,6 +34,13 @@ class ApiService {
   static const int _maxTranslationRetries = 3;
   static const String _japaneseFallbackText = 'ごめん、ちょっと言葉が出てこなかった…もう一度話してくれる？';
 
+  static const Map<String, String> _japaneseNameTranslationMap = {
+    'カナヲ': '香奈乎',
+    'そよ': '爽世',
+    '長崎そよ': '长崎爽世',
+    'にゃむ': '若麦',
+  };
+
   // 生成对话回复
   // characterLanguage: 'ja' = 日语角色（默认），'zh' = 中文角色
   // 中文角色：AI 直接以中文回复，跳过日语校验与翻译步骤，
@@ -67,6 +74,9 @@ class ApiService {
 
       final StringBuffer systemBuffer = StringBuffer();
       systemBuffer.write(characterPersonality);
+      final exactUserName = _extractExactUserName(characterPersonality);
+      final translatedUserName =
+          _extractTranslatedUserName(characterPersonality);
 
       if (timeContext != null && timeContext.isNotEmpty) {
         systemBuffer.writeln();
@@ -78,10 +88,15 @@ class ApiService {
         systemBuffer.write(proactiveInstruction);
       }
 
-      // 中文角色：明确要求 AI 用中文回复，不需要日语
+      // 明确回复语言。角色人设大多用中文书写，如果不硬性指定，
+      // 模型容易先用中文回答，再触发后续翻译流程。
       if (characterLanguage == 'zh') {
         systemBuffer.writeln();
         systemBuffer.write('【语言要求】请全程用自然地道的中文回复，不要使用日语或其他语言。');
+      } else {
+        systemBuffer.writeln();
+        systemBuffer
+            .write('【语言要求】あなたは必ず自然な日本語だけで返答してください。中国語、翻訳文、説明文、前置きは出力しないでください。');
       }
 
       systemBuffer.writeln();
@@ -105,6 +120,17 @@ class ApiService {
 6. 可以联系你和对方的关系、你自己的经历来表达共鸣，让安慰更真实有温度
 
 未进入「情绪支持模式」时（即普通日常聊天），完全忽略以上规则，按平时正常方式回复。
+''');
+
+      systemBuffer.writeln();
+      systemBuffer.write('''
+【日常聊天硬性禁句】
+以下表达会让角色显得像客服或助手，严禁在普通聊天、开场寒暄、主动消息和连续补充消息中使用：
+- 中文："有什么事吗"、"有什么需要帮助的吗"、"我能帮你什么"、"需要我做什么"
+- 日语："何か用"、"何の用"、"ご用件"、"用事ですか"、"どうしましたか"
+
+如果用户只是打招呼，例如"早上好"、"晚上好"、"こんにちは"、"こんばんは"，不要追问对方有什么事。
+正确做法：自然回应问候，再顺着时间、天气、当前心情、角色自己的日常或与对方的关系说一句有内容的话。
 ''');
 
       final List<Map<String, String>> japaneseMessages = [
@@ -167,6 +193,58 @@ class ApiService {
       final japaneseData = jsonDecode(utf8.decode(japaneseResponse.bodyBytes));
       String rawResponseText =
           japaneseData['choices'][0]['message']['content'] as String;
+      rawResponseText =
+          _sanitizeUserNameHonorifics(rawResponseText, exactUserName);
+
+      if (_containsAssistantLikeGreetingQuestion(rawResponseText)) {
+        print('检测到助手式客套问句，自动重试生成回复: $rawResponseText');
+        japaneseMessages.add({
+          'role': 'assistant',
+          'content': rawResponseText,
+        });
+        japaneseMessages.add({
+          'role': 'user',
+          'content': characterLanguage == 'zh'
+              ? '刚才的回复像客服或助手，并且包含"有什么事吗"这类禁句。请重新回答：自然回应我的上一句话，不要问我有什么事，不要说有什么需要帮助。'
+              : '先ほどの返答は事務的で、「何か用」「ご用件」のような禁止表現を含んでいます。必ず自然な日本語で返答し直してください。相手に用件を尋ねず、挨拶を返して、今の時間・気分・日常の小さな話題を一言添えてください。',
+        });
+
+        final retryResponse = await http.post(
+          Uri.parse('$doubaoBaseUrl/chat/completions'),
+          headers: {
+            'Authorization': 'Bearer $doubaoApiKey',
+            'Content-Type': 'application/json',
+          },
+          body: jsonEncode({
+            'model': doubaoModel,
+            'messages': japaneseMessages,
+            'max_tokens': 1000,
+            'temperature': 0.75,
+            'stream': false,
+            'top_p': 0.9,
+            'presence_penalty': 0.0,
+            'frequency_penalty': 0.2,
+          }),
+        );
+
+        if (retryResponse.statusCode == 200) {
+          final retryData = jsonDecode(utf8.decode(retryResponse.bodyBytes));
+          final retryText =
+              retryData['choices'][0]['message']['content'] as String;
+          final sanitizedRetryText =
+              _sanitizeUserNameHonorifics(retryText, exactUserName);
+          if (!_containsAssistantLikeGreetingQuestion(sanitizedRetryText)) {
+            rawResponseText = sanitizedRetryText;
+          } else {
+            print('重试结果仍包含助手式客套问句，使用日常寒暄兜底: $retryText');
+            rawResponseText = _casualGreetingFallback(characterLanguage);
+          }
+        } else {
+          print('助手式问句重试 API 错误: ${retryResponse.statusCode}');
+          print('错误内容: ${retryResponse.body}');
+          rawResponseText = _casualGreetingFallback(characterLanguage);
+        }
+      }
 
       // ========================================
       // 中文角色：直接返回中文回复，跳过日语相关流程
@@ -198,6 +276,7 @@ class ApiService {
         for (int attempt = 1; attempt <= _maxTranslationRetries; attempt++) {
           print('  翻译尝试 $attempt / $_maxTranslationRetries ...');
           translated = await _translateToJapanese(rawResponseText);
+          translated = _sanitizeUserNameHonorifics(translated, exactUserName);
 
           if (_isLikelyJapanese(translated)) {
             print('  翻译成功（第 $attempt 次）: $translated');
@@ -217,7 +296,12 @@ class ApiService {
         }
       }
 
-      final japaneseText = _removeChinese(rawResponseText);
+      String japaneseText = _removeChinese(rawResponseText);
+      japaneseText = _sanitizeUserNameHonorifics(japaneseText, exactUserName);
+      if (_containsAssistantLikeGreetingQuestion(japaneseText)) {
+        print('最终日语回复仍包含助手式客套问句，使用日常寒暄兜底: $japaneseText');
+        japaneseText = _casualGreetingFallback(characterLanguage);
+      }
 
       final textForTranslation =
           japaneseText.replaceAll(RegExp(r'（[^）]*）'), '').trim();
@@ -229,7 +313,11 @@ class ApiService {
         final translationMessages = [
           {
             'role': 'system',
-            'content': '你是一个专业的日语翻译。请将用户提供的日语文本翻译成中文。只输出翻译结果，不要有任何额外的解释或说明。',
+            'content': '你是一个专业的日语翻译。请将用户提供的日语文本翻译成中文。只输出翻译结果，不要有任何额外的解释或说明。\n'
+                '译文要像朋友之间自然聊天的中文，不要过度书面、客套或正式。\n'
+                '禁止使用"您"、"您的"、"阁下"、"是否"、"不必"这类疏远或正式的说法，默认使用"你"、"你的"、"是不是"、"不用"。\n'
+                '专有名词不要猜测性别或改写。尤其禁止把日语敬称"さん"翻译成"先生"或"小姐"。\n'
+                '人名按固定映射翻译：そよ=爽世，長崎そよ=长崎爽世，豊川祥子=丰川祥子，若葉睦=若叶睦，燈=灯，愛音=爱音，楽奈=乐奈。',
           },
           {
             'role': 'user',
@@ -260,6 +348,13 @@ class ApiService {
               jsonDecode(utf8.decode(translationResponse.bodyBytes));
           chineseText =
               translationData['choices'][0]['message']['content'] as String;
+          chineseText = _localizeUserNameForChineseTranslation(
+            chineseText,
+            exactUserName,
+            translatedUserName,
+          );
+          chineseText = _applyJapaneseNameTranslationMap(chineseText);
+          chineseText = _casualizeChineseTranslation(chineseText);
         } else {
           print('翻译 API 错误: ${translationResponse.statusCode}');
           chineseText = '[翻译失败]';
@@ -600,6 +695,169 @@ class ApiService {
   // 这个函数本身没有删除，方便其他地方（如调试或将来的扩展）继续调用。
   static bool _hasChinese(String text) {
     return RegExp(r'[\u4e00-\u9fff]').hasMatch(text);
+  }
+
+  static bool _containsAssistantLikeGreetingQuestion(String text) {
+    final normalized = text
+        .replaceAll(RegExp(r'\s+'), '')
+        .replaceAll('？', '?')
+        .replaceAll('！', '!')
+        .toLowerCase();
+
+    final forbiddenPatterns = [
+      RegExp(r'有什么事'),
+      RegExp(r'有什麼事'),
+      RegExp(r'什么事[吗嘛呀啊]?'),
+      RegExp(r'需要.*帮助'),
+      RegExp(r'幫助'),
+      RegExp(r'帮你.*什么'),
+      RegExp(r'我能.*帮'),
+      RegExp(r'何か用'),
+      RegExp(r'何の用'),
+      RegExp(r'何用'),
+      RegExp(r'ご用件'),
+      RegExp(r'用件'),
+      RegExp(r'用事'),
+      RegExp(r'どうしました'),
+      RegExp(r'どうしたの'),
+      RegExp(r'どうかしました'),
+      RegExp(r'何かありました'),
+    ];
+
+    return forbiddenPatterns.any((pattern) => pattern.hasMatch(normalized));
+  }
+
+  static String? _extractExactUserName(String characterPersonality) {
+    final patterns = [
+      RegExp(r'用户设置的唯一称呼是"([^"]+)"'),
+      RegExp(r'请在对话中用"([^"]+)"称呼用户'),
+    ];
+
+    for (final pattern in patterns) {
+      final match = pattern.firstMatch(characterPersonality);
+      final value = match?.group(1)?.trim();
+      if (value != null && value.isNotEmpty) return value;
+    }
+    return null;
+  }
+
+  static String? _extractTranslatedUserName(String characterPersonality) {
+    final match =
+        RegExp(r'中文翻译中显示用户称呼时，必须使用"([^"]+)"').firstMatch(characterPersonality);
+    final value = match?.group(1)?.trim();
+    return value != null && value.isNotEmpty ? value : null;
+  }
+
+  static String _sanitizeUserNameHonorifics(
+      String text, String? exactUserName) {
+    if (exactUserName == null || exactUserName.isEmpty) return text;
+
+    final allowedSuffixes = [
+      'さん',
+      'ちゃん',
+      'くん',
+      '君',
+      '様',
+      'さま',
+      '先生',
+      '小姐',
+      '女士',
+      '同学',
+    ];
+
+    // 用户已经在设置页写了完整后缀时，尊重原样称呼，不再剥离。
+    if (allowedSuffixes.any((suffix) => exactUserName.endsWith(suffix))) {
+      return text;
+    }
+
+    var result = text;
+    for (final suffix in allowedSuffixes) {
+      result = result.replaceAll('$exactUserName$suffix', exactUserName);
+    }
+    return result;
+  }
+
+  static String _localizeUserNameForChineseTranslation(
+    String text,
+    String? exactUserName,
+    String? translatedUserName,
+  ) {
+    if (exactUserName == null || exactUserName.isEmpty) return text;
+
+    if (translatedUserName != null && translatedUserName.isNotEmpty) {
+      final baseName = _stripKnownHonorific(exactUserName);
+      return text
+          .replaceAll(exactUserName, translatedUserName)
+          .replaceAll('$baseName先生', translatedUserName)
+          .replaceAll('$baseName小姐', translatedUserName)
+          .replaceAll('$baseName同学', translatedUserName)
+          .replaceAll('$baseName酱', translatedUserName);
+    }
+
+    final honorificMap = <String, String>{
+      'さん': '同学',
+      'ちゃん': '酱',
+      'くん': '君',
+      '君': '君',
+      '様': '大人',
+      'さま': '大人',
+      '先生': '老师',
+    };
+
+    for (final entry in honorificMap.entries) {
+      final suffix = entry.key;
+      if (!exactUserName.endsWith(suffix)) continue;
+
+      final baseName =
+          exactUserName.substring(0, exactUserName.length - suffix.length);
+      if (baseName.isEmpty) return text;
+
+      final localizedName = '$baseName${entry.value}';
+      return text
+          .replaceAll(exactUserName, localizedName)
+          .replaceAll('$baseName先生', localizedName)
+          .replaceAll('$baseName小姐', localizedName)
+          .replaceAll('$baseName同学', localizedName);
+    }
+
+    return text;
+  }
+
+  static String _applyJapaneseNameTranslationMap(String text) {
+    var result = text;
+    _japaneseNameTranslationMap.forEach((source, target) {
+      result = result.replaceAll(source, target);
+    });
+    return result;
+  }
+
+  static String _casualizeChineseTranslation(String text) {
+    return text
+        .replaceAll('您的', '你的')
+        .replaceAll('您', '你')
+        .replaceAll('阁下', '你')
+        .replaceAll('是否', '是不是')
+        .replaceAll('不必', '不用')
+        .replaceAll('无需', '不用')
+        .replaceAll('一同', '一起')
+        .replaceAll('若是', '如果');
+  }
+
+  static String _stripKnownHonorific(String exactUserName) {
+    const suffixes = ['さん', 'ちゃん', 'くん', '君', '様', 'さま', '先生'];
+    for (final suffix in suffixes) {
+      if (exactUserName.endsWith(suffix)) {
+        return exactUserName.substring(0, exactUserName.length - suffix.length);
+      }
+    }
+    return exactUserName;
+  }
+
+  static String _casualGreetingFallback(String characterLanguage) {
+    if (characterLanguage == 'zh') {
+      return '晚上好。这个时间收到你的消息，还挺让人安心的。';
+    }
+    return 'こんばんは。こんな時間に声をかけてくれるの、少し不思議ですけれど……悪くありませんわ。';
   }
 
   // ========================================

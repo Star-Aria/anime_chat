@@ -102,7 +102,7 @@ const Map<String, String> PRONUNCIATION_DICT = {
   '燈': 'ともり',
   '愛音': 'あのん',
   '立希': 'たき',
-  '乐奈': 'らな',
+  '楽奈': 'らな',
 };
 
 const bool ENABLE_PRONUNCIATION_CORRECTION = true;
@@ -120,6 +120,7 @@ class ChatPage extends StatefulWidget {
 class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
   final TextEditingController _textController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
+  Offset? _lastInputPointerPosition;
 
   final AudioPlayer _audioPlayerPrimary = AudioPlayer();
   final AudioPlayer _audioPlayerSecondary = AudioPlayer();
@@ -159,6 +160,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
   // 设置变量缓存
   String? _personalityOverride;
   String? _userNameOverride;
+  String? _userNameTranslationOverride;
   String? _userNamePronunciation; // 新增：缓存用户的称呼读音
 
   bool _showOriginal = true; // 新增：是否显示日文原文
@@ -176,8 +178,15 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
             : widget.character.personality;
 
     if (_userNameOverride != null && _userNameOverride!.isNotEmpty) {
-      base += '\n\n[用户称呼设置] 请在对话中用"$_userNameOverride"称呼用户，'
+      base += '\n\n[用户称呼设置]\n'
+          '用户设置的唯一称呼是"$_userNameOverride"。\n'
+          '称呼用户时必须逐字原样使用"$_userNameOverride"，禁止私自添加、删除或替换任何前后缀。\n'
+          '如果用户希望带后缀，会直接在设置页写成完整称呼，例如"凛野さん"；否则禁止自行添加さん、ちゃん、くん、君、様、先生、小姐等称呼后缀。\n'
           '忽略以上提示词中的其他称呼设定。';
+      if (_userNameTranslationOverride != null &&
+          _userNameTranslationOverride!.isNotEmpty) {
+        base += '\n中文翻译中显示用户称呼时，必须使用"$_userNameTranslationOverride"。';
+      }
     } else {
       base += '\n\n[用户称呼设置] 对方未设置称呼，请不要使用任何固定名字称呼用户，或直接不称呼。';
     }
@@ -226,6 +235,11 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
             : null);
     final userNameOverride = prefs.getString(key('user_name')) ??
         (canUseLegacySettings ? prefs.getString('user_name_$id') : null);
+    final userNameTranslationOverride =
+        prefs.getString(key('user_name_translation')) ??
+            (canUseLegacySettings
+                ? prefs.getString('user_name_translation_$id')
+                : null);
     final userNamePronunciation =
         prefs.getString(key('user_name_pronunciation')) ??
             (canUseLegacySettings
@@ -259,6 +273,10 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
             (userNameOverride != null && userNameOverride.isNotEmpty)
                 ? userNameOverride
                 : null;
+        _userNameTranslationOverride = (userNameTranslationOverride != null &&
+                userNameTranslationOverride.isNotEmpty)
+            ? userNameTranslationOverride
+            : null;
         _userNamePronunciation =
             (userNamePronunciation != null && userNamePronunciation.isNotEmpty)
                 ? userNamePronunciation
@@ -272,6 +290,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
 
     print('已加载角色设置：'
         'userName=$_userNameOverride, '
+        'translationName=$_userNameTranslationOverride, '
         'pronunciation=$_userNamePronunciation, '
         'showOriginal=$_showOriginal, '
         'showTranslation=$_showTranslation, '
@@ -682,17 +701,27 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
     //
     // type 参数目前固定传 'follow_up'，预留给以后扩展其他类型（如 'reaction' 等）。
     //
-    // 触发概率由角色配置中的 proactiveTopicChance 控制：
-    //   - 蝴蝶忍: 0.35
-    //   - 时透无一郎: 0.25
-    //   - 富冈义勇: 0.15
-    // 可在 character_config.dart 中调整每个角色的 proactiveTopicChance。
+    // 触发概率优先读取设置页中的 proactive_follow_up_chance，
+    // 未设置时回退到角色配置中的 proactiveTopicChance。
     //
     // 连续发送上限由 _maxConsecutiveFollowUps 控制，防止无限连发。
     if (!mounted || _isLoading) return;
 
     // 概率判定：不满足则跳过，不追加消息
-    final double chance = widget.character.proactiveTopicChance;
+    final prefs = await SharedPreferences.getInstance();
+    final id = widget.character.id;
+    final sessionId = _sessionId;
+    final canUseLegacySettings = sessionId == null || sessionId == 'default';
+    final scopedKey = StorageService.scopedSettingKey(
+      'proactive_follow_up_chance',
+      id,
+      sessionId,
+    );
+    final double chance = prefs.getDouble(scopedKey) ??
+        (canUseLegacySettings
+            ? prefs.getDouble('proactive_follow_up_chance_$id')
+            : null) ??
+        widget.character.proactiveTopicChance;
     if (Random().nextDouble() >= chance) {
       print('连续消息概率未命中（${(chance * 100).toStringAsFixed(0)}%），不追加');
       return;
@@ -1373,6 +1402,19 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
           }
         }
       });
+
+      final characterPronunciationOverrides =
+          widget.character.pronunciationOverrides ?? const <String, String>{};
+      characterPronunciationOverrides.forEach((word, pronunciation) {
+        if (correctedText.contains(word)) {
+          if (PRONUNCIATION_MODE == 'bracket') {
+            correctedText =
+                correctedText.replaceAll(word, '$word[$pronunciation]');
+          } else {
+            correctedText = correctedText.replaceAll(word, pronunciation);
+          }
+        }
+      });
     }
 
     return correctedText;
@@ -1668,7 +1710,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
     final confirm = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(7)),
         title: const Text('删除消息',
             style: TextStyle(
                 fontWeight: FontWeight.bold, color: Color(0xFF2D3142))),
@@ -1739,7 +1781,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
     final selected = await showMenu<String>(
       context: context,
       position: position,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(7)),
       color: Colors.white.withOpacity(0.96),
       elevation: 12,
       items: [
@@ -2470,280 +2512,525 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
     );
   }
 
+  Widget _buildTextFieldContextMenu(
+    BuildContext context,
+    EditableTextState editableTextState,
+    Color color,
+  ) {
+    final buttonItems = editableTextState.contextMenuButtonItems;
+    final buttons = buttonItems.isEmpty
+        ? [
+            _buildContextMenuButton(
+              label: '粘贴',
+              onPressed: _pasteClipboardText,
+              foregroundColor: const Color.fromARGB(255, 24, 26, 35),
+            ),
+          ]
+        : buttonItems
+            .map((item) => _buildContextMenuButton(
+                  label: _contextMenuLabel(item),
+                  onPressed: item.onPressed,
+                  foregroundColor: const Color.fromARGB(255, 95, 99, 113),
+                ))
+            .toList();
+
+    return CustomSingleChildLayout(
+      delegate: _InputContextMenuLayoutDelegate(
+        anchor: _lastInputPointerPosition ??
+            editableTextState.contextMenuAnchors.primaryAnchor,
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(7),
+        child: Container(
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(7),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.14),
+                blurRadius: 16,
+                offset: const Offset(0, 6),
+              ),
+            ],
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: buttons,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildContextMenuButton({
+    required String label,
+    required VoidCallback? onPressed,
+    required Color foregroundColor,
+  }) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onPressed,
+        mouseCursor: SystemMouseCursors.click,
+        borderRadius: BorderRadius.circular(10),
+        overlayColor: WidgetStateProperty.resolveWith<Color?>((states) {
+          if (states.contains(WidgetState.pressed)) {
+            return const Color(0xFF2D3142).withOpacity(0.10);
+          }
+          if (states.contains(WidgetState.hovered)) {
+            return const Color(0xFF2D3142).withOpacity(0.06);
+          }
+          if (states.contains(WidgetState.focused)) {
+            return const Color(0xFF2D3142).withOpacity(0.08);
+          }
+          return null;
+        }),
+        child: SizedBox(
+          width: 90,
+          height: 42,
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(_contextMenuIconByLabel(label),
+                  size: 18, color: foregroundColor),
+              const SizedBox(width: 10),
+              Text(
+                label,
+                style: TextStyle(fontSize: 14, color: foregroundColor),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  IconData _contextMenuIconByLabel(String label) {
+    if (label == '粘贴') return Icons.content_paste;
+    if (label == '复制') return Icons.copy_outlined;
+    if (label == '剪切') return Icons.content_cut;
+    if (label == '全选') return Icons.select_all;
+    return Icons.more_horiz;
+  }
+
+  Future<void> _pasteClipboardText() async {
+    final data = await Clipboard.getData(Clipboard.kTextPlain);
+    final text = data?.text;
+    if (text == null || text.isEmpty) return;
+
+    final value = _textController.value;
+    final selection = value.selection;
+    final start = selection.isValid ? selection.start : value.text.length;
+    final end = selection.isValid ? selection.end : value.text.length;
+    final nextText = value.text.replaceRange(start, end, text);
+    final nextOffset = start + text.length;
+
+    _textController.value = TextEditingValue(
+      text: nextText,
+      selection: TextSelection.collapsed(offset: nextOffset),
+    );
+    ContextMenuController.removeAny();
+  }
+
+  String _contextMenuLabel(ContextMenuButtonItem item) {
+    if (item.type == ContextMenuButtonType.paste) return '粘贴';
+    if (item.type == ContextMenuButtonType.copy) return '复制';
+    if (item.type == ContextMenuButtonType.cut) return '剪切';
+    if (item.type == ContextMenuButtonType.selectAll) return '全选';
+    return item.label ?? '';
+  }
+
+  IconData _contextMenuIcon(ContextMenuButtonItem item) {
+    if (item.type == ContextMenuButtonType.paste) return Icons.content_paste;
+    if (item.type == ContextMenuButtonType.copy) return Icons.copy;
+    if (item.type == ContextMenuButtonType.cut) return Icons.content_cut;
+    if (item.type == ContextMenuButtonType.selectAll) {
+      return Icons.select_all;
+    }
+    return Icons.more_horiz;
+  }
+
   @override
   Widget build(BuildContext context) {
     final color = Color(int.parse('0xFF${widget.character.color}'));
 
     return Scaffold(
       backgroundColor: const Color(0xFFF5F7FA),
-      body: Stack(
-        children: [
-          // ========================================
-          // 第一层：聊天消息区域（铺满全屏，在 bar 下方也可见）
-          // ========================================
-          Column(
-            children: [
-              Expanded(
-                child: Stack(
-                  children: [
-                    _buildChatBackground(),
-                    ListView.builder(
-                      controller: _scrollController,
-                      // --- top padding 要大于 bar 高度，避免第一条消息被 bar 遮住 ---
-                      // kToolbarHeight 约 56，加上状态栏高度和额外间距
-                      // 可调：如果 bar 高度有变化，相应调整这里的 top 值
-                      padding: EdgeInsets.only(
-                          left: 16,
-                          right: 16,
-                          top: MediaQuery.of(context).padding.top +
-                              kToolbarHeight +
-                              12,
-                          bottom: 100),
-                      itemCount: _messages.length,
-                      itemBuilder: (context, index) {
-                        final message = _messages[index];
-                        final isUser = message.role == 'user';
-                        return _buildMessageBubble(
-                            message, isUser, color, index);
-                      },
-                    ),
-                  ],
+      body: Theme(
+        data: Theme.of(context).copyWith(
+          hoverColor: Colors.transparent,
+          highlightColor: Colors.transparent,
+          splashColor: Colors.transparent,
+        ),
+        child: Stack(
+          children: [
+            // ========================================
+            // 第一层：聊天消息区域（铺满全屏，在 bar 下方也可见）
+            // ========================================
+            Column(
+              children: [
+                Expanded(
+                  child: Stack(
+                    children: [
+                      _buildChatBackground(),
+                      ListView.builder(
+                        controller: _scrollController,
+                        // --- top padding 要大于 bar 高度，避免第一条消息被 bar 遮住 ---
+                        // kToolbarHeight 约 56，加上状态栏高度和额外间距
+                        // 可调：如果 bar 高度有变化，相应调整这里的 top 值
+                        padding: EdgeInsets.only(
+                            left: 16,
+                            right: 16,
+                            top: MediaQuery.of(context).padding.top +
+                                kToolbarHeight +
+                                12,
+                            bottom: 100),
+                        itemCount: _messages.length,
+                        itemBuilder: (context, index) {
+                          final message = _messages[index];
+                          final isUser = message.role == 'user';
+                          return _buildMessageBubble(
+                              message, isUser, color, index);
+                        },
+                      ),
+                    ],
+                  ),
                 ),
-              ),
-            ],
-          ),
+              ],
+            ),
 
-          // ========================================
-          // 第二层：底部输入栏（保持原有逻辑不变）
-          // ========================================
-          Positioned(
-            left: 0,
-            right: 0,
-            bottom: 0,
-            child: Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: [
-                    Colors.white.withOpacity(0.25),
-                    Colors.white.withOpacity(0.15),
-                  ],
-                ),
-                border: Border(
-                    top: BorderSide(
-                        color: Colors.white.withOpacity(0.3), width: 1)),
-                boxShadow: [
-                  BoxShadow(
-                      color: Colors.black.withOpacity(0.1),
-                      blurRadius: 20,
-                      offset: const Offset(0, -5)),
-                ],
-              ),
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(24),
+            // ========================================
+            // 第二层：底部输入栏（保持原有逻辑不变）
+            // ========================================
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: 0,
+              child: ClipRect(
                 child: BackdropFilter(
-                  filter: ImageFilter.blur(sigmaX: 15, sigmaY: 15),
+                  filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
                   child: Container(
                     decoration: BoxDecoration(
-                      color: Colors.transparent,
-                      borderRadius: BorderRadius.circular(24),
+                      gradient: LinearGradient(
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                        colors: [
+                          Colors.white.withOpacity(0.25),
+                          Colors.white.withOpacity(0.15),
+                        ],
+                      ),
+                      border: Border(
+                        top: BorderSide(
+                          color: Colors.white.withOpacity(0.35),
+                          width: 1,
+                        ),
+                      ),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withOpacity(0.10),
+                          blurRadius: 20,
+                          offset: const Offset(0, -5),
+                        ),
+                      ],
                     ),
-                    child: SafeArea(
-                      top: false,
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          if (_pendingImagePaths.isNotEmpty)
-                            Padding(
-                              padding: const EdgeInsets.only(bottom: 8),
-                              child: SizedBox(
-                                height: 64,
-                                child: ListView.separated(
-                                  scrollDirection: Axis.horizontal,
-                                  itemCount: _pendingImagePaths.length,
-                                  separatorBuilder: (_, __) =>
-                                      const SizedBox(width: 6),
-                                  itemBuilder: (_, i) => Stack(
-                                    clipBehavior: Clip.none,
-                                    children: [
-                                      ClipRRect(
-                                        borderRadius: BorderRadius.circular(8),
-                                        child: Image.file(
-                                          File(_pendingImagePaths[i]),
-                                          width: 56,
-                                          height: 56,
-                                          fit: BoxFit.cover,
+                    child: Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: SafeArea(
+                        top: false,
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            if (_pendingImagePaths.isNotEmpty)
+                              Padding(
+                                padding: const EdgeInsets.only(bottom: 8),
+                                child: SizedBox(
+                                  height: 64,
+                                  child: ListView.separated(
+                                    scrollDirection: Axis.horizontal,
+                                    itemCount: _pendingImagePaths.length,
+                                    separatorBuilder: (_, __) =>
+                                        const SizedBox(width: 6),
+                                    itemBuilder: (_, i) => Stack(
+                                      clipBehavior: Clip.none,
+                                      children: [
+                                        ClipRRect(
+                                          borderRadius:
+                                              BorderRadius.circular(8),
+                                          child: Image.file(
+                                            File(_pendingImagePaths[i]),
+                                            width: 56,
+                                            height: 56,
+                                            fit: BoxFit.cover,
+                                          ),
                                         ),
+                                        Positioned(
+                                          top: -4,
+                                          right: -4,
+                                          child: GestureDetector(
+                                            onTap: () => setState(() =>
+                                                _pendingImagePaths.removeAt(i)),
+                                            child: Container(
+                                              width: 16,
+                                              height: 16,
+                                              decoration: const BoxDecoration(
+                                                  color: Colors.black54,
+                                                  shape: BoxShape.circle),
+                                              child: const Icon(Icons.close,
+                                                  size: 11,
+                                                  color: Colors.white),
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            Row(
+                              children: [
+                                Padding(
+                                  padding: const EdgeInsets.only(right: 12),
+                                  child: GestureDetector(
+                                    onTap: _isLoading ? null : _pickImage,
+                                    child: Container(
+                                      width: 52,
+                                      height: 52,
+                                      decoration: BoxDecoration(
+                                        shape: BoxShape.circle,
+                                        boxShadow: [
+                                          BoxShadow(
+                                            color:
+                                                Colors.black.withOpacity(0.10),
+                                            blurRadius: 16,
+                                            offset: const Offset(0, 6),
+                                          ),
+                                        ],
                                       ),
-                                      Positioned(
-                                        top: -4,
-                                        right: -4,
-                                        child: GestureDetector(
-                                          onTap: () => setState(() =>
-                                              _pendingImagePaths.removeAt(i)),
+                                      child: ClipOval(
+                                        child: BackdropFilter(
+                                          filter: ImageFilter.blur(
+                                              sigmaX: 18, sigmaY: 18),
                                           child: Container(
-                                            width: 16,
-                                            height: 16,
-                                            decoration: const BoxDecoration(
-                                                color: Colors.black54,
-                                                shape: BoxShape.circle),
-                                            child: const Icon(Icons.close,
-                                                size: 11, color: Colors.white),
+                                            decoration: BoxDecoration(
+                                              shape: BoxShape.circle,
+                                              gradient: LinearGradient(
+                                                begin: Alignment.topLeft,
+                                                end: Alignment.bottomRight,
+                                                colors: [
+                                                  Colors.white
+                                                      .withOpacity(0.66),
+                                                  Colors.white
+                                                      .withOpacity(0.34),
+                                                ],
+                                              ),
+                                              border: Border.all(
+                                                color: Colors.white
+                                                    .withOpacity(0.72),
+                                                width: 1.4,
+                                              ),
+                                            ),
+                                            child: Icon(Icons.image_outlined,
+                                                size: 22,
+                                                color: color.withOpacity(0.78)),
                                           ),
                                         ),
                                       ),
+                                    ),
+                                  ),
+                                ),
+                                Expanded(
+                                  child: Container(
+                                    decoration: BoxDecoration(
+                                      borderRadius: BorderRadius.circular(30),
+                                      boxShadow: [
+                                        BoxShadow(
+                                          color: Colors.black.withOpacity(0.10),
+                                          blurRadius: 18,
+                                          offset: const Offset(0, 7),
+                                        ),
+                                      ],
+                                    ),
+                                    child: ClipRRect(
+                                      borderRadius: BorderRadius.circular(30),
+                                      child: BackdropFilter(
+                                        filter: ImageFilter.blur(
+                                            sigmaX: 18, sigmaY: 18),
+                                        child: Container(
+                                          constraints: const BoxConstraints(
+                                              minHeight: 56),
+                                          decoration: BoxDecoration(
+                                            gradient: LinearGradient(
+                                              begin: Alignment.topLeft,
+                                              end: Alignment.bottomRight,
+                                              colors: [
+                                                Colors.white.withOpacity(0.68),
+                                                Colors.white.withOpacity(0.42),
+                                              ],
+                                            ),
+                                            borderRadius:
+                                                BorderRadius.circular(30),
+                                            border: Border.all(
+                                                color: Colors.white
+                                                    .withOpacity(0.74),
+                                                width: 1.4),
+                                          ),
+                                          child: Listener(
+                                            onPointerDown: (event) {
+                                              _lastInputPointerPosition =
+                                                  event.position;
+                                            },
+                                            child: TextField(
+                                              controller: _textController,
+                                              style: const TextStyle(
+                                                  color: Color(0xFF2D3142),
+                                                  fontSize: 14),
+                                              decoration: InputDecoration(
+                                                hintText: _pendingImagePaths
+                                                        .isNotEmpty
+                                                    ? '给图片配上文字（可选）...'
+                                                    : '输入消息...',
+                                                hintStyle: const TextStyle(
+                                                    color: Color.fromARGB(
+                                                        255, 128, 128, 128),
+                                                    fontSize: 14),
+                                                border: InputBorder.none,
+                                                contentPadding:
+                                                    const EdgeInsets.symmetric(
+                                                        horizontal: 22,
+                                                        vertical: 15),
+                                              ),
+                                              contextMenuBuilder: (context,
+                                                      editableTextState) =>
+                                                  _buildTextFieldContextMenu(
+                                                context,
+                                                editableTextState,
+                                                color,
+                                              ),
+                                              maxLines: null,
+                                              textInputAction:
+                                                  TextInputAction.send,
+                                              onSubmitted: (_) =>
+                                                  _sendMessage(),
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(width: 12),
+                                Container(
+                                  width: 56,
+                                  height: 56,
+                                  decoration: BoxDecoration(
+                                    shape: BoxShape.circle,
+                                    boxShadow: [
+                                      BoxShadow(
+                                          color: color.withOpacity(0.28),
+                                          blurRadius: 18,
+                                          offset: const Offset(0, 7))
                                     ],
                                   ),
-                                ),
-                              ),
-                            ),
-                          Row(
-                            children: [
-                              GestureDetector(
-                                onTap: _isLoading ? null : _pickImage,
-                                child: Container(
-                                  width: 40,
-                                  height: 40,
-                                  margin: const EdgeInsets.only(right: 8),
-                                  decoration: BoxDecoration(
-                                    color: Colors.white.withOpacity(0.7),
-                                    shape: BoxShape.circle,
-                                    border: Border.all(
-                                        color: color.withOpacity(0.3),
-                                        width: 1.5),
-                                  ),
-                                  child: Icon(Icons.image_outlined,
-                                      size: 20, color: color.withOpacity(0.8)),
-                                ),
-                              ),
-                              Expanded(
-                                child: Container(
-                                  decoration: BoxDecoration(
-                                    color: Colors.white.withOpacity(0.6),
-                                    borderRadius: BorderRadius.circular(24),
-                                    border: Border.all(
-                                        color: color.withOpacity(0.2),
-                                        width: 1.5),
-                                  ),
-                                  child: TextField(
-                                    controller: _textController,
-                                    style: const TextStyle(
-                                        color: Color(0xFF2D3142), fontSize: 14),
-                                    decoration: InputDecoration(
-                                      hintText: _pendingImagePaths.isNotEmpty
-                                          ? '给图片配上文字（可选）...'
-                                          : '输入消息...',
-                                      hintStyle: const TextStyle(
-                                          color: Color.fromARGB(
-                                              255, 128, 128, 128),
-                                          fontSize: 14),
-                                      border: InputBorder.none,
-                                      contentPadding:
-                                          const EdgeInsets.symmetric(
-                                              horizontal: 20, vertical: 12),
+                                  child: ClipOval(
+                                    child: BackdropFilter(
+                                      filter: ImageFilter.blur(
+                                          sigmaX: 18, sigmaY: 18),
+                                      child: Container(
+                                        decoration: BoxDecoration(
+                                          shape: BoxShape.circle,
+                                          gradient: LinearGradient(
+                                            begin: Alignment.topLeft,
+                                            end: Alignment.bottomRight,
+                                            colors: [
+                                              Color.lerp(color, Colors.white,
+                                                      0.22)!
+                                                  .withOpacity(0.92),
+                                              color.withOpacity(0.78),
+                                            ],
+                                          ),
+                                          border: Border.all(
+                                            color:
+                                                Colors.white.withOpacity(0.50),
+                                            width: 1.2,
+                                          ),
+                                        ),
+                                        child: IconButton(
+                                          icon: const Icon(Icons.send,
+                                              color: Colors.white, size: 22),
+                                          onPressed:
+                                              _isLoading ? null : _sendMessage,
+                                        ),
+                                      ),
                                     ),
-                                    maxLines: null,
-                                    textInputAction: TextInputAction.send,
-                                    onSubmitted: (_) => _sendMessage(),
                                   ),
                                 ),
-                              ),
-                              const SizedBox(width: 12),
-                              Container(
-                                width: 48,
-                                height: 48,
-                                decoration: BoxDecoration(
-                                  gradient: LinearGradient(
-                                      colors: [color, color.withOpacity(0.8)]),
-                                  shape: BoxShape.circle,
-                                  boxShadow: [
-                                    BoxShadow(
-                                        color: color.withOpacity(0.4),
-                                        blurRadius: 12,
-                                        offset: const Offset(0, 4))
-                                  ],
-                                ),
-                                child: IconButton(
-                                  icon: const Icon(Icons.send,
-                                      color: Colors.white, size: 20),
-                                  onPressed: _isLoading ? null : _sendMessage,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ],
+                              ],
+                            ),
+                          ],
+                        ),
                       ),
                     ),
                   ),
                 ),
               ),
             ),
-          ),
-          // ========================================
-          // 第三层：顶部悬浮栏 -- 磨砂陶瓷质感，底部圆角，阴影悬浮
-          // ========================================
-          // 放在 Stack 最顶层，浮在聊天内容和背景之上。
-          // 不使用 Scaffold.appBar，这样 bar 底部圆角可以直接露出背景，
-          // 不会被系统 AppBar 的不透明矩形背景层遮挡。
-          Positioned(
-            top: 0,
-            left: 0,
-            right: 0,
-            child: Container(
-              // --- 外层 Container 只负责投射阴影，不裁切 ---
-              // 因为 ClipRRect 会把 boxShadow 也裁掉，
-              // 所以阴影放在 ClipRRect 外面的这个 Container 上
-              decoration: BoxDecoration(
-                borderRadius: const BorderRadius.only(
-                  bottomLeft: Radius.circular(18),
-                  bottomRight: Radius.circular(18),
-                ),
-                boxShadow: [
-                  // 外层浅阴影：制造悬浮离地感
-                  // blurRadius 控制阴影扩散范围（可调 6~20），opacity 控制深浅（可调 0.04~0.15）
-                  BoxShadow(
-                    color: Colors.black.withOpacity(0.15),
-                    blurRadius: 20,
-                    offset: const Offset(0, 5),
+            // ========================================
+            // 第三层：顶部悬浮栏 -- 磨砂陶瓷质感，底部圆角，阴影悬浮
+            // ========================================
+            // 放在 Stack 最顶层，浮在聊天内容和背景之上。
+            // 不使用 Scaffold.appBar，这样 bar 底部圆角可以直接露出背景，
+            // 不会被系统 AppBar 的不透明矩形背景层遮挡。
+            Positioned(
+              top: 0,
+              left: 0,
+              right: 0,
+              child: Container(
+                // --- 外层 Container 只负责投射阴影，不裁切 ---
+                // 因为 ClipRRect 会把 boxShadow 也裁掉，
+                // 所以阴影放在 ClipRRect 外面的这个 Container 上
+                decoration: BoxDecoration(
+                  borderRadius: const BorderRadius.only(
+                    bottomLeft: Radius.circular(18),
+                    bottomRight: Radius.circular(18),
                   ),
-                  // 第二层更柔和的远距离阴影，增加空间层次感
-                  BoxShadow(
-                    color: Colors.black.withOpacity(0.03),
-                    blurRadius: 30,
-                    offset: const Offset(0, 8),
-                  ),
-                ],
-              ),
-              child: ClipRRect(
-                // --- 底部圆角半径（可调范围 0~24，0 为直角）---
-                borderRadius: const BorderRadius.only(
-                  bottomLeft: Radius.circular(18),
-                  bottomRight: Radius.circular(18),
+                  boxShadow: [
+                    // 外层浅阴影：制造悬浮离地感
+                    // blurRadius 控制阴影扩散范围（可调 6~20），opacity 控制深浅（可调 0.04~0.15）
+                    BoxShadow(
+                      color: Colors.black.withOpacity(0.15),
+                      blurRadius: 20,
+                      offset: const Offset(0, 5),
+                    ),
+                    // 第二层更柔和的远距离阴影，增加空间层次感
+                    BoxShadow(
+                      color: Colors.black.withOpacity(0.03),
+                      blurRadius: 30,
+                      offset: const Offset(0, 8),
+                    ),
+                  ],
                 ),
-                child: BackdropFilter(
-                  // --- 磨砂模糊程度（可调范围 10~40，越大越模糊越朦胧）---
-                  filter: ImageFilter.blur(sigmaX: 32, sigmaY: 32),
+                child: ClipRRect(
+                  // --- 底部圆角半径（可调范围 0~24，0 为直角）---
+                  borderRadius: const BorderRadius.only(
+                    bottomLeft: Radius.circular(18),
+                    bottomRight: Radius.circular(18),
+                  ),
                   child: Container(
                     decoration: BoxDecoration(
                       // --- 陶瓷底色渐变：从上到下由浅白到微灰白，模拟真实陶瓷的柔和光泽 ---
-                      // 上方 opacity 可调 0.7~0.92（越大越白实），下方 0.55~0.8
+                      // 这里不用 BackdropFilter，避免鼠标移入顶栏/底栏时背景图被重新滤镜采样导致颜色闪变。
                       gradient: LinearGradient(
                         begin: Alignment.topCenter,
                         end: Alignment.bottomCenter,
                         colors: [
-                          Colors.white.withOpacity(0.92),
-                          Colors.white.withOpacity(0.72),
+                          Colors.white.withOpacity(0.94),
+                          Colors.white.withOpacity(0.78),
                         ],
                       ),
                       borderRadius: const BorderRadius.only(
                         bottomLeft: Radius.circular(18),
                         bottomRight: Radius.circular(18),
                       ),
-                      // --- 统一颜色的边框（borderRadius 要求四边颜色一致）---
-                      // 用极淡的灰线勾勒整体轮廓，让 bar 边界更清晰
-                      // opacity 可调 0.04~0.12，越大轮廓越明显
                       border: Border.all(
                         color: Colors.black.withOpacity(0.06),
                         width: 0.8,
@@ -2867,8 +3154,8 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
                 ),
               ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -2879,17 +3166,16 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
       return Stack(
         fit: StackFit.expand,
         children: [
-          Image.file(File(_backgroundImagePath!), fit: BoxFit.cover),
-          ClipRect(
-            child: BackdropFilter(
-              filter: ImageFilter.blur(
-                sigmaX: widget.character.backgroundBlurSigma,
-                sigmaY: widget.character.backgroundBlurSigma,
-              ),
-              child: Container(
-                  color: Colors.white
-                      .withOpacity(1.0 - widget.character.backgroundOpacity)),
+          ImageFiltered(
+            imageFilter: ImageFilter.blur(
+              sigmaX: widget.character.backgroundBlurSigma,
+              sigmaY: widget.character.backgroundBlurSigma,
             ),
+            child: Image.file(File(_backgroundImagePath!), fit: BoxFit.cover),
+          ),
+          Container(
+            color: Colors.white
+                .withOpacity(1.0 - widget.character.backgroundOpacity),
           ),
         ],
       );
@@ -2899,17 +3185,16 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
       return Stack(
         fit: StackFit.expand,
         children: [
-          Image.asset(BACKGROUND_IMAGE_PATH, fit: BoxFit.cover),
-          ClipRect(
-            child: BackdropFilter(
-              filter: ImageFilter.blur(
-                sigmaX: widget.character.backgroundBlurSigma,
-                sigmaY: widget.character.backgroundBlurSigma,
-              ),
-              child: Container(
-                  color: Colors.white
-                      .withOpacity(1.0 - widget.character.backgroundOpacity)),
+          ImageFiltered(
+            imageFilter: ImageFilter.blur(
+              sigmaX: widget.character.backgroundBlurSigma,
+              sigmaY: widget.character.backgroundBlurSigma,
             ),
+            child: Image.asset(BACKGROUND_IMAGE_PATH, fit: BoxFit.cover),
+          ),
+          Container(
+            color: Colors.white
+                .withOpacity(1.0 - widget.character.backgroundOpacity),
           ),
         ],
       );
@@ -3288,6 +3573,32 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
     } else {
       return Icon(Icons.refresh, size: 18, color: Colors.grey[600]);
     }
+  }
+}
+
+class _InputContextMenuLayoutDelegate extends SingleChildLayoutDelegate {
+  final Offset anchor;
+
+  _InputContextMenuLayoutDelegate({required this.anchor});
+
+  @override
+  BoxConstraints getConstraintsForChild(BoxConstraints constraints) {
+    return BoxConstraints.loose(constraints.biggest);
+  }
+
+  @override
+  Offset getPositionForChild(Size size, Size childSize) {
+    final maxDx = max(8.0, size.width - childSize.width - 8);
+    final dx = (anchor.dx + 10).clamp(8.0, maxDx).toDouble();
+    final preferredDy = anchor.dy + 14;
+    final maxDy = max(8.0, size.height - childSize.height - 8);
+    final dy = preferredDy <= maxDy ? preferredDy : maxDy;
+    return Offset(dx, dy.clamp(8.0, maxDy).toDouble());
+  }
+
+  @override
+  bool shouldRelayout(_InputContextMenuLayoutDelegate oldDelegate) {
+    return oldDelegate.anchor != anchor;
   }
 }
 
