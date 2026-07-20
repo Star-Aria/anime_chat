@@ -10,9 +10,11 @@ import 'dart:io';
 import 'character_config.dart';
 import 'storage_service.dart';
 import 'api_service.dart';
+import 'web_context_service.dart';
 import 'proactive_message_service.dart';
 import 'emotion_analyzer.dart';
 import 'character_settings_page.dart';
+import 'path_service.dart';
 
 // ========================================
 // 自定义配置区域
@@ -47,7 +49,7 @@ const String AI_TRANSLATION_FONT_FAMILY = 'FangSong';
 const double AI_TRANSLATION_FONT_SIZE = 13.0;
 const FontWeight AI_TRANSLATION_FONT_WEIGHT = FontWeight.normal;
 
-const String USER_AVATAR_PATH = 'C:\\anime_chat\\我的头像.jpg';
+const String USER_AVATAR_PATH = r'assets\我的头像.jpg';
 
 const Map<String, String> PRONUNCIATION_DICT = {
   '炭治郎': 'たんじろう',
@@ -140,6 +142,34 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
   String? _characterAvatarPath;
   String? _backgroundImagePath;
 
+  String? get _effectiveCharacterAvatarPath {
+    final customPath = _characterAvatarPath;
+    if (customPath != null && File(AppPaths.resolve(customPath)).existsSync()) {
+      return AppPaths.resolve(customPath);
+    }
+
+    final defaultPath = widget.character.defaultAvatarPath;
+    if (defaultPath.isNotEmpty && File(AppPaths.resolve(defaultPath)).existsSync()) {
+      return AppPaths.resolve(defaultPath);
+    }
+
+    return null;
+  }
+
+  String? get _effectiveBackgroundImagePath {
+    final customPath = _backgroundImagePath;
+    if (customPath != null && File(AppPaths.resolve(customPath)).existsSync()) {
+      return AppPaths.resolve(customPath);
+    }
+
+    final defaultPath = widget.character.defaultBackgroundPath;
+    if (defaultPath.isNotEmpty && File(AppPaths.resolve(defaultPath)).existsSync()) {
+      return AppPaths.resolve(defaultPath);
+    }
+
+    return null;
+  }
+
   final List<Map<String, dynamic>> _userMessageQueue = [];
   bool _isProcessingQueue = false;
 
@@ -147,6 +177,13 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
   // 每次用户发消息时重置为 0，每次 AI 成功追加一条就 +1，
   // 达到 _maxConsecutiveFollowUps 后不再追加
   int _consecutiveCount = 0;
+
+  // 当前用户消息触发的联网资料。
+  //
+  // 普通回复会先根据用户消息搜索天气/原作/现实信息；如果随后 AI 又连续补充一条，
+  // 那条连续消息仍然是在延续同一话题，也应该继续看到这一轮联网资料。
+  // 每次用户发新消息时会清空，避免把上一轮话题的资料串到新问题里。
+  String? _currentTurnWebContext;
 
   final Map<Message, bool> _regeneratingAudio = {};
   Message? _currentPlayingMessage;
@@ -502,6 +539,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
     if (text.isEmpty && imagePaths.isEmpty) return;
 
     _consecutiveCount = 0;
+    _currentTurnWebContext = null;
 
     final imgLabel = imagePaths.length > 1
         ? '[图片×${imagePaths.length}]'
@@ -571,8 +609,40 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
     final userMessage = (item['text'] as String?) ?? '';
     final imagePaths = List<String>.from(item['imagePaths'] as List? ?? []);
 
+    // 1. 先生成本地时间上下文：
+    //    这里不联网，只告诉 AI 当前年月日、星期、早中晚、距离上次聊天多久等。
     final timeContext = _generateTimeContext();
-    final recentMessages = StorageService.getRecentMessages(_messages);
+
+    // _messages 里已经包含了刚刚发送的用户消息。
+    // ApiService.generateResponse() 下面还会把 userMessage 作为“本轮最后一句”单独加入一次，
+    // 所以传历史时要去掉最后这条用户消息，避免同一句话在 prompt 里重复两遍。
+    //
+    // 这份历史也会交给 WebContextService，用来判断“这个是什么意思”
+    // 这类追问是否还在延续上一轮原作/角色资料话题。
+    final historyMessages = _messages.isNotEmpty && _messages.last.role == 'user'
+        ? _messages.sublist(0, _messages.length - 1)
+        : _messages;
+    final recentMessages = StorageService.getRecentMessages(historyMessages);
+
+    // 2. 再生成“现实/联网信息上下文”：
+    //    WebContextService 会根据当前角色 id 决定能查什么。
+    //    例如：
+    //    - 鬼灭角色：日本天气、日本节日、《鬼灭之刃》原作资料
+    //    - 祥子：东京天气、日本/国际节日、流行语、BanG Dream 资料
+    //    - 安迪：上海天气、中国/国际节日、经济、新闻、书影音等
+    //    如果用户这句话不需要联网，它会返回空字符串，不影响正常聊天。
+    final webContext = await WebContextService.buildContext(
+      userMessage: userMessage,
+      characterId: widget.character.id,
+      characterName: widget.character.name,
+      conversationHistory: recentMessages,
+    );
+    if (webContext.isNotEmpty) {
+      print('本轮联网上下文:\n$webContext');
+      _currentTurnWebContext = webContext;
+    } else {
+      _currentTurnWebContext = null;
+    }
 
     try {
       final responseMap = await ApiService.generateResponse(
@@ -580,6 +650,9 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
         conversationHistory: recentMessages,
         userMessage: userMessage,
         timeContext: timeContext,
+        // 把联网查到的内容塞进 system prompt，让角色用这些真实信息回答。
+        // 注意：最终说话的还是 DeepSeek 角色，不是搜索服务直接回复用户。
+        webContext: webContext,
         imagePaths: imagePaths.isNotEmpty ? imagePaths : null,
         characterLanguage: widget.character.language,
       );
@@ -736,10 +809,16 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
     try {
       final timeContext = _generateTimeContext();
       final recentMessages = StorageService.getRecentMessages(_messages);
+      final webContext = _currentTurnWebContext;
+      if (webContext != null && webContext.isNotEmpty) {
+        print('连续消息复用本轮联网上下文');
+      }
 
       // 追加消息使用正常的对话上下文（包含完整历史），
       // 因为这是同一轮对话中的连续发言，不是隔了很久的主动消息，
       // AI 接着之前的话题说是合理的。
+      // 如果本轮用户消息刚刚触发过联网搜索，这里会复用同一段 webContext，
+      // 避免连续补充消息退回模型记忆、把原作细节说偏。
       //
       // proactiveInstruction 传入追加消息的指令，
       // userMessage 传空字符串表示这不是用户发起的对话。
@@ -748,6 +827,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
           conversationHistory: recentMessages,
           userMessage: '',
           timeContext: timeContext,
+          webContext: webContext,
           characterLanguage: widget.character.language,
           proactiveInstruction: '你刚刚回复了对方的消息，现在你想再补充一句。\n'
               '可以是对刚才话题的延伸、突然想到的相关事情、'
@@ -1342,7 +1422,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
       // 发音替换：日语角色应用注音词典，中文角色只做用户名替换
       final correctedSentence = _applyPronunciationCorrection(sentence);
 
-      final String? audioPath = await ApiService.generateSpeech(
+      final List<String> generatedPaths = await ApiService.generateSpeechSegments(
         text: correctedSentence,
         referWavPath: referenceAudio.referWavPath,
         promptText: referenceAudio.promptText,
@@ -1351,9 +1431,9 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
         textLanguage: lang,
       );
 
-      if (audioPath != null) {
-        audioPaths.add(audioPath);
-        print('句子 [$i] 音频生成成功：$audioPath');
+      if (generatedPaths.isNotEmpty) {
+        audioPaths.addAll(generatedPaths);
+        print('句子 [$i] 音频生成成功：${generatedPaths.join(', ')}');
       } else {
         print('句子 [$i] 音频生成失败，跳过该段');
       }
@@ -1365,7 +1445,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
   Future<EmotionReferenceAudio> _getValidReferenceAudio(
       SpeechEmotion emotion) async {
     final audio = widget.character.getReferenceAudio(emotion);
-    if (await File(audio.referWavPath).exists()) {
+    if (await File(AppPaths.resolve(audio.referWavPath)).exists()) {
       return audio;
     }
     print('情绪音频文件不存在（${emotion.name}）：${audio.referWavPath}，回退到默认参考音频');
@@ -3062,9 +3142,9 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
                                         width: 2),
                                   ),
                                   child: ClipOval(
-                                    child: _characterAvatarPath != null
+                                    child: _effectiveCharacterAvatarPath != null
                                         ? Image.file(
-                                            File(_characterAvatarPath!),
+                                            File(_effectiveCharacterAvatarPath!),
                                             fit: BoxFit.cover)
                                         : Container(
                                             decoration: BoxDecoration(
@@ -3161,8 +3241,8 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
   }
 
   Widget _buildChatBackground() {
-    if (_backgroundImagePath != null &&
-        File(_backgroundImagePath!).existsSync()) {
+    final backgroundPath = _effectiveBackgroundImagePath;
+    if (backgroundPath != null) {
       return Stack(
         fit: StackFit.expand,
         children: [
@@ -3171,7 +3251,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
               sigmaX: widget.character.backgroundBlurSigma,
               sigmaY: widget.character.backgroundBlurSigma,
             ),
-            child: Image.file(File(_backgroundImagePath!), fit: BoxFit.cover),
+            child: Image.file(File(backgroundPath), fit: BoxFit.cover),
           ),
           Container(
             color: Colors.white
@@ -3228,8 +3308,9 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
                   width: 2),
             ),
             child: ClipOval(
-              child: _characterAvatarPath != null
-                  ? Image.file(File(_characterAvatarPath!), fit: BoxFit.cover)
+              child: _effectiveCharacterAvatarPath != null
+                  ? Image.file(File(_effectiveCharacterAvatarPath!),
+                      fit: BoxFit.cover)
                   : Container(
                       decoration: BoxDecoration(
                         gradient: LinearGradient(colors: [
@@ -3335,8 +3416,8 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
                     border: Border.all(color: color.withOpacity(0.3), width: 2),
                   ),
                   child: ClipOval(
-                    child: _characterAvatarPath != null
-                        ? Image.file(File(_characterAvatarPath!),
+                    child: _effectiveCharacterAvatarPath != null
+                        ? Image.file(File(_effectiveCharacterAvatarPath!),
                             fit: BoxFit.cover)
                         : Container(
                             decoration: BoxDecoration(
@@ -3511,8 +3592,9 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
                   ),
                   child: ClipOval(
                     child: USER_AVATAR_PATH.isNotEmpty &&
-                            File(USER_AVATAR_PATH).existsSync()
-                        ? Image.file(File(USER_AVATAR_PATH), fit: BoxFit.cover)
+                            File(AppPaths.resolve(USER_AVATAR_PATH)).existsSync()
+                        ? Image.file(File(AppPaths.resolve(USER_AVATAR_PATH)),
+                            fit: BoxFit.cover)
                         : Container(
                             decoration: BoxDecoration(
                               gradient: LinearGradient(

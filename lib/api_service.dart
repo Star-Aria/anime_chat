@@ -4,11 +4,12 @@ import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 import 'storage_service.dart';
 import 'api_keys.dart';
+import 'path_service.dart';
 
 class ApiService {
   static const String doubaoApiKey = ApiKeys.deepseekApiKey;
 
-  static const String doubaoModel = 'deepseek-chat';
+  static const String doubaoModel = 'deepseek-v4-flash';
 
   static const String doubaoBaseUrl = 'https://api.deepseek.com/v1';
 
@@ -51,6 +52,7 @@ class ApiService {
     required List<Message> conversationHistory,
     required String userMessage,
     String? timeContext,
+    String? webContext,
     String? proactiveInstruction,
     List<String>? imagePaths,
     String characterLanguage = 'ja',
@@ -81,6 +83,11 @@ class ApiService {
       if (timeContext != null && timeContext.isNotEmpty) {
         systemBuffer.writeln();
         systemBuffer.write(timeContext);
+      }
+
+      if (webContext != null && webContext.isNotEmpty) {
+        systemBuffer.writeln();
+        systemBuffer.write(webContext);
       }
 
       if (proactiveInstruction != null && proactiveInstruction.isNotEmpty) {
@@ -160,10 +167,18 @@ class ApiService {
         };
       }));
 
+      final currentUserContent = proactiveInstruction != null
+          ? ''
+          : _buildCurrentUserContent(
+              userMessage: userMessage,
+              imageContext: imageContext,
+              webContext: webContext,
+            );
+
       japaneseMessages.add(
         proactiveInstruction != null
             ? {'role': 'user', 'content': ''}
-            : {'role': 'user', 'content': '$userMessage$imageContext'},
+            : {'role': 'user', 'content': currentUserContent},
       );
 
       final japaneseResponse = await http.post(
@@ -174,6 +189,7 @@ class ApiService {
         },
         body: jsonEncode({
           'model': doubaoModel,
+          'thinking': {'type': 'disabled'},
           'messages': japaneseMessages,
           'max_tokens': 1000,
           'temperature': 0.8,
@@ -196,6 +212,17 @@ class ApiService {
       rawResponseText =
           _sanitizeUserNameHonorifics(rawResponseText, exactUserName);
 
+      if (_weatherContextForbidsRain(webContext) &&
+          _containsProhibitedRainClaim(rawResponseText)) {
+        print('检测到回复违背实时天气上下文，自动重试生成天气回复: $rawResponseText');
+        rawResponseText = await _retryWeatherGroundedResponse(
+          messages: japaneseMessages,
+          badResponse: rawResponseText,
+          characterLanguage: characterLanguage,
+          exactUserName: exactUserName,
+        );
+      }
+
       if (_containsAssistantLikeGreetingQuestion(rawResponseText)) {
         print('检测到助手式客套问句，自动重试生成回复: $rawResponseText');
         japaneseMessages.add({
@@ -217,6 +244,7 @@ class ApiService {
           },
           body: jsonEncode({
             'model': doubaoModel,
+            'thinking': {'type': 'disabled'},
             'messages': japaneseMessages,
             'max_tokens': 1000,
             'temperature': 0.75,
@@ -317,7 +345,7 @@ class ApiService {
                 '译文要像朋友之间自然聊天的中文，不要过度书面、客套或正式。\n'
                 '禁止使用"您"、"您的"、"阁下"、"是否"、"不必"这类疏远或正式的说法，默认使用"你"、"你的"、"是不是"、"不用"。\n'
                 '专有名词不要猜测性别或改写。尤其禁止把日语敬称"さん"翻译成"先生"或"小姐"。\n'
-                '人名按固定映射翻译：そよ=爽世，長崎そよ=长崎爽世，豊川祥子=丰川祥子，若葉睦=若叶睦，燈=灯，愛音=爱音，楽奈=乐奈。',
+                '人名按固定映射翻译，例如：そよ=爽世，長崎そよ=长崎爽世。',
           },
           {
             'role': 'user',
@@ -333,6 +361,7 @@ class ApiService {
           },
           body: jsonEncode({
             'model': doubaoModel,
+            'thinking': {'type': 'disabled'},
             'messages': translationMessages,
             'max_tokens': 1000,
             'temperature': 0.3,
@@ -374,6 +403,128 @@ class ApiService {
     }
   }
 
+  // 把“本轮实时资料”贴到最后一条用户消息前面。
+  //
+  // 原本 webContext 只放在 system prompt 里；system prompt 很长时，
+  // 模型容易被角色人设、旧聊天记录或自己的常识带偏。
+  // 这里再把同一份资料贴近用户最后一句，让模型在回答本轮问题时更容易看见。
+  static String _buildCurrentUserContent({
+    required String userMessage,
+    required String imageContext,
+    String? webContext,
+  }) {
+    final baseUserMessage = '$userMessage$imageContext';
+    if (webContext == null || webContext.trim().isEmpty) {
+      return baseUserMessage;
+    }
+
+    return '''
+【系统提供的本轮实时资料，不是用户发言】
+$webContext
+【使用要求】
+回答本轮用户问题时，必须优先服从上面的实时资料。可以自然融入角色语气，但不要和实时资料相反；不要逐字念出资料来源。
+
+【用户原话】
+$baseUserMessage
+''';
+  }
+
+  // 判断本轮天气上下文是否明确禁止说“正在下雨/要下雨”。
+  //
+  // WebContextService 在当前降水量为 0、天气代码不是雨雪雷时，
+  // 会写入“当前不允许说正在下雨...”这句硬限制。
+  static bool _weatherContextForbidsRain(String? webContext) {
+    if (webContext == null || webContext.isEmpty) return false;
+    return webContext.contains('【实时天气】') &&
+        webContext.contains('当前不允许说正在下雨');
+  }
+
+  // 判断回复里是否出现了和“当前无降水”冲突的说法。
+  //
+  // 注意：不能简单检测“雨”这个字。
+  // “没有下雨”“雷雨ではありません”是正确表达，不能误杀。
+  static bool _containsProhibitedRainClaim(String text) {
+    var normalized = text;
+    normalized = normalized.replaceAll(
+      RegExp(
+        r'没有下雨|不会下雨|不下雨|不是雨天|没有降雨|不会降雨|没有雷雨|不是雷雨|'
+        r'雨は降っていない|雨は降っていません|降っていない|降っていません|'
+        r'雨ではありません|雨じゃありません|雷雨ではありません|雷雨じゃありません',
+      ),
+      '',
+    );
+
+    return RegExp(
+      r'雷雨|雨模様|下雨|要下雨|会下雨|雨天|降雨|打雷|雷声|雷鳴|'
+      r'带伞|帶傘|雨伞|傘|本降り|雨が降|降り出|雷が',
+    ).hasMatch(normalized);
+  }
+
+  // 如果模型第一次无视实时天气，给它一次“带着错误原因”的重试机会。
+  //
+  // 这比直接改掉文本更自然：角色语气仍然由模型生成，
+  // 但必须承认当前实时天气不是雨。
+  static Future<String> _retryWeatherGroundedResponse({
+    required List<Map<String, String>> messages,
+    required String badResponse,
+    required String characterLanguage,
+    required String? exactUserName,
+  }) async {
+    final retryMessages = List<Map<String, String>>.from(messages)
+      ..add({
+        'role': 'assistant',
+        'content': badResponse,
+      })
+      ..add({
+        'role': 'user',
+        'content': characterLanguage == 'zh'
+            ? '刚才的回复违背了实时天气资料。当前实时天气不是雨天，不是雷雨，当前降水量为 0。请重新回答我的天气问题：可以提湿度高或体感闷热，但禁止说正在下雨、要下雨、雷雨、打雷或建议带伞。'
+            : '直前の返答はリアルタイム天気情報に反しています。現在の天気は雨でも雷雨でもなく、降水量は0です。湿度が高い、蒸し暑いとは言って構いませんが、雨、雷雨、雷、傘を持つべきという内容は禁止です。自然な日本語で返答し直してください。',
+      });
+
+    try {
+      final retryResponse = await http.post(
+        Uri.parse('$doubaoBaseUrl/chat/completions'),
+        headers: {
+          'Authorization': 'Bearer $doubaoApiKey',
+          'Content-Type': 'application/json',
+        },
+        body: jsonEncode({
+          'model': doubaoModel,
+          'thinking': {'type': 'disabled'},
+          'messages': retryMessages,
+          'max_tokens': 1000,
+          'temperature': 0.55,
+          'stream': false,
+          'top_p': 0.8,
+          'presence_penalty': 0.0,
+          'frequency_penalty': 0.3,
+        }),
+      );
+
+      if (retryResponse.statusCode == 200) {
+        final retryData = jsonDecode(utf8.decode(retryResponse.bodyBytes));
+        final retryText =
+            retryData['choices'][0]['message']['content'] as String;
+        final sanitizedRetryText =
+            _sanitizeUserNameHonorifics(retryText, exactUserName);
+        if (!_containsProhibitedRainClaim(sanitizedRetryText)) {
+          return sanitizedRetryText;
+        }
+        print('天气重试仍违背实时天气，使用天气兜底: $sanitizedRetryText');
+      } else {
+        print('天气重试 API 错误: ${retryResponse.statusCode}');
+        print('错误内容: ${retryResponse.body}');
+      }
+    } catch (e) {
+      print('天气重试失败: $e');
+    }
+
+    return characterLanguage == 'zh'
+        ? '现在不是雨天，也没有雷雨。只是湿度偏高，体感会有些闷热，外出不用特意因为下雨带伞。'
+        : '今は雨でも雷雨でもありませんわ。ただ湿度が高くて、少し蒸し暑く感じるかもしれません。';
+  }
+
   // 生成语音（GPT-SoVITS api_v2 TTS）- 支持长文本分段
   // textLanguage: 合成文本的语言，'ja'=日语（默认），'zh'=中文
   static Future<List<String>> generateSpeechSegments({
@@ -389,6 +540,7 @@ class ApiService {
     final cleanedText = _stripActionDescriptions(text);
     List<String> segments = _splitTextIntoSegments(cleanedText);
     List<String> audioPaths = [];
+    final resolvedReferWavPath = AppPaths.resolve(referWavPath);
 
     for (int i = 0; i < segments.length; i++) {
       final segment = segments[i].trim();
@@ -401,7 +553,7 @@ class ApiService {
             'Content-Type': 'application/json',
           },
           body: jsonEncode({
-            'ref_audio_path': referWavPath,
+            'ref_audio_path': resolvedReferWavPath,
             'prompt_text': promptText,
             'prompt_lang': promptLanguage,
             'text': segment,
@@ -452,13 +604,16 @@ class ApiService {
     required String sovitsModelPath,
   }) async {
     try {
+      final resolvedGptModelPath = AppPaths.resolve(gptModelPath);
+      final resolvedSovitsModelPath = AppPaths.resolve(sovitsModelPath);
       print('正在切换模型...');
-      print('GPT 模型: $gptModelPath');
-      print('SoVITS 模型: $sovitsModelPath');
+      print('GPT 模型: $resolvedGptModelPath');
+      print('SoVITS 模型: $resolvedSovitsModelPath');
 
       final gptResponse = await http.get(
-        Uri.parse(
-            '$gptSovitsBaseUrl/set_gpt_weights?weights_path=$gptModelPath'),
+        Uri.parse('$gptSovitsBaseUrl/set_gpt_weights').replace(
+          queryParameters: {'weights_path': resolvedGptModelPath},
+        ),
       );
 
       if (gptResponse.statusCode != 200) {
@@ -468,8 +623,9 @@ class ApiService {
       }
 
       final sovitsResponse = await http.get(
-        Uri.parse(
-            '$gptSovitsBaseUrl/set_sovits_weights?weights_path=$sovitsModelPath'),
+        Uri.parse('$gptSovitsBaseUrl/set_sovits_weights').replace(
+          queryParameters: {'weights_path': resolvedSovitsModelPath},
+        ),
       );
 
       if (sovitsResponse.statusCode != 200) {
@@ -603,6 +759,7 @@ class ApiService {
     String textLanguage = 'ja',
   }) async {
     final cleanedText = _stripActionDescriptions(text);
+    final resolvedReferWavPath = AppPaths.resolve(referWavPath);
 
     try {
       final response = await http.post(
@@ -611,7 +768,7 @@ class ApiService {
           'Content-Type': 'application/json',
         },
         body: jsonEncode({
-          'ref_audio_path': referWavPath,
+          'ref_audio_path': resolvedReferWavPath,
           'prompt_text': promptText,
           'prompt_lang': promptLanguage,
           'text': cleanedText,
@@ -656,6 +813,7 @@ class ApiService {
         },
         body: jsonEncode({
           'model': doubaoModel,
+          'thinking': {'type': 'disabled'},
           'messages': [
             {'role': 'user', 'content': '测试'},
           ],
@@ -836,8 +994,6 @@ class ApiService {
         .replaceAll('您的', '你的')
         .replaceAll('您', '你')
         .replaceAll('阁下', '你')
-        .replaceAll('是否', '是不是')
-        .replaceAll('不必', '不用')
         .replaceAll('无需', '不用')
         .replaceAll('一同', '一起')
         .replaceAll('若是', '如果');
@@ -896,6 +1052,7 @@ class ApiService {
         },
         body: jsonEncode({
           'model': doubaoModel,
+          'thinking': {'type': 'disabled'},
           'messages': [
             {
               'role': 'system',

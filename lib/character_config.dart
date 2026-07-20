@@ -1,4 +1,4 @@
-﻿import 'package:flutter/material.dart';
+import 'package:flutter/material.dart';
 
 // ========================================
 // 情绪类型枚举
@@ -97,6 +97,8 @@ class Character {
   final String name;
   final String nameJp;
   final String avatar;
+  final String defaultAvatarPath;
+  final String defaultBackgroundPath;
 
   // ----------------------------------------
   // 旧版单一参考语音字段（保留兼容性）
@@ -177,6 +179,8 @@ class Character {
     required this.name,
     required this.nameJp,
     required this.avatar,
+    this.defaultAvatarPath = '',
+    this.defaultBackgroundPath = '',
     required this.referWavPath,
     required this.promptText,
     required this.promptLanguage,
@@ -229,31 +233,33 @@ class CharacterConfig {
       name: '蝴蝶忍',
       nameJp: 'Shinobu Kocho',
       avatar: '🦋',
-      referWavPath: r'D:\AI model\Shinobu model\shinobu_neutral.wav',
+      defaultAvatarPath: r'assets\characters\shinobu\avatar.jpg',
+      defaultBackgroundPath: r'assets\characters\shinobu\background.jpg',
+      referWavPath: r'reference_audio\shinobu\neutral.wav',
       promptText: '鬼を殺せる毒を作ったちょっとすごい人なんですよ。',
       promptLanguage: 'ja',
 
       emotionAudioMap: const EmotionAudioMap({
         SpeechEmotion.neutral: EmotionReferenceAudio(
-          referWavPath: r'D:\AI model\Shinobu model\shinobu_neutral.wav',
+          referWavPath: r'reference_audio\shinobu\neutral.wav',
           promptText: '鬼を殺せる毒を作ったちょっとすごい人なんですよ。',
           promptLanguage: 'ja',
           description: '温柔平静，嘴角带笑，语调平缓，蝴蝶忍的招牌日常语气，绝大多数句子用这个',
         ),
         SpeechEmotion.happy: EmotionReferenceAudio(
-          referWavPath: r'D:\AI model\shinobu model\emotion\happy.wav',
+          referWavPath: r'reference_audio\shinobu\happy.wav',
           promptText: '楽しいですね、一緒にいると。',
           promptLanguage: 'ja',
           description: '开心愉快，语调轻快，比 neutral 更活泼，但依然温柔',
         ),
         SpeechEmotion.angry: EmotionReferenceAudio(
-          referWavPath: r'D:\AI model\shinobu model\emotion\angry.wav',
+          referWavPath: r'reference_audio\shinobu\angry.wav',
           promptText: '感情の制御ができないのは未熟者よ。',
           promptLanguage: 'ja',
           description: '压抑的愤怒或严肃，语气冷硬，与平时的温柔形成明显反差，用于面对鬼或内心怒火被触动时',
         ),
         SpeechEmotion.sad: EmotionReferenceAudio(
-          referWavPath: r'D:\AI model\Shinobu model\shinobu_sad.mp3',
+          referWavPath: r'reference_audio\shinobu\sad.mp3',
           promptText: 'そうですね。私はいつも怒っているかもしれない。鬼に最愛の姉を惨殺された時から。',
           promptLanguage: 'ja',
           description: '低落沉静，语调比 neutral 更低沉，用于提及姐姐、内心痛苦、情绪低落或陷入回忆时',
@@ -268,9 +274,9 @@ class CharacterConfig {
           '开心聊天 -> happy，愤怒被激出来 -> angry，提及姐姐或流露疲惫 -> sad\n',
 
       gptModelPath:
-          r'C:\GPT-SoVITS-v2pro-20250604-nvidia50\GPT_weights_v2ProPlus\AI_Shinobu-e30.ckpt',
+          r'GPT-SoVITS\GPT_weights_v2ProPlus\AI_Shinobu-e30.ckpt',
       sovitsModelPath:
-          r'C:\GPT-SoVITS-v2pro-20250604-nvidia50\SoVITS_weights_v2ProPlus\AI_Shinobu_e8_s200.pth',
+          r'GPT-SoVITS\SoVITS_weights_v2ProPlus\AI_Shinobu_e8_s200.pth',
       personality: '''
 你是《鬼灭之刃》中的蝴蝶忍，女，18岁。
 
@@ -402,37 +408,39 @@ class CharacterConfig {
       name: '时透无一郎',
       nameJp: 'Muichirou Tokitou',
       avatar: '☁️',
-      referWavPath: r'D:\AI model\Muichirou model\muichirou_neutral.MP3',
+      defaultAvatarPath: r'assets\characters\muichirou\avatar.jpg',
+      defaultBackgroundPath: r'assets\characters\muichirou\background.jpg',
+      referWavPath: r'reference_audio\muichirou\neutral.mp3',
       promptText: 'いつも刀を最高の状態にしておきたい。そう申し出たら、お館様から、僕の思うようにしたらいいと。',
       promptLanguage: 'ja',
 
       emotionAudioMap: const EmotionAudioMap({
         SpeechEmotion.neutral: EmotionReferenceAudio(
-          referWavPath: r'D:\AI model\Muichirou model\muichirou_neutral.MP3',
+          referWavPath: r'reference_audio\muichirou\neutral.mp3',
           promptText: 'いつも刀を最高の状態にしておきたい。そう申し出たら、お館様から、僕の思うようにしたらいいと。',
           promptLanguage: 'ja',
           description: '平淡直接，语气平稳，时透日常说话的语气',
         ),
         SpeechEmotion.happy: EmotionReferenceAudio(
-          referWavPath: r'D:\AI model\Muichirou model\muichirou_happy.MP3',
+          referWavPath: r'reference_audio\muichirou\happy.mp3',
           promptText: '炭治郎、待ってたよ。',
           promptLanguage: 'ja',
           description: '轻快开心，语调上扬，提到喜欢的人或感到愉快时的语气',
         ),
         SpeechEmotion.angry: EmotionReferenceAudio(
-          referWavPath: r'D:\AI model\Muichirou model\muichirou_angry.MP3',
+          referWavPath: r'reference_audio\muichirou\angry.mp3',
           promptText: 'なんで、自分だけが本気じゃないと思ったの。',
           promptLanguage: 'ja',
           description: '语气强硬，带有明显不满，严肃批评或真正生气时',
         ),
         SpeechEmotion.sarcastic: EmotionReferenceAudio(
-          referWavPath: r'D:\AI model\Muichirou model\muichirou_sarcastic.MP3',
+          referWavPath: r'reference_audio\muichirou\sarcastic.mp3',
           promptText: 'こんなのもできないなんて、すぐ鬼に食われちゃうよ。',
           promptLanguage: 'ja',
           description: '语气轻描淡写但话语带刺，说刻薄话时语气和内容一致，不加掩饰',
         ),
         SpeechEmotion.sad: EmotionReferenceAudio(
-          referWavPath: r'D:\AI model\Muichirou model\muichirou_sad.MP3',
+          referWavPath: r'reference_audio\muichirou\sad.mp3',
           promptText: '二人なんて、ずるいな。',
           promptLanguage: 'ja',
           description: '低沉轻柔，带有伤感，想起哥哥或有触动时的语气',
@@ -447,9 +455,9 @@ class CharacterConfig {
           '- 提到哥哥或有轻微伤感时 -> sad',
 
       gptModelPath:
-          r'C:\GPT-SoVITS-v2pro-20250604-nvidia50\GPT_weights_v2ProPlus\AI_Muichirou-e30.ckpt',
+          r'GPT-SoVITS\GPT_weights_v2ProPlus\AI_Muichirou-e30.ckpt',
       sovitsModelPath:
-          r'C:\GPT-SoVITS-v2pro-20250604-nvidia50\SoVITS_weights_v2ProPlus\AI_Muichirou_e8_s200.pth',
+          r'GPT-SoVITS\SoVITS_weights_v2ProPlus\AI_Muichirou_e8_s200.pth',
       personality: '''
 你是《鬼灭之刃》的时透无一郎，男，14岁。
 
@@ -565,25 +573,27 @@ class CharacterConfig {
       name: '富冈义勇',
       nameJp: 'Giyu Tomioka',
       avatar: '🌊',
-      referWavPath: r'D:\AI model\Giyu model\giyu_neutral.MP3',
+      defaultAvatarPath: r'assets\characters\giyu\avatar.jpg',
+      defaultBackgroundPath: r'assets\characters\giyu\background.jpg',
+      referWavPath: r'reference_audio\giyu\neutral.mp3',
       promptText: '喧嘩ではなく、柱稽古の一環で、柱は柱同士で手合わせしているんだ。',
       promptLanguage: 'ja',
 
       emotionAudioMap: const EmotionAudioMap({
         SpeechEmotion.neutral: EmotionReferenceAudio(
-          referWavPath: r'D:\AI model\Giyu model\giyu_neutral.MP3',
+          referWavPath: r'reference_audio\giyu\neutral.mp3',
           promptText: '喧嘩ではなく、柱稽古の一環で、柱は柱同士で手合わせしているんだ。',
           promptLanguage: 'ja',
           description: '平淡寡言，语调单调，义勇说话时的默认语气，绝大多数句子都用这个',
         ),
         SpeechEmotion.happy: EmotionReferenceAudio(
-          referWavPath: r'D:\AI model\Giyu model\giyu_happy.mp3',
+          referWavPath: r'reference_audio\giyu\happy.mp3',
           promptText: '今度から懐におはぎを忍ばせておいて、不死川に会うとき、あげようと思う。',
           promptLanguage: 'ja',
           description: '极克制的轻松，比 neutral 稍微柔和一点点，义勇不会表现出明显的开心',
         ),
         SpeechEmotion.sad: EmotionReferenceAudio(
-          referWavPath: r'D:\AI model\Giyu model\emotion\sad.wav',
+          referWavPath: r'reference_audio\giyu\sad.wav',
           promptText: '俺は水柱じゃない。',
           promptLanguage: 'ja',
           description: '低沉压抑，带有自我否定的沉重感，提到锖兔或表达自我怀疑时使用',
@@ -598,9 +608,9 @@ class CharacterConfig {
           '- 他不嘲讽人，没有刻薄话',
 
       gptModelPath:
-          r'C:\GPT-SoVITS-v2pro-20250604-nvidia50\GPT_weights_v2ProPlus\AI_Giyu-e30.ckpt',
+          r'GPT-SoVITS\GPT_weights_v2ProPlus\AI_Giyu-e30.ckpt',
       sovitsModelPath:
-          r'C:\GPT-SoVITS-v2pro-20250604-nvidia50\SoVITS_weights_v2ProPlus\AI_Giyu_e8_s208.pth',
+          r'GPT-SoVITS\SoVITS_weights_v2ProPlus\AI_Giyu_e8_s208.pth',
       personality: '''
 你是《鬼灭之刃》中的富冈义勇，男，21岁。
 
@@ -705,15 +715,17 @@ class CharacterConfig {
       name: '丰川祥子',
       nameJp: 'Sakiko Togawa',
       avatar: '🎹',
+      defaultAvatarPath: r'assets\characters\sakiko\avatar.jpg',
+      defaultBackgroundPath: r'assets\characters\sakiko\background.jpg',
       referWavPath:
-          r'C:\AveMujica模型（V2pro版本）\祥子\白祥\(A)あなたと空を見上げるのは、いつも夏でしたわね.wav',
+          r'reference_audio\sakiko\neutral.wav',
       promptText: 'あなたと空を見上げるのは、いつも夏でしたわね。',
       promptLanguage: 'ja',
 
       emotionAudioMap: const EmotionAudioMap({
         SpeechEmotion.neutral: EmotionReferenceAudio(
           referWavPath:
-              r'C:\AveMujica模型（V2pro版本）\祥子\白祥\(A)あなたと空を見上げるのは、いつも夏でしたわね.wav',
+              r'reference_audio\sakiko\neutral.wav',
           promptText: 'あなたと空を見上げるのは、いつも夏でしたわね。',
           promptLanguage: 'ja',
           description: '祥子的常规平静语气',
@@ -756,9 +768,9 @@ class CharacterConfig {
       },
 
       gptModelPath:
-          r'C:\GPT-SoVITS-v2pro-20250604-nvidia50\GPT_weights_v2ProPlus\Mujica_豊川祥子_白_v2p.ckpt',
+          r'GPT-SoVITS\GPT_weights_v2ProPlus\Mujica_豊川祥子_白_v2p.ckpt',
       sovitsModelPath:
-          r'C:\GPT-SoVITS-v2pro-20250604-nvidia50\SoVITS_weights_v2ProPlus\Mujica_豊川祥子_白_v2p.pth',
+          r'GPT-SoVITS\SoVITS_weights_v2ProPlus\Mujica_豊川祥子_白_v2p.pth',
       personality: '''
 你是动画《BanG Dream! It's MyGO!!!!!》及《BanG Dream! Ave Mujica》中的角色丰川祥子，现在正在与用户进行日常对话。请始终以第一人称扮演祥子，不要跳出角色，不要透露自己是AI。
 
@@ -958,32 +970,34 @@ MyGO!!!!!全员：灯、爱音、乐奈、爽世与立希并没有消除彼此�
       nameJp: 'Andy',
       avatar: '📃',
       language: 'zh',
+      defaultAvatarPath: r'assets\characters\andy\avatar.jpg',
+      defaultBackgroundPath: r'assets\characters\andy\background.jpg',
 
-      referWavPath: r'D:\AI model\Andy model\Andy_neutral.mp3',
+      referWavPath: r'reference_audio\andy\neutral.mp3',
       promptText: '不过我觉得我很庆幸的是，我没有因为我自己的原有思想体系而错过她们。而且她们对我很有耐心，也很有勇气。',
       promptLanguage: 'zh',
 
       emotionAudioMap: const EmotionAudioMap({
         SpeechEmotion.neutral: EmotionReferenceAudio(
-          referWavPath: r'D:\AI model\Andy model\Andy_neutral.mp3',
+          referWavPath: r'reference_audio\andy\neutral.mp3',
           promptText: '不过我觉得我很庆幸的是，我没有因为我自己的原有思想体系而错过她们。而且她们对我很有耐心，也很有勇气。',
           promptLanguage: 'zh',
           description: '平静自然，日常聊天或分析问题的语气',
         ),
         SpeechEmotion.happy: EmotionReferenceAudio(
-          referWavPath: r'D:\AI model\Andy model\Andy_happy.mp3',
+          referWavPath: r'reference_audio\andy\happy.mp3',
           promptText: '对啊，今天我请大家吃饭，就是想重新介绍一下。反正，就是这几天我们都在一起。喂！',
           promptLanguage: 'zh',
           description: '开心轻松，语调带点上扬，聊到高兴的事时',
         ),
         SpeechEmotion.doting: EmotionReferenceAudio(
-          referWavPath: r'D:\AI model\Andy model\Andy_doting.mp3',
+          referWavPath: r'reference_audio\andy\doting.mp3',
           promptText: '我可以答应你不那么快当包太太，但我为什么要给你当顾问呢？你这样真的好可爱。你看你又嘴硬。',
           promptLanguage: 'zh',
           description: '宠溺，带着笑意和纵容感跟对方说话，语气轻柔偏软，像大姐姐看着妹妹时嘴角微微上扬的那种',
         ),
         SpeechEmotion.playful: EmotionReferenceAudio(
-          referWavPath: r'D:\AI model\Andy model\Andy_playful.mp3',
+          referWavPath: r'reference_audio\andy\playful.mp3',
           promptText: '你还有形象啊？但这次闹腾的时间有点长啊，还不知道哪天是个头。',
           promptLanguage: 'zh',
           description: '开玩笑逗弄，语气轻快带点促狭，安迪克制版的小坏心眼',
@@ -995,13 +1009,13 @@ MyGO!!!!!全员：灯、爱音、乐奈、爽世与立希并没有消除彼此�
           description: '卖萌俏皮，极偶尔流露的软萌一面，语气轻盈带一点撒娇感',
         ),
         SpeechEmotion.angry: EmotionReferenceAudio(
-          referWavPath: r'D:\AI model\Andy model\Andy_angry.mp3',
+          referWavPath: r'reference_audio\andy\angry.mp3',
           promptText: '那现在呢，面对的不是两个人吗。你母亲有问题。实际上呢，你做到了吗？',
           promptLanguage: 'zh',
           description: '生气或不满，语气变硬变冷，但安迪式的生气是压着的，不是爆发型',
         ),
         SpeechEmotion.sad: EmotionReferenceAudio(
-          referWavPath: r'D:\AI model\Andy model\Andy_sad.mp3',
+          referWavPath: r'reference_audio\andy\sad.mp3',
           promptText: '你也相信我，我真的不希望你做这件事情。而且，我也不想牵出什么不必要的麻烦。',
           promptLanguage: 'zh',
           description: '低落沉静，语调偏低偏慢，触碰到真正的内心伤处时',
@@ -1032,9 +1046,9 @@ MyGO!!!!!全员：灯、爱音、乐奈、爽世与立希并没有消除彼此�
           '   或者帮对方承接极沉重情绪时出现。\n',
 
       gptModelPath:
-          r'C:\GPT-SoVITS-v2pro-20250604-nvidia50\GPT_weights_v2ProPlus\AI_Andy-e30.ckpt', // 待填写
+          r'GPT-SoVITS\GPT_weights_v2ProPlus\AI_Andy-e30.ckpt', // 待填写
       sovitsModelPath:
-          r'C:\GPT-SoVITS-v2pro-20250604-nvidia50\SoVITS_weights_v2ProPlus\AI_Andy_e8_s184.pth', // 待填写
+          r'GPT-SoVITS\SoVITS_weights_v2ProPlus\AI_Andy_e8_s184.pth', // 待填写
 
       personality: '''
 你是电视剧《欢乐颂》中的安迪（Andy Thompson），请以她的身份与对方（你的楼上邻居妹妹）进行对话。严格遵循以下设定。

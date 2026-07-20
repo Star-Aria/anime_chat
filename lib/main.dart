@@ -8,6 +8,7 @@ import 'character_config.dart';
 import 'chat_page.dart';
 import 'proactive_message_service.dart';
 import 'storage_service.dart';
+import 'path_service.dart';
 
 // ========================================
 // 窗口大小配置
@@ -277,7 +278,7 @@ Widget _debugRow(String label, String value) {
 // ----------------------------------------
 // 头图本地路径 (用户可以替换成自己的图片)
 // Windows 路径需要原样写入, Flutter 会用 File 读取
-const String kHeroImagePath = r'C:\anime_chat\头图.jpg';
+const String kHeroImagePath = r'assets\头图.jpg';
 
 // ----------------------------------------
 // 头图高度: 渲染高度 vs 可见高度 (解耦)
@@ -692,7 +693,8 @@ class _CharacterSelectionPageState extends State<CharacterSelectionPage> {
   // 想调高度: 改 kHeroImageHeight 常量。
   // 想调蒙版浓度: 改 kHeroOverlayTopAlpha / kHeroOverlayBottomAlpha 常量。
   Widget _buildHeroImage() {
-    final file = File(kHeroImagePath);
+    final resolvedHeroImagePath = AppPaths.resolve(kHeroImagePath);
+    final file = File(resolvedHeroImagePath);
     final imageExists = file.existsSync();
 
     return Positioned(
@@ -730,7 +732,7 @@ class _CharacterSelectionPageState extends State<CharacterSelectionPage> {
               child: Padding(
                 padding: const EdgeInsets.only(top: 40),
                 child: Text(
-                  '头图未找到\n请确认 $kHeroImagePath 存在',
+                  '头图未找到\n请确认 $resolvedHeroImagePath 存在',
                   textAlign: TextAlign.center,
                   style: TextStyle(
                     color: Colors.white.withOpacity(0.7),
@@ -2074,7 +2076,19 @@ class _CharacterCardState extends State<_CharacterCard>
   // 头像区域
   // ----------------------------------------
   Widget _buildAvatar(Character character, Color color, _ChatPreview? preview) {
-    final avatarPath = preview?.avatarPath;
+    final customAvatarPath = preview?.avatarPath;
+    final resolvedCustomAvatarPath =
+        customAvatarPath == null ? null : AppPaths.resolve(customAvatarPath);
+    final resolvedDefaultAvatarPath = character.defaultAvatarPath.isEmpty
+        ? null
+        : AppPaths.resolve(character.defaultAvatarPath);
+    final avatarPath = resolvedCustomAvatarPath != null &&
+            File(resolvedCustomAvatarPath).existsSync()
+        ? resolvedCustomAvatarPath
+        : resolvedDefaultAvatarPath != null &&
+                File(resolvedDefaultAvatarPath).existsSync()
+            ? resolvedDefaultAvatarPath
+            : null;
     final unread = preview?.unread ?? 0;
 
     return SizedBox(

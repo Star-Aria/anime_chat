@@ -30,7 +30,7 @@ class EmotionAnalyzer {
   // ----------------------------------------
   // 如果 API Key 有变化，只需要修改 api_keys.dart。
   static const String _apiKey = ApiKeys.deepseekApiKey;
-  static const String _model = 'deepseek-chat';
+  static const String _model = 'deepseek-v4-flash';
   static const String _baseUrl = 'https://api.deepseek.com/v1';
 
   // ========================================
@@ -157,6 +157,7 @@ class EmotionAnalyzer {
         },
         body: jsonEncode({
           'model': _model,
+          'thinking': {'type': 'disabled'},
           'messages': [
             {'role': 'system', 'content': systemPrompt},
             {'role': 'user', 'content': userPrompt},
