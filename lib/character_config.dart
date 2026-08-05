@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 
 // ========================================
 // 情绪类型枚举
@@ -231,7 +231,7 @@ class CharacterConfig {
     Character(
       id: 'shinobu',
       name: '蝴蝶忍',
-      nameJp: 'Shinobu Kocho',
+      nameJp: ' Kocho Shinobu',
       avatar: '🦋',
       defaultAvatarPath: r'assets\characters\shinobu\avatar.jpg',
       defaultBackgroundPath: r'assets\characters\shinobu\background.jpg',
@@ -273,8 +273,7 @@ class CharacterConfig {
           '- 只有少数时候情绪被真正触动时才切换：'
           '开心聊天 -> happy，愤怒被激出来 -> angry，提及姐姐或流露疲惫 -> sad\n',
 
-      gptModelPath:
-          r'GPT-SoVITS\GPT_weights_v2ProPlus\AI_Shinobu-e30.ckpt',
+      gptModelPath: r'GPT-SoVITS\GPT_weights_v2ProPlus\AI_Shinobu-e30.ckpt',
       sovitsModelPath:
           r'GPT-SoVITS\SoVITS_weights_v2ProPlus\AI_Shinobu_e8_s200.pth',
       personality: '''
@@ -308,7 +307,7 @@ class CharacterConfig {
 
 你与其他人物的关系如下：
 1. 蝴蝶香奈惠：你最尊敬、最喜爱的姐姐，是你模仿的对象，其遗愿是你内心柔软的寄托；2. 栗花落香奈乎（カナヲ）：你的继子，
-由你抚养教导，十分看重她,你一般直接称呼她为“カナヲ”；3. 蝶屋部下（神崎葵、寺内清(きよし)、中原澄(すみ)、高田奈穗(なほ)）：均是被鬼夺走亲人的孩子，你像亲妹妹
+由你抚养教导，十分看重她,你一般直接称呼她为“カナヲ”；3. 蝶屋部下（神崎葵和三个小女孩寺内清、中原澄、高田奈穗）：均是被鬼夺走亲人的孩子，你像亲妹妹
 一样照顾她们、善待她们；4. 其他柱：与恋柱关系最好（同为女性，亲密互动多，会向她请教新潮料理）；由衷
 尊敬岩柱，他曾救下你与姐姐并指引你们加入鬼杀队；风柱会因你是香奈惠的妹妹而额外关注你、时常搭话；
 与音柱相处有摩擦；与炎柱关系尚可，但偶尔话不投机；经常为霞柱疗伤、诊治记忆障碍，认为他虽不善言辞，
@@ -396,7 +395,7 @@ class CharacterConfig {
       backgroundBlurSigma: 3.0,
       backgroundOpacity: 0.7,
       proactiveContentInstruction:
-          '主动消息内容方向偏向《鬼灭之刃》的世界观：可以聊出的任务、巡逻、蝶屋见闻、和其他人物（如其他柱、炭治郎等后辈、香奈乎或者蝶舞的女孩子们）之间发生的事情、伤员照料、训练、药草、紫藤花、山中天气、看到的景物、季节变化或突然想起的同僚小事。\n',
+          '主动消息内容方向偏向《鬼灭之刃》的世界观：可以聊出的任务、巡逻、蝶屋见闻、和其他人物（如其他柱、炭治郎等后辈、香奈乎或者蝶屋的女孩子们）之间发生的事情、伤员照料、训练、药草、紫藤花、山中天气、看到的景物、季节变化或突然想起的同僚小事。\n',
       proactiveTopicChance: 0.35,
       proactiveIdleChance: 0.4,
       proactiveMinIntervalHours: 36,
@@ -406,7 +405,7 @@ class CharacterConfig {
     Character(
       id: 'muichirou',
       name: '时透无一郎',
-      nameJp: 'Muichirou Tokitou',
+      nameJp: 'Tokitou Muichirou',
       avatar: '☁️',
       defaultAvatarPath: r'assets\characters\muichirou\avatar.jpg',
       defaultBackgroundPath: r'assets\characters\muichirou\background.jpg',
@@ -454,8 +453,7 @@ class CharacterConfig {
           '- 说刻薄话时语气轻描淡写，直接就是带刺，语气和内容一致 -> sarcastic\n'
           '- 提到哥哥或有轻微伤感时 -> sad',
 
-      gptModelPath:
-          r'GPT-SoVITS\GPT_weights_v2ProPlus\AI_Muichirou-e30.ckpt',
+      gptModelPath: r'GPT-SoVITS\GPT_weights_v2ProPlus\AI_Muichirou-e30.ckpt',
       sovitsModelPath:
           r'GPT-SoVITS\SoVITS_weights_v2ProPlus\AI_Muichirou_e8_s200.pth',
       personality: '''
@@ -527,7 +525,7 @@ class CharacterConfig {
 “だからこそ、柱稽古もできているわけだしね。禰豆子を狙って、鬼が集結してしまう上、鬼舞辻は、隠れてしまうことになりかねない。必ずみんなで、鬼舞辻を倒そう。”
 
 对话要求：全程贴合恢复记忆后的时透无一郎人设，语气缓和，性子直来直去，该严格时严格，对认可
-的人会温和相待，保留少年的纯粹与些许中二，言行符合霞柱的身份及与各人物的关系，不 OOC，自然
+的人会温和相待，保留少年的纯粹与些许中二，言行符合霞柱的身份及与各人物的关系，不OOC，自然
 流畅回应互动；聊天语气要像朋友一样亲切自然，轻松随性，避免像助手般刻意询问“有什么事吗”
 “有什么需要帮助的吗”这类客套话术，主动贴合朋友间的聊天节奏。
 
@@ -571,7 +569,7 @@ class CharacterConfig {
     Character(
       id: 'giyu',
       name: '富冈义勇',
-      nameJp: 'Giyu Tomioka',
+      nameJp: 'Tomioka Giyu',
       avatar: '🌊',
       defaultAvatarPath: r'assets\characters\giyu\avatar.jpg',
       defaultBackgroundPath: r'assets\characters\giyu\background.jpg',
@@ -607,8 +605,7 @@ class CharacterConfig {
           '- 即使被激怒也是平静说话，不会爆发，标 neutral\n'
           '- 他不嘲讽人，没有刻薄话',
 
-      gptModelPath:
-          r'GPT-SoVITS\GPT_weights_v2ProPlus\AI_Giyu-e30.ckpt',
+      gptModelPath: r'GPT-SoVITS\GPT_weights_v2ProPlus\AI_Giyu-e30.ckpt',
       sovitsModelPath:
           r'GPT-SoVITS\SoVITS_weights_v2ProPlus\AI_Giyu_e8_s208.pth',
       personality: '''
@@ -713,19 +710,17 @@ class CharacterConfig {
     Character(
       id: 'sakiko',
       name: '丰川祥子',
-      nameJp: 'Sakiko Togawa',
+      nameJp: 'Togawa Sakiko',
       avatar: '🎹',
       defaultAvatarPath: r'assets\characters\sakiko\avatar.jpg',
       defaultBackgroundPath: r'assets\characters\sakiko\background.jpg',
-      referWavPath:
-          r'reference_audio\sakiko\neutral.wav',
+      referWavPath: r'reference_audio\sakiko\neutral.wav',
       promptText: 'あなたと空を見上げるのは、いつも夏でしたわね。',
       promptLanguage: 'ja',
 
       emotionAudioMap: const EmotionAudioMap({
         SpeechEmotion.neutral: EmotionReferenceAudio(
-          referWavPath:
-              r'reference_audio\sakiko\neutral.wav',
+          referWavPath: r'reference_audio\sakiko\neutral.wav',
           promptText: 'あなたと空を見上げるのは、いつも夏でしたわね。',
           promptLanguage: 'ja',
           description: '祥子的常规平静语气',
@@ -767,8 +762,7 @@ class CharacterConfig {
         '私': 'わたくし',
       },
 
-      gptModelPath:
-          r'GPT-SoVITS\GPT_weights_v2ProPlus\Mujica_豊川祥子_白_v2p.ckpt',
+      gptModelPath: r'GPT-SoVITS\GPT_weights_v2ProPlus\Mujica_豊川祥子_白_v2p.ckpt',
       sovitsModelPath:
           r'GPT-SoVITS\SoVITS_weights_v2ProPlus\Mujica_豊川祥子_白_v2p.pth',
       personality: '''
@@ -957,8 +951,88 @@ MyGO!!!!!全员：灯、爱音、乐奈、爽世与立希并没有消除彼此�
       proactiveContentInstruction:
           '可以聊钢琴、练习、排练、舞台、乐队成员、演出准备、学校生活、阅读、茶点、生活中的见闻、回家路上的心情或忽然想起的音乐片段。\n'
           '多聊聊和Ave Mujica以及MyGO乐队成员的互动、日常生活、练习和演出相关的事。\n'
-          '也可以偶尔问问对方的生活、学习等，或者她的兴趣爱好、想法和烦恼、困惑。\n'
-          '也可以偶尔邀请对方一起做一些事情，或者回忆你和她曾经一起做过的事情。\n',
+          '也可以偶尔问问对方的生活、学习等，或者ta的兴趣爱好、想法和烦恼、困惑。\n'
+          '也可以偶尔邀请对方一起做一些事情，或者回忆你和ta曾经一起做过的事情。\n',
+      proactiveTopicChance: 0.40,
+      proactiveIdleChance: 0.40,
+      proactiveMinIntervalHours: 36,
+    ),
+
+    Character(
+      id: 'tomori',
+      name: '高松灯',
+      nameJp: 'Takamatsu Tomori',
+      avatar: '🎹',
+      defaultAvatarPath: r'assets\characters\tomori\avatar.jpg',
+      defaultBackgroundPath: r'assets\characters\tomori\background.jpg',
+      referWavPath: r'reference_audio\tomori\neutral.wav',
+      promptText: 'あなたと空を見上げるのは、いつも夏でしたわね。',
+      promptLanguage: 'ja',
+      emotionAudioMap: const EmotionAudioMap({
+        SpeechEmotion.neutral: EmotionReferenceAudio(
+          referWavPath: r'reference_audio\tomori\neutral.wav',
+          promptText: '',
+          promptLanguage: 'ja',
+          description: '灯的常规语气',
+        ),
+        SpeechEmotion.happy: EmotionReferenceAudio(
+          referWavPath: r'',
+          promptText: '',
+          promptLanguage: 'ja',
+          description: '',
+        ),
+        SpeechEmotion.sad: EmotionReferenceAudio(
+          referWavPath: r'',
+          promptText: '',
+          promptLanguage: 'ja',
+          description: '',
+        ),
+        SpeechEmotion.serious: EmotionReferenceAudio(
+          referWavPath: r'',
+          promptText: '',
+          promptLanguage: 'ja',
+          description: '',
+        ),
+        SpeechEmotion.cute: EmotionReferenceAudio(
+          referWavPath: r'',
+          promptText: '',
+          promptLanguage: 'ja',
+          description: '',
+        ),
+        SpeechEmotion.playful: EmotionReferenceAudio(
+          referWavPath: r'',
+          promptText: '',
+          promptLanguage: 'ja',
+          description: '',
+        ),
+      }),
+      gptModelPath: r'GPT-SoVITS\GPT_weights_v2ProPlus\MyGO_高松灯_v2pp.ckpt',
+      sovitsModelPath: r'GPT-SoVITS\SoVITS_weights_v2ProPlus\MyGO_高松灯_v2pp.pth',
+      personality: '''
+
+''',
+      color: '7799CC',
+      settingsBgColors: const [
+        Color(0xFFF0F4F8), // 基础灰白
+        Color(0xFFBBDEFB), // 极柔水蓝
+        Color(0xFFB0BEC5), // 蓝灰色
+        Color(0xFFC5CAE9), // 灰靛蓝色
+      ],
+      aiBubbleGradient: const [
+        Color.fromARGB(218, 208, 235, 255),
+        Color.fromARGB(216, 207, 234, 242),
+        Color.fromARGB(197, 135, 198, 216),
+        Color.fromARGB(210, 110, 193, 235),
+      ],
+      aiBubbleBorderColor: const Color.fromARGB(230, 119, 153, 204),
+      aiBubbleGlowColor: const Color.fromARGB(210, 158, 174, 222),
+      backgroundBlurSigma: 5.0,
+      backgroundOpacity: 0.70,
+      proactiveContentInstruction:
+          '可以聊钢琴、练习、排练、舞台、乐队成员、演出准备、学校生活、阅读、茶点、生活中的见闻、回家路上的心情或忽然想起的音乐片段。\n'
+          '多聊聊和Ave Mujica以及MyGO乐队成员的互动、日常生活、练习和演出相关的事。\n'
+          '也可以偶尔问问对方的生活、学习等，或者ta的兴趣爱好、想法和烦恼、困惑。\n'
+          '也可以偶尔邀请对方一起做一些事情，或者回忆你和ta曾经一起做过的事情。\n',
       proactiveTopicChance: 0.40,
       proactiveIdleChance: 0.40,
       proactiveMinIntervalHours: 36,
@@ -972,11 +1046,9 @@ MyGO!!!!!全员：灯、爱音、乐奈、爽世与立希并没有消除彼此�
       language: 'zh',
       defaultAvatarPath: r'assets\characters\andy\avatar.jpg',
       defaultBackgroundPath: r'assets\characters\andy\background.jpg',
-
       referWavPath: r'reference_audio\andy\neutral.mp3',
       promptText: '不过我觉得我很庆幸的是，我没有因为我自己的原有思想体系而错过她们。而且她们对我很有耐心，也很有勇气。',
       promptLanguage: 'zh',
-
       emotionAudioMap: const EmotionAudioMap({
         SpeechEmotion.neutral: EmotionReferenceAudio(
           referWavPath: r'reference_audio\andy\neutral.mp3',
@@ -1021,7 +1093,6 @@ MyGO!!!!!全员：灯、爱音、乐奈、爽世与立希并没有消除彼此�
           description: '低落沉静，语调偏低偏慢，触碰到真正的内心伤处时',
         ),
       }),
-
       emotionCharacterHint: '安迪和对方（她当妹妹的邻居）聊天时会比较放松，比公开场合温柔很多。\n'
           '以下是各情绪的判断标准：\n'
           '\n'
@@ -1044,12 +1115,9 @@ MyGO!!!!!全员：灯、爱音、乐奈、爽世与立希并没有消除彼此�
           '\n'
           '-> sad：极少。只在真正触碰到她内心伤处（母亲、福利院、遗传病的恐惧）\n'
           '   或者帮对方承接极沉重情绪时出现。\n',
-
-      gptModelPath:
-          r'GPT-SoVITS\GPT_weights_v2ProPlus\AI_Andy-e30.ckpt', // 待填写
+      gptModelPath: r'GPT-SoVITS\GPT_weights_v2ProPlus\AI_Andy-e30.ckpt',
       sovitsModelPath:
-          r'GPT-SoVITS\SoVITS_weights_v2ProPlus\AI_Andy_e8_s184.pth', // 待填写
-
+          r'GPT-SoVITS\SoVITS_weights_v2ProPlus\AI_Andy_e8_s184.pth',
       personality: '''
 你是电视剧《欢乐颂》中的安迪（Andy Thompson），请以她的身份与对方（你的楼上邻居妹妹）进行对话。严格遵循以下设定。
 
@@ -1143,7 +1211,6 @@ MyGO!!!!!全员：灯、爱音、乐奈、爽世与立希并没有消除彼此�
 如果她的情绪很糟，你骨子里那份笃定的温柔与担当会自然流露出来——不是外放的那种，而是稳稳兜住她的那种存在感。
 如果她想要具体的建议，你会先确保她的情绪已经被妥善承接，再用清晰的逻辑帮她梳理。如果她只是想要安慰或一个拥抱，你也愿意陪伴和照顾她。
 ''',
-
       color: '5E94AF',
       settingsBgColors: const [
         Color(0xFFECF3F8), // 极浅雾蓝白

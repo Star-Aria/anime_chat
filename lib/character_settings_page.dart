@@ -9,29 +9,28 @@ import 'storage_service.dart';
 // 自定义配置区域：设置页面视觉与排版
 // ========================================
 
-const String SETTINGS_TITLE_FONT = 'SimSun';
-const double SETTINGS_TITLE_SIZE = 16.0;
+const String settingsTitleFont = 'SimSun';
+const double settingsTitleSize = 16.0;
 
-const String SETTINGS_SECTION_FONT = 'SimSun';
-const double SETTINGS_SECTION_SIZE = 13.0;
+const String settingsSectionFont = 'SimSun';
+const double settingsSectionSize = 13.0;
 
-const String SETTINGS_ITEM_TITLE_FONT = 'FangSong';
-const double SETTINGS_ITEM_TITLE_SIZE = 14.0;
+const String settingsItemTitleFont = 'FangSong';
+const double settingsItemTitleSize = 14.0;
 
-const String SETTINGS_ITEM_DESC_FONT = 'FangSong';
-const double SETTINGS_ITEM_DESC_SIZE = 13.0;
+const String settingsItemDescFont = 'FangSong';
+const double settingsItemDescSize = 13.0;
 
-const String SETTINGS_INPUT_TEXT_FONT = 'FangSong';
-const double SETTINGS_INPUT_TEXT_SIZE = 13.0;
+const String settingsInputTextFont = 'FangSong';
+const double settingsInputTextSize = 13.0;
 
 // ========================================
 // 纯净雾面白玻璃质感配置 (回归柔和明亮模式)
 // ========================================
-const double GLASS_BLUR_SIGMA = 20.0; // 容器毛玻璃模糊程度。配合低饱和背景呈现柔和磨砂感
-const double GLASS_BG_OPACITY =
-    0.38; // 容器背景白色透明度。降低白色遮盖，让背景色更鲜明（可调范围 0.25~0.55）
-const double GLASS_BORDER_OPACITY = 0.5; // 容器边缘白色高光线段透明度（可调范围 0.3~0.7）
-const double GLASS_SHADOW_OPACITY = 0.05; // 容器底部极微弱投影，保持轻盈感
+const double glassBlurSigma = 20.0; // 容器毛玻璃模糊程度。配合低饱和背景呈现柔和磨砂感
+const double glassBgOpacity = 0.38; // 容器背景白色透明度。降低白色遮盖，让背景色更鲜明（可调范围 0.25~0.55）
+const double glassBorderOpacity = 0.5; // 容器边缘白色高光线段透明度（可调范围 0.3~0.7）
+const double glassShadowOpacity = 0.05; // 容器底部极微弱投影，保持轻盈感
 
 // ========================================
 // 角色独立设置页面
@@ -323,8 +322,14 @@ class _CharacterSettingsPageState extends State<CharacterSettingsPage> {
   Widget build(BuildContext context) {
     final themeColor = Color(int.parse('0xFF${widget.character.color}'));
 
-    return WillPopScope(
-      onWillPop: _confirmExit,
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) async {
+        if (didPop) return;
+        if (await _confirmExit() && context.mounted) {
+          Navigator.pop(context);
+        }
+      },
       child: Scaffold(
         extendBodyBehindAppBar: true,
         // 不设置 appBar 属性，改为将顶部栏放进 body 的 Stack 中浮动显示，
@@ -362,8 +367,7 @@ class _CharacterSettingsPageState extends State<CharacterSettingsPage> {
                               controller: _userNameTranslationController,
                               label: '中文翻译称呼 ',
                               hint: '例如：凛野小姐 / 凛野同学 / 凛野酱',
-                              helperText:
-                                  '只影响中文翻译显示。日文原文仍严格使用上面的称呼原文。',
+                              helperText: '只影响中文翻译显示。日文原文仍严格使用上面的称呼原文。',
                               maxLines: 1,
                             ),
                             const SizedBox(height: 16),
@@ -395,7 +399,8 @@ class _CharacterSettingsPageState extends State<CharacterSettingsPage> {
                                 child: Divider(
                                     height: 1,
                                     thickness: 0.5,
-                                    color: Colors.black.withOpacity(0.05)),
+                                    color:
+                                        Colors.black.withValues(alpha: 0.05)),
                               ),
                               _buildSlider(
                                 title: '最短发送间隔',
@@ -419,7 +424,8 @@ class _CharacterSettingsPageState extends State<CharacterSettingsPage> {
                                 child: Divider(
                                     height: 1,
                                     thickness: 0.5,
-                                    color: Colors.black.withOpacity(0.05)),
+                                    color:
+                                        Colors.black.withValues(alpha: 0.05)),
                               ),
                               _buildSlider(
                                 title: '触发概率',
@@ -442,7 +448,8 @@ class _CharacterSettingsPageState extends State<CharacterSettingsPage> {
                                 child: Divider(
                                     height: 1,
                                     thickness: 0.5,
-                                    color: Colors.black.withOpacity(0.05)),
+                                    color:
+                                        Colors.black.withValues(alpha: 0.05)),
                               ),
                               _buildTextField(
                                 controller: _proactiveContentController,
@@ -460,17 +467,18 @@ class _CharacterSettingsPageState extends State<CharacterSettingsPage> {
                                   icon: const Icon(Icons.restore, size: 16),
                                   label: const Text('恢复默认内容方向',
                                       style: TextStyle(
-                                          fontFamily: SETTINGS_ITEM_TITLE_FONT,
+                                          fontFamily: settingsItemTitleFont,
                                           fontSize: 13)),
                                   onPressed: _resetProactiveContentToDefault,
                                   style: OutlinedButton.styleFrom(
                                     foregroundColor: themeColor,
                                     side: BorderSide(
-                                        color: themeColor.withOpacity(0.35)),
-                                    padding:
-                                        const EdgeInsets.symmetric(vertical: 10),
+                                        color:
+                                            themeColor.withValues(alpha: 0.35)),
+                                    padding: const EdgeInsets.symmetric(
+                                        vertical: 10),
                                     backgroundColor:
-                                        Colors.white.withOpacity(0.5),
+                                        Colors.white.withValues(alpha: 0.5),
                                   ),
                                 ),
                               ),
@@ -519,7 +527,7 @@ class _CharacterSettingsPageState extends State<CharacterSettingsPage> {
                               child: Divider(
                                   height: 1,
                                   thickness: 0.5,
-                                  color: Colors.black.withOpacity(0.05)),
+                                  color: Colors.black.withValues(alpha: 0.05)),
                             ),
                             _buildSwitch(
                               title: '启用情绪分析',
@@ -537,7 +545,7 @@ class _CharacterSettingsPageState extends State<CharacterSettingsPage> {
                               child: Divider(
                                   height: 1,
                                   thickness: 0.5,
-                                  color: Colors.black.withOpacity(0.05)),
+                                  color: Colors.black.withValues(alpha: 0.05)),
                             ),
                             _buildSwitch(
                               title: '显示日文原文',
@@ -555,7 +563,7 @@ class _CharacterSettingsPageState extends State<CharacterSettingsPage> {
                               child: Divider(
                                   height: 1,
                                   thickness: 0.5,
-                                  color: Colors.black.withOpacity(0.05)),
+                                  color: Colors.black.withValues(alpha: 0.05)),
                             ),
                             _buildSwitch(
                               title: '显示中文翻译',
@@ -575,8 +583,8 @@ class _CharacterSettingsPageState extends State<CharacterSettingsPage> {
                             child: Text(
                               '修改角色的system prompt，控制AI的性格、语气和背景设定。\n修改不当可能导致角色行为异常，可随时重置为程序默认值。',
                               style: TextStyle(
-                                  fontFamily: SETTINGS_ITEM_DESC_FONT,
-                                  fontSize: SETTINGS_ITEM_DESC_SIZE,
+                                  fontFamily: settingsItemDescFont,
+                                  fontSize: settingsItemDescSize,
                                   color: Colors.black54, // 提示文字恢复深色
                                   height: 1.5),
                             ),
@@ -596,7 +604,7 @@ class _CharacterSettingsPageState extends State<CharacterSettingsPage> {
                                 icon: const Icon(Icons.restore, size: 16),
                                 label: const Text('恢复默认提示词',
                                     style: TextStyle(
-                                        fontFamily: SETTINGS_ITEM_TITLE_FONT,
+                                        fontFamily: settingsItemTitleFont,
                                         fontSize: 13)),
                                 onPressed: _resetPersonalityToDefault,
                                 style: OutlinedButton.styleFrom(
@@ -605,7 +613,7 @@ class _CharacterSettingsPageState extends State<CharacterSettingsPage> {
                                   padding:
                                       const EdgeInsets.symmetric(vertical: 10),
                                   backgroundColor:
-                                      Colors.white.withOpacity(0.5),
+                                      Colors.white.withValues(alpha: 0.5),
                                 ),
                               ),
                             ),
@@ -639,13 +647,13 @@ class _CharacterSettingsPageState extends State<CharacterSettingsPage> {
                     // 外层浅阴影：制造悬浮离地感
                     // blurRadius 控制阴影扩散范围（可调 6~20），opacity 控制深浅（可调 0.04~0.15）
                     BoxShadow(
-                      color: Colors.black.withOpacity(0.08),
+                      color: Colors.black.withValues(alpha: 0.08),
                       blurRadius: 14,
                       offset: const Offset(0, 5),
                     ),
                     // 第二层更柔和的远距离阴影，增加空间层次感
                     BoxShadow(
-                      color: Colors.black.withOpacity(0.03),
+                      color: Colors.black.withValues(alpha: 0.03),
                       blurRadius: 30,
                       offset: const Offset(0, 8),
                     ),
@@ -668,8 +676,8 @@ class _CharacterSettingsPageState extends State<CharacterSettingsPage> {
                           begin: Alignment.topCenter,
                           end: Alignment.bottomCenter,
                           colors: [
-                            Colors.white.withOpacity(0.88),
-                            Colors.white.withOpacity(0.72),
+                            Colors.white.withValues(alpha: 0.88),
+                            Colors.white.withValues(alpha: 0.72),
                           ],
                         ),
                         borderRadius: const BorderRadius.only(
@@ -680,7 +688,7 @@ class _CharacterSettingsPageState extends State<CharacterSettingsPage> {
                         // 用极淡的灰线勾勒整体轮廓，让 bar 边界更清晰
                         // opacity 可调 0.04~0.12，越大轮廓越明显
                         border: Border.all(
-                          color: Colors.black.withOpacity(0.06),
+                          color: Colors.black.withValues(alpha: 0.06),
                           width: 0.8,
                         ),
                       ),
@@ -697,6 +705,7 @@ class _CharacterSettingsPageState extends State<CharacterSettingsPage> {
                                       color: Color(0xFF2D3142)), // 恢复深色图标
                                   onPressed: () async {
                                     if (await _confirmExit()) {
+                                      if (!context.mounted) return;
                                       Navigator.pop(context);
                                     }
                                   },
@@ -710,8 +719,8 @@ class _CharacterSettingsPageState extends State<CharacterSettingsPage> {
                                       Text(
                                         '${widget.character.name} 的设置',
                                         style: const TextStyle(
-                                            fontFamily: SETTINGS_TITLE_FONT,
-                                            fontSize: SETTINGS_TITLE_SIZE,
+                                            fontFamily: settingsTitleFont,
+                                            fontSize: settingsTitleSize,
                                             fontWeight: FontWeight.w600,
                                             color: Color(0xFF2D3142)), // 恢复深色标题
                                       ),
@@ -730,7 +739,7 @@ class _CharacterSettingsPageState extends State<CharacterSettingsPage> {
                                   child: Text(
                                     '保存',
                                     style: TextStyle(
-                                      fontFamily: SETTINGS_TITLE_FONT,
+                                      fontFamily: settingsTitleFont,
                                       color: _hasUnsavedChanges
                                           ? themeColor
                                           : Colors.grey[500],
@@ -786,7 +795,10 @@ class _CharacterSettingsPageState extends State<CharacterSettingsPage> {
                 shape: BoxShape.circle,
                 gradient: RadialGradient(
                   // 光晕不透明度：控制背景颜色鲜艳程度（可调范围 0.6~1.0，越大越鲜艳）
-                  colors: [color1.withOpacity(0.92), color1.withOpacity(0.0)],
+                  colors: [
+                    color1.withValues(alpha: 0.92),
+                    color1.withValues(alpha: 0.0)
+                  ],
                   stops: const [0.2, 1.0],
                 ),
               ),
@@ -803,7 +815,10 @@ class _CharacterSettingsPageState extends State<CharacterSettingsPage> {
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
                 gradient: RadialGradient(
-                  colors: [color2.withOpacity(0.82), color2.withOpacity(0.0)],
+                  colors: [
+                    color2.withValues(alpha: 0.82),
+                    color2.withValues(alpha: 0.0)
+                  ],
                   stops: const [0.2, 1.0],
                 ),
               ),
@@ -820,7 +835,10 @@ class _CharacterSettingsPageState extends State<CharacterSettingsPage> {
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
                 gradient: RadialGradient(
-                  colors: [color3.withOpacity(0.72), color3.withOpacity(0.0)],
+                  colors: [
+                    color3.withValues(alpha: 0.72),
+                    color3.withValues(alpha: 0.0)
+                  ],
                   stops: const [0.2, 1.0],
                 ),
               ),
@@ -837,7 +855,10 @@ class _CharacterSettingsPageState extends State<CharacterSettingsPage> {
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
                 gradient: RadialGradient(
-                  colors: [color1.withOpacity(0.6), color1.withOpacity(0.0)],
+                  colors: [
+                    color1.withValues(alpha: 0.6),
+                    color1.withValues(alpha: 0.0)
+                  ],
                   stops: const [0.2, 1.0],
                 ),
               ),
@@ -865,8 +886,8 @@ class _CharacterSettingsPageState extends State<CharacterSettingsPage> {
           Text(
             title,
             style: const TextStyle(
-                fontFamily: SETTINGS_SECTION_FONT,
-                fontSize: SETTINGS_SECTION_SIZE,
+                fontFamily: settingsSectionFont,
+                fontSize: settingsSectionSize,
                 fontWeight: FontWeight.w600,
                 color: Colors.black87, // 恢复深色标题
                 letterSpacing: 0.4),
@@ -881,21 +902,21 @@ class _CharacterSettingsPageState extends State<CharacterSettingsPage> {
     return ClipRRect(
       borderRadius: BorderRadius.circular(16),
       child: BackdropFilter(
-        filter: ImageFilter.blur(
-            sigmaX: GLASS_BLUR_SIGMA, sigmaY: GLASS_BLUR_SIGMA),
+        filter:
+            ImageFilter.blur(sigmaX: glassBlurSigma, sigmaY: glassBlurSigma),
         child: Container(
           width: double.infinity,
           padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
-            color: Colors.white.withOpacity(GLASS_BG_OPACITY),
+            color: Colors.white.withValues(alpha: glassBgOpacity),
             borderRadius: BorderRadius.circular(16),
             border: Border.all(
-              color: Colors.white.withOpacity(GLASS_BORDER_OPACITY),
+              color: Colors.white.withValues(alpha: glassBorderOpacity),
               width: 1.5,
             ),
             boxShadow: [
               BoxShadow(
-                color: Colors.black.withOpacity(GLASS_SHADOW_OPACITY),
+                color: Colors.black.withValues(alpha: glassShadowOpacity),
                 blurRadius: 10,
                 offset: const Offset(0, 4),
               ),
@@ -924,8 +945,8 @@ class _CharacterSettingsPageState extends State<CharacterSettingsPage> {
       children: [
         Text(label,
             style: const TextStyle(
-                fontFamily: SETTINGS_ITEM_TITLE_FONT,
-                fontSize: SETTINGS_ITEM_TITLE_SIZE,
+                fontFamily: settingsItemTitleFont,
+                fontSize: settingsItemTitleSize,
                 fontWeight: FontWeight.w600,
                 color: Color(0xFF2D3142))), // 标签文字恢复深色
         const SizedBox(height: 6),
@@ -933,34 +954,36 @@ class _CharacterSettingsPageState extends State<CharacterSettingsPage> {
           controller: controller,
           maxLines: maxLines,
           style: TextStyle(
-            fontFamily: useFangSong ? 'FangSong' : SETTINGS_INPUT_TEXT_FONT,
-            fontSize: SETTINGS_INPUT_TEXT_SIZE,
+            fontFamily: useFangSong ? 'FangSong' : settingsInputTextFont,
+            fontSize: settingsInputTextSize,
             color: const Color(0xFF2D3142), // 输入框内文字恢复深色
             height: 1.5,
           ),
           decoration: InputDecoration(
             hintText: hint,
             hintStyle: TextStyle(
-                fontFamily: SETTINGS_INPUT_TEXT_FONT,
+                fontFamily: settingsInputTextFont,
                 color: Colors.grey[500], // 占位符灰色
-                fontSize: SETTINGS_INPUT_TEXT_SIZE),
+                fontSize: settingsInputTextSize),
             helperText: helperText,
             helperStyle: const TextStyle(
-                fontFamily: SETTINGS_ITEM_DESC_FONT,
+                fontFamily: settingsItemDescFont,
                 fontSize: 11,
                 color: Colors.black54, // 辅助文字灰色
                 height: 1.4),
             helperMaxLines: 3,
             filled: true,
             fillColor:
-                Colors.white.withOpacity(0.6), // 文本框使用稍微不透明的白色，在玻璃卡片内形成层次
+                Colors.white.withValues(alpha: 0.6), // 文本框使用稍微不透明的白色，在玻璃卡片内形成层次
             border: OutlineInputBorder(
               borderRadius: BorderRadius.circular(10),
-              borderSide: BorderSide(color: Colors.white.withOpacity(0.8)),
+              borderSide:
+                  BorderSide(color: Colors.white.withValues(alpha: 0.8)),
             ),
             enabledBorder: OutlineInputBorder(
               borderRadius: BorderRadius.circular(10),
-              borderSide: BorderSide(color: Colors.white.withOpacity(0.8)),
+              borderSide:
+                  BorderSide(color: Colors.white.withValues(alpha: 0.8)),
             ),
             focusedBorder: OutlineInputBorder(
               borderRadius: BorderRadius.circular(10),
@@ -990,15 +1013,15 @@ class _CharacterSettingsPageState extends State<CharacterSettingsPage> {
             children: [
               Text(title,
                   style: const TextStyle(
-                      fontFamily: SETTINGS_ITEM_TITLE_FONT,
-                      fontSize: SETTINGS_ITEM_TITLE_SIZE,
+                      fontFamily: settingsItemTitleFont,
+                      fontSize: settingsItemTitleSize,
                       fontWeight: FontWeight.w600,
                       color: Color(0xFF2D3142))), // 标题深色
               const SizedBox(height: 2),
               Text(description,
                   style: const TextStyle(
-                      fontFamily: SETTINGS_ITEM_DESC_FONT,
-                      fontSize: SETTINGS_ITEM_DESC_SIZE,
+                      fontFamily: settingsItemDescFont,
+                      fontSize: settingsItemDescSize,
                       color: Colors.black54, // 描述灰色
                       height: 1.3)),
             ],
@@ -1057,15 +1080,15 @@ class _CharacterSettingsPageState extends State<CharacterSettingsPage> {
                 children: [
                   Text(title,
                       style: const TextStyle(
-                          fontFamily: SETTINGS_ITEM_TITLE_FONT,
-                          fontSize: SETTINGS_ITEM_TITLE_SIZE,
+                          fontFamily: settingsItemTitleFont,
+                          fontSize: settingsItemTitleSize,
                           fontWeight: FontWeight.w600,
                           color: Color(0xFF2D3142))),
                   const SizedBox(height: 2),
                   Text(description,
                       style: const TextStyle(
-                          fontFamily: SETTINGS_ITEM_DESC_FONT,
-                          fontSize: SETTINGS_ITEM_DESC_SIZE,
+                          fontFamily: settingsItemDescFont,
+                          fontSize: settingsItemDescSize,
                           color: Colors.black54,
                           height: 1.3)),
                 ],
@@ -1081,14 +1104,15 @@ class _CharacterSettingsPageState extends State<CharacterSettingsPage> {
                   begin: Alignment.topLeft,
                   end: Alignment.bottomRight,
                   colors: [
-                    Colors.white.withOpacity(0.82),
-                    color.withOpacity(0.16),
+                    Colors.white.withValues(alpha: 0.82),
+                    color.withValues(alpha: 0.16),
                   ],
                 ),
-                border: Border.all(color: color.withOpacity(0.28), width: 0.8),
+                border: Border.all(
+                    color: color.withValues(alpha: 0.28), width: 0.8),
                 boxShadow: [
                   BoxShadow(
-                    color: color.withOpacity(0.10),
+                    color: color.withValues(alpha: 0.10),
                     blurRadius: 10,
                     offset: const Offset(0, 3),
                   ),
@@ -1098,7 +1122,7 @@ class _CharacterSettingsPageState extends State<CharacterSettingsPage> {
                 displayLabel,
                 textAlign: TextAlign.center,
                 style: TextStyle(
-                    fontFamily: SETTINGS_ITEM_TITLE_FONT,
+                    fontFamily: settingsItemTitleFont,
                     fontSize: 12.5,
                     fontWeight: FontWeight.w600,
                     color: mutedColor),
@@ -1112,11 +1136,11 @@ class _CharacterSettingsPageState extends State<CharacterSettingsPage> {
           padding: const EdgeInsets.symmetric(horizontal: 8),
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(999),
-            color: Colors.white.withOpacity(0.32),
-            border: Border.all(color: Colors.white.withOpacity(0.52)),
+            color: Colors.white.withValues(alpha: 0.32),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.52)),
             boxShadow: [
               BoxShadow(
-                color: Colors.black.withOpacity(0.025),
+                color: Colors.black.withValues(alpha: 0.025),
                 blurRadius: 8,
                 offset: const Offset(0, 3),
               ),
@@ -1124,10 +1148,10 @@ class _CharacterSettingsPageState extends State<CharacterSettingsPage> {
           ),
           child: SliderTheme(
             data: SliderThemeData(
-              activeTrackColor: color.withOpacity(0.48),
-              inactiveTrackColor: Colors.black.withOpacity(0.07),
+              activeTrackColor: color.withValues(alpha: 0.48),
+              inactiveTrackColor: Colors.black.withValues(alpha: 0.07),
               thumbColor: Colors.white,
-              overlayColor: color.withOpacity(0.10),
+              overlayColor: color.withValues(alpha: 0.10),
               trackHeight: 5.0,
               trackShape: const RoundedRectSliderTrackShape(),
               thumbShape: const RoundSliderThumbShape(

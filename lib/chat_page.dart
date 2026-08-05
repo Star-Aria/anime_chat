@@ -20,62 +20,77 @@ import 'path_service.dart';
 // 自定义配置区域
 // ========================================
 
-const double MESSAGE_MAX_WIDTH_RATIO = 0.80;
+const double messageMaxWidthRatio = 0.80;
 
-const double AI_BUBBLE_GLOW_BLUR = 30.0;
-const double AI_BUBBLE_GLOW_OPACITY = 0.8;
+const double aiBubbleGlowBlur = 30.0;
+const double aiBubbleGlowOpacity = 0.8;
 
-const double MESSAGE_BUBBLE_RADIUS = 18.0;
-const double MESSAGE_BUBBLE_CORNER_RADIUS = 4.0;
+const double messageBubbleRadius = 18.0;
+const double messageBubbleCornerRadius = 4.0;
 
-const double MESSAGE_BUBBLE_HORIZONTAL_PADDING = 16.0;
-const double MESSAGE_BUBBLE_VERTICAL_PADDING = 12.0;
+const double messageBubbleHorizontalPadding = 16.0;
+const double messageBubbleVerticalPadding = 12.0;
 
-const String BACKGROUND_IMAGE_PATH = '';
+const String backgroundImagePath = '';
 
-const List<Color> CHAT_BACKGROUND_GRADIENT = [
+const List<Color> chatBackgroundGradient = [
   Color(0xFFF5F7FA),
   Color(0xFFE8EDF2),
   Color(0xFFDDE3E9),
 ];
 
 // 字体配置 - AI消息原文（日文）
-const String AI_ORIGINAL_FONT_FAMILY = 'Yu Mincho';
-const double AI_ORIGINAL_FONT_SIZE = 13.0;
-const FontWeight AI_ORIGINAL_FONT_WEIGHT = FontWeight.w500;
+const String aiOriginalFontFamily = 'Yu Mincho';
+const double aiOriginalFontSize = 13.0;
+const FontWeight aiOriginalFontWeight = FontWeight.w500;
 
 // 字体配置 - AI消息翻译（中文）
-const String AI_TRANSLATION_FONT_FAMILY = 'FangSong';
-const double AI_TRANSLATION_FONT_SIZE = 13.0;
-const FontWeight AI_TRANSLATION_FONT_WEIGHT = FontWeight.normal;
+const String aiTranslationFontFamily = 'FangSong';
+const double aiTranslationFontSize = 13.0;
+const FontWeight aiTranslationFontWeight = FontWeight.normal;
 
-const String USER_AVATAR_PATH = r'assets\我的头像.jpg';
+const String userAvatarPath = r'assets\我的头像.jpg';
 
-const Map<String, String> PRONUNCIATION_DICT = {
-  '炭治郎': 'たんじろう',
-  '禰豆子': 'ねずこ',
-  '善逸': 'ぜんいつ',
-  '伊之助': 'いのすけ',
-  '冨岡': 'とみおか',
-  '胡蝶': 'こちょう',
-  '悲鳴嶼': 'ひめじま',
-  '不死川': 'しなずがわ',
-  '伊黒': 'いぐろ',
-  '甘露寺': 'かんろじ',
-  '宇髄': 'うずい',
-  '煉獄': 'れんごく',
-  '時透': 'ときとう',
-  '香奈惠': 'かなえ',
-  '葵': 'あおい',
+const Map<String, String> pronunciationDict = {
+  '竈門 炭治郎': 'かまど たんじろう',
+  '竈門 禰豆子': 'かまど ねずこ',
+  '我妻 善逸': 'あがつま ぜんいつ',
+  '嘴平 伊之助': 'はしびら いのすけ',
+  '栗花落 カナヲ': 'つゆり カナヲ',
+  '冨岡 義勇': 'とみおか ぎゆう',
+  '胡蝶 しのぶ': 'こちょう しのぶ',
+  '悲鳴嶼 行冥': 'ひめじま ぎょうめい',
+  '不死川 実弥': 'しなずがわ さねみ',
+  '伊黒 小芭内': 'いぐろ おばない',
+  '甘露寺 蜜璃': 'かんろじ みつり',
+  '宇髄 天元': 'うずい てんげん',
+  '煉獄 杏寿郎': 'れんごく きょうじゅろう',
+  '時透 無一郎': 'ときとう むいちろう',
+  '不死川 玄弥': 'しなずがわ げんや',
+  'お館様': 'おやかたさま',
+  '産屋敷 耀哉': 'うぶやしき かがや',
+  '産屋敷 あまね': 'うぶやしき あまね',
+  '産屋敷 輝利哉': 'うぶやしき きりや',
+  '鬼舞辻 無惨': 'きぶつじ むざん',
   '童磨': 'どうま',
   '猗窝座': 'あかざ',
-  '玉壶': 'ぎょっこ',
+  '黒死牟': 'こくしぼう',
   '半天狗': 'はんてんぐ',
+  '獪岳': 'かいがく',
+  '堕姫': 'だき',
+  '妓夫太郎': 'ぎゅうたろう',
   '累': 'るい',
-  'お館様': 'おやかたさま',
-  '鬼舞辻　無惨': 'きぶつじ　むざん',
+  '珠世': 'たまよ',
+  '愈史郎': 'ゆしろう',
+  '胡蝶 香奈惠': 'こちょう かなえ',
+  '神崎 アオイ': 'かんざき あおい',
+  '寺内 きよ': 'てらうち きよ',
+  '中原 すみ': 'なかはら すみ',
+  '高田 なほ': 'たかだ なほ',
   '錆兎': 'さびと',
-  '鱗滝': 'うろこだき',
+  '鱗滝 左近次': 'うろこだき さこんじ',
+  'チュン太郎': 'チュンたろう',
+  '銀子': 'ぎんこ',
   '鬼殺隊': 'きさつたい',
   '無限城': 'むげんじょう',
   '蜘蛛山': 'なだくもやま',
@@ -96,19 +111,163 @@ const Map<String, String> PRONUNCIATION_DICT = {
   '風柱': 'かぜばしら',
   '炎柱': 'ほのおばしら',
   '日輪刀': 'にちりんとう',
-  '祥子': 'さきこ',
-  '睦': 'むつみ',
-  '初音': 'はつね',
-  '海鈴': 'うみり',
-  '祐天寺': 'ゆてんじ',
-  '燈': 'ともり',
-  '愛音': 'あのん',
-  '立希': 'たき',
-  '楽奈': 'らな',
+  '豊川 祥子': 'とがわ さきこ',
+  '若葉 睦': 'わかば むつみ',
+  '三角 初音': 'みすみ はつね',
+  '三角 初華': 'みすみ ういか',
+  '八幡 海鈴': 'やはた うみり',
+  '祐天寺 にゃむ': 'ゆうてんじ にゃむ',
+  '高松 燈': 'たかまつ ともり',
+  '千早 愛音': 'ちはや あのん',
+  '長崎 そよ': 'ながさき そよ',
+  '椎名 立希': 'しいな たき',
+  '要楽奈': 'かなめ らーな',
+  '純田 まな': 'すみた まな',
+  'MyGO': 'まいご',
+  'MyGO!!!!!': 'まいご',
+  'Ave Mujica': 'あべむじか',
+  'CRYCHIC': 'クライシック',
+  'BanG Dream': 'ばんどり',
+  'Oblivionis': 'オブリビオニス',
+  'Mortis': 'モーティス',
+  'Doloris': 'ドロリス',
+  'Timoris': 'ティモリス',
+  'Amoris': 'アモーリス',
+  'Poppin Party': 'ぽっぴんぱーてぃー',
+  'Popipa': 'ぽぴぱ',
+  '戸山 香澄': 'とやま かすみ',
+  '花園 たえ': 'はなぞの たえ',
+  '牛込 りみ': 'うしごめ りみ',
+  '山吹 沙綾': 'やまぶき さや',
+  '市ヶ谷 有咲': 'いちがや ありさ',
+  'Roselia': 'ろぜりあ',
+  '湊 友希那': 'みなと ゆきな',
+  '氷川 紗夜': 'ひかわ さよ',
+  '今井 リサ': 'いまい りさ',
+  '宇田川 あこ': 'うだがわ あこ',
+  '白金 燐子': 'しろかね りんこ',
+  'Afterglow': 'あふたーぐろう',
+  '美竹 蘭': 'みたけ らん',
+  '青葉 モカ': 'あおば もか',
+  '宇田川 巴': 'うだがわ ともえ',
+  '上原 ひまり': 'うえはら ひまり',
+  '羽泽 鸫': 'はざわ つぐみ',
+  'Pastel*Palettes': 'ぱすてるぱれっと',
+  'PasPale': 'ぱすぱれ',
+  '丸山 彩': 'まるやま あや',
+  '白鷺 千聖': 'しらさぎ ちさと',
+  '氷川 日菜': 'ひかわ ひな',
+  '大和 麻弥': 'やまと まや',
+  '若宮 イヴ': 'わかみや いぶ',
+  'Hello, Happy World!': 'はろーはっぴーわーるど',
+  '弦巻 こころ': 'つるまき こころ',
+  '瀬田 薫': 'せた かおる',
+  '北沢 はぐみ': 'きたざわ はぐみ',
+  '松原 花音': 'まつばら かのん',
+  '奥沢 美咲': 'おくさわ みさき',
+  'RAISE A SUILEN': 'れいずあすいれん',
+  'RAS': 'らす',
+  'LAYER': 'れいや',
+  '和奏 レイ': 'わかな れい',
+  'PAREO': 'ぱれお',
+  'LOCK': 'ろっく',
+  '朝日 六花': 'あさひ ろっか',
+  'MASKING': 'ますきんぐ',
+  '佐藤 益木': 'さとう ますき',
+  'CHU²': 'ちゅちゅ',
+  'Morfonica': 'もるふぉにか',
+  'Monica': 'もにか',
+  '倉田 ましろ': 'くらた ましろ',
+  '二葉 つくし': 'ふたば つくし',
+  '桐ヶ谷 透子': 'きりがや とうこ',
+  '広町 七深': 'ひろまち ななみ',
+  '八潮 瑠唯': 'やしお るい',
+  '羽丘': 'はねおか',
+  '花咲川': 'はなさきがわ',
+  '月ノ森': 'つきのもり',
+  '月島 まりな': 'つきしま まりな',
+  'CiRCLE': 'さーくる',
+  'RiNG': 'りんー',
+  'Galaxy': 'ぎゃらくしー',
+  'dub': 'だぶ',
+  'SPACE': 'すぺーす',
 };
 
-const bool ENABLE_PRONUNCIATION_CORRECTION = true;
-const String PRONUNCIATION_MODE = 'replace';
+const bool enablePronunciationCorrection = true;
+const String pronunciationMode = 'replace';
+
+Map<String, String> _expandedPronunciationMap(Map<String, String> source) {
+  final expanded = <String, String>{};
+  for (final entry in source.entries) {
+    expanded[entry.key] = entry.value;
+
+    final compactKey = entry.key.replaceAll(RegExp(r'[\s　]+'), '');
+    if (compactKey != entry.key) {
+      expanded[compactKey] = entry.value.replaceAll(RegExp(r'[\s　]+'), '');
+    }
+
+    final wordParts = _splitNameLikeText(entry.key);
+    final pronunciationParts = _splitByNameSeparators(entry.value);
+    if (wordParts.length == pronunciationParts.length && wordParts.length > 1) {
+      for (int i = 0; i < wordParts.length; i++) {
+        expanded.putIfAbsent(wordParts[i], () => pronunciationParts[i]);
+      }
+    }
+  }
+  return expanded;
+}
+
+List<String> _splitNameLikeText(String text) {
+  final separated = _splitByNameSeparators(text);
+  if (separated.length > 1) return separated;
+
+  final parts = <String>[];
+  final buffer = StringBuffer();
+  _NameCharKind? currentKind;
+
+  for (final rune in text.runes) {
+    final char = String.fromCharCode(rune);
+    final kind = _nameCharKind(rune);
+    if (currentKind != null && kind != currentKind) {
+      parts.add(buffer.toString());
+      buffer.clear();
+    }
+    buffer.write(char);
+    currentKind = kind;
+  }
+
+  if (buffer.isNotEmpty) {
+    parts.add(buffer.toString());
+  }
+
+  return parts.where((part) => part.trim().isNotEmpty).toList();
+}
+
+List<String> _splitByNameSeparators(String text) {
+  return text
+      .split(RegExp(r'[\s　・･·]+'))
+      .map((part) => part.trim())
+      .where((part) => part.isNotEmpty)
+      .toList();
+}
+
+_NameCharKind _nameCharKind(int rune) {
+  if ((rune >= 0x3040 && rune <= 0x309F) ||
+      (rune >= 0x30A0 && rune <= 0x30FF)) {
+    return _NameCharKind.kana;
+  }
+  if (rune >= 0x4E00 && rune <= 0x9FFF) {
+    return _NameCharKind.cjk;
+  }
+  if ((rune >= 0x0041 && rune <= 0x005A) ||
+      (rune >= 0x0061 && rune <= 0x007A) ||
+      (rune >= 0x0030 && rune <= 0x0039)) {
+    return _NameCharKind.latin;
+  }
+  return _NameCharKind.other;
+}
+
+enum _NameCharKind { cjk, kana, latin, other }
 
 class ChatPage extends StatefulWidget {
   final Character character;
@@ -129,16 +288,12 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
   bool _primaryIsActive = true;
   AudioPlayer get _activePlayer =>
       _primaryIsActive ? _audioPlayerPrimary : _audioPlayerSecondary;
-  AudioPlayer get _standbyPlayer =>
-      _primaryIsActive ? _audioPlayerSecondary : _audioPlayerPrimary;
-  Future<void>? _preloadFuture;
 
   List<Message> _messages = [];
   List<ChatSession> _chatSessions = [];
   String? _activeSessionId;
   bool _isLoading = false;
   bool _isPlaying = false;
-  bool _modelSwitched = false;
   String? _characterAvatarPath;
   String? _backgroundImagePath;
 
@@ -149,7 +304,8 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
     }
 
     final defaultPath = widget.character.defaultAvatarPath;
-    if (defaultPath.isNotEmpty && File(AppPaths.resolve(defaultPath)).existsSync()) {
+    if (defaultPath.isNotEmpty &&
+        File(AppPaths.resolve(defaultPath)).existsSync()) {
       return AppPaths.resolve(defaultPath);
     }
 
@@ -163,7 +319,8 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
     }
 
     final defaultPath = widget.character.defaultBackgroundPath;
-    if (defaultPath.isNotEmpty && File(AppPaths.resolve(defaultPath)).existsSync()) {
+    if (defaultPath.isNotEmpty &&
+        File(AppPaths.resolve(defaultPath)).existsSync()) {
       return AppPaths.resolve(defaultPath);
     }
 
@@ -325,7 +482,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
       });
     }
 
-    print('已加载角色设置：'
+    debugPrint('已加载角色设置：'
         'userName=$_userNameOverride, '
         'translationName=$_userNameTranslationOverride, '
         'pronunciation=$_userNamePronunciation, '
@@ -364,19 +521,16 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
   }
 
   Future<void> _switchModel() async {
-    print('正在切换到 ${widget.character.name} 的模型...');
+    debugPrint('正在切换到 ${widget.character.name} 的模型...');
     final success = await ApiService.switchCharacterModel(
       gptModelPath: widget.character.gptModelPath,
       sovitsModelPath: widget.character.sovitsModelPath,
     );
     if (mounted) {
-      setState(() {
-        _modelSwitched = success;
-      });
       if (success) {
-        print('${widget.character.name} 的模型切换成功');
+        debugPrint('${widget.character.name} 的模型切换成功');
       } else {
-        print('模型切换失败，可能使用默认模型');
+        debugPrint('模型切换失败，可能使用默认模型');
       }
     }
   }
@@ -407,7 +561,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
         _messages = messages;
       });
     }
-    _scrollToBottom();
+    _scrollToBottom(animated: false, settlePasses: 5);
   }
 
   Future<void> _refreshChatSessions() async {
@@ -466,7 +620,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
       _isProcessingQueue = false;
     });
     await _loadCharacterSettings();
-    _scrollToBottom();
+    _scrollToBottom(animated: false, settlePasses: 5);
   }
 
   Future<void> _switchChatSession(String sessionId) async {
@@ -492,7 +646,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
       _isProcessingQueue = false;
     });
     await _loadCharacterSettings();
-    _scrollToBottom();
+    _scrollToBottom(animated: false, settlePasses: 5);
   }
 
   Future<void> _pickBackgroundImage() async {
@@ -619,9 +773,10 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
     //
     // 这份历史也会交给 WebContextService，用来判断“这个是什么意思”
     // 这类追问是否还在延续上一轮原作/角色资料话题。
-    final historyMessages = _messages.isNotEmpty && _messages.last.role == 'user'
-        ? _messages.sublist(0, _messages.length - 1)
-        : _messages;
+    final historyMessages =
+        _messages.isNotEmpty && _messages.last.role == 'user'
+            ? _messages.sublist(0, _messages.length - 1)
+            : _messages;
     final recentMessages = StorageService.getRecentMessages(historyMessages);
 
     // 2. 再生成“现实/联网信息上下文”：
@@ -638,7 +793,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
       conversationHistory: recentMessages,
     );
     if (webContext.isNotEmpty) {
-      print('本轮联网上下文:\n$webContext');
+      debugPrint('本轮联网上下文:\n$webContext');
       _currentTurnWebContext = webContext;
     } else {
       _currentTurnWebContext = null;
@@ -654,6 +809,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
         // 注意：最终说话的还是 DeepSeek 角色，不是搜索服务直接回复用户。
         webContext: webContext,
         imagePaths: imagePaths.isNotEmpty ? imagePaths : null,
+        characterId: widget.character.id,
         characterLanguage: widget.character.language,
       );
 
@@ -696,7 +852,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
         await _sendProactiveMessage('follow_up');
       }
     } catch (e) {
-      print('生成回复时出错: $e');
+      debugPrint('生成回复时出错: $e');
     }
 
     setState(() {
@@ -754,14 +910,14 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
     await _refreshChatSessions();
 
     if (audioPaths.isNotEmpty && mounted) {
-      print('开始顺序播放 ${audioPaths.length} 段情绪化语音...');
+      debugPrint('开始顺序播放 ${audioPaths.length} 段情绪化语音...');
       await _playAudioSequentially(
         paths: audioPaths,
         forMessage: assistantMessage,
       );
-      print('所有音频段播放完毕');
+      debugPrint('所有音频段播放完毕');
     } else {
-      print('没有成功生成的音频段');
+      debugPrint('没有成功生成的音频段');
     }
   }
 
@@ -796,11 +952,11 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
             : null) ??
         widget.character.proactiveTopicChance;
     if (Random().nextDouble() >= chance) {
-      print('连续消息概率未命中（${(chance * 100).toStringAsFixed(0)}%），不追加');
+      debugPrint('连续消息概率未命中（${(chance * 100).toStringAsFixed(0)}%），不追加');
       return;
     }
 
-    print('连续消息概率命中，AI 将追加一条消息');
+    debugPrint('连续消息概率命中，AI 将追加一条消息');
 
     setState(() {
       _isLoading = true;
@@ -811,7 +967,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
       final recentMessages = StorageService.getRecentMessages(_messages);
       final webContext = _currentTurnWebContext;
       if (webContext != null && webContext.isNotEmpty) {
-        print('连续消息复用本轮联网上下文');
+        debugPrint('连续消息复用本轮联网上下文');
       }
 
       // 追加消息使用正常的对话上下文（包含完整历史），
@@ -828,6 +984,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
           userMessage: '',
           timeContext: timeContext,
           webContext: webContext,
+          characterId: widget.character.id,
           characterLanguage: widget.character.language,
           proactiveInstruction: '你刚刚回复了对方的消息，现在你想再补充一句。\n'
               '可以是对刚才话题的延伸、突然想到的相关事情、'
@@ -844,7 +1001,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
         await _sendAIMessage(japaneseText, chineseText);
       }
     } catch (e) {
-      print('生成连续消息时出错: $e');
+      debugPrint('生成连续消息时出错: $e');
     }
 
     if (mounted) {
@@ -881,26 +1038,24 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
     }
 
     _primaryIsActive = true;
-    _preloadFuture = null;
 
     for (int i = 0; i < paths.length; i++) {
       if (!_isPlaying || !mounted) {
-        print('用户停止播放，中断后续音频段（已播 $i/${paths.length} 段）');
+        debugPrint('用户停止播放，中断后续音频段（已播 $i/${paths.length} 段）');
         break;
       }
 
-      print('顺序播放第 ${i + 1}/${paths.length} 段：${paths[i]}');
+      debugPrint('顺序播放第 ${i + 1}/${paths.length} 段：${paths[i]}');
 
       _segmentCompleter = Completer<void>();
       await _resumeActivePlayer(paths[i]);
       await _segmentCompleter!.future;
 
-      print('第 ${i + 1}/${paths.length} 段播放完毕');
+      debugPrint('第 ${i + 1}/${paths.length} 段播放完毕');
       _primaryIsActive = !_primaryIsActive;
     }
 
     _segmentCompleter = null;
-    _preloadFuture = null;
 
     if (mounted) {
       setState(() {
@@ -916,7 +1071,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
     try {
       final file = File(audioPath);
       if (!await file.exists()) {
-        print('播放：文件不存在，跳过（$audioPath）');
+        debugPrint('播放：文件不存在，跳过（$audioPath）');
         if (_segmentCompleter != null && !_segmentCompleter!.isCompleted) {
           _segmentCompleter!.complete();
         }
@@ -939,7 +1094,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
 
       await _activePlayer.resume();
     } catch (e) {
-      print('播放失败（$audioPath）: $e');
+      debugPrint('播放失败（$audioPath）: $e');
       _soundWaveController.stop();
       _soundWaveController.reset();
       if (_segmentCompleter != null && !_segmentCompleter!.isCompleted) {
@@ -974,9 +1129,9 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
           _currentPlayingMessage = null;
         });
       }
-      print('停止播放');
+      debugPrint('停止播放');
     } catch (e) {
-      print('停止播放失败: $e');
+      debugPrint('停止播放失败: $e');
     }
   }
 
@@ -993,39 +1148,39 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
           if (await File(p).exists()) {
             existingPaths.add(p);
           } else {
-            print('音频文件不存在，跳过：$p');
+            debugPrint('音频文件不存在，跳过：$p');
           }
         }
 
         if (existingPaths.isNotEmpty) {
-          print('使用缓存的多段音频，共 ${existingPaths.length} 段');
+          debugPrint('使用缓存的多段音频，共 ${existingPaths.length} 段');
           await _playAudioSequentially(
             paths: existingPaths,
             forMessage: message,
           );
           return;
         }
-        print('多段音频缓存均已失效，重新生成');
+        debugPrint('多段音频缓存均已失效，重新生成');
       }
 
       if (message.audioPath != null) {
         final file = File(message.audioPath!);
         if (await file.exists()) {
-          print('使用旧版单段缓存音频：${message.audioPath}');
+          debugPrint('使用旧版单段缓存音频：${message.audioPath}');
           await _playAudioSequentially(
             paths: [message.audioPath!],
             forMessage: message,
           );
           return;
         }
-        print('旧版单段缓存已失效，重新生成');
+        debugPrint('旧版单段缓存已失效，重新生成');
       }
 
       // ========================================
       // 缓存音频不存在时的重新生成逻辑
       // ========================================
       // 使用统一的 _generateEmotionAudio 方法，和发送消息、重新生成按钮走完全相同的流程
-      print('缓存音频不存在，重新生成...');
+      debugPrint('缓存音频不存在，重新生成...');
       setState(() {
         _isPlaying = true;
         _currentPlayingMessage = message;
@@ -1041,7 +1196,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
       final newAudioPaths = await _generateEmotionAudio(japaneseText);
 
       if (newAudioPaths.isEmpty) {
-        print('所有句子音频生成均失败');
+        debugPrint('所有句子音频生成均失败');
         if (mounted) {
           setState(() {
             _isPlaying = false;
@@ -1070,21 +1225,21 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
           sessionId: _sessionId,
         );
 
-        print('开始顺序播放 ${newAudioPaths.length} 段情绪化语音...');
+        debugPrint('开始顺序播放 ${newAudioPaths.length} 段情绪化语音...');
         await _playAudioSequentially(
           paths: newAudioPaths,
           forMessage: updatedMessage,
         );
       } else {
         // 即使找不到原消息（极端情况），也尝试播放已生成的音频
-        print('未在消息列表中找到原消息，仍尝试播放');
+        debugPrint('未在消息列表中找到原消息，仍尝试播放');
         await _playAudioSequentially(
           paths: newAudioPaths,
           forMessage: message,
         );
       }
     } catch (e) {
-      print('播放错误: $e');
+      debugPrint('播放错误: $e');
       if (mounted) {
         setState(() {
           _isPlaying = false;
@@ -1118,7 +1273,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
         japaneseText = message.content.split('\n\n中文：')[0];
       }
 
-      print('重新生成情绪化语音...');
+      debugPrint('重新生成情绪化语音...');
 
       // 调用统一方法：分句 -> 情绪分析 -> 逐句 TTS
       final List<String> newAudioPaths =
@@ -1131,7 +1286,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
       }
 
       if (newAudioPaths.isEmpty) {
-        print('所有句子重新生成均失败');
+        debugPrint('所有句子重新生成均失败');
         return;
       }
 
@@ -1144,7 +1299,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
           try {
             await oldFile.delete();
           } catch (e) {
-            print('删除旧音频失败: $e');
+            debugPrint('删除旧音频失败: $e');
           }
         }
       }
@@ -1171,14 +1326,13 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
           await _audioPlayerPrimary.stop();
           await _audioPlayerSecondary.stop();
         } catch (e) {
-          print('停止播放器失败（忽略）: $e');
+          debugPrint('停止播放器失败（忽略）: $e');
         }
 
         if (_segmentCompleter != null && !_segmentCompleter!.isCompleted) {
           _segmentCompleter!.complete();
         }
         _segmentCompleter = null;
-        _preloadFuture = null;
         _primaryIsActive = true;
 
         if (mounted) {
@@ -1188,21 +1342,21 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
           });
         }
 
-        print('重新生成完成，开始顺序播放 ${newAudioPaths.length} 段...');
+        debugPrint('重新生成完成，开始顺序播放 ${newAudioPaths.length} 段...');
         await _playAudioSequentially(
           paths: newAudioPaths,
           forMessage: updatedMessage,
         );
       } else {
         // 找不到原消息时的兜底：仍然播放已生成的音频，但无法更新缓存
-        print('未在消息列表中找到原消息（index=-1），仍尝试播放');
+        debugPrint('未在消息列表中找到原消息（index=-1），仍尝试播放');
         await _playAudioSequentially(
           paths: newAudioPaths,
           forMessage: message,
         );
       }
     } catch (e) {
-      print('重新生成语音错误: $e');
+      debugPrint('重新生成语音错误: $e');
       if (mounted) {
         setState(() {
           _regeneratingAudio.remove(message);
@@ -1243,9 +1397,9 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
                   child: Text(
                     content,
                     style: const TextStyle(
-                      fontFamily: AI_TRANSLATION_FONT_FAMILY,
-                      fontSize: AI_TRANSLATION_FONT_SIZE,
-                      fontWeight: AI_TRANSLATION_FONT_WEIGHT,
+                      fontFamily: aiTranslationFontFamily,
+                      fontSize: aiTranslationFontSize,
+                      fontWeight: aiTranslationFontWeight,
                       color: Color(0xFF2D3142),
                       height: 1.5,
                     ),
@@ -1258,9 +1412,9 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
           widgets.add(Text(
             content,
             style: const TextStyle(
-              fontFamily: AI_ORIGINAL_FONT_FAMILY,
-              fontSize: AI_ORIGINAL_FONT_SIZE,
-              fontWeight: AI_ORIGINAL_FONT_WEIGHT,
+              fontFamily: aiOriginalFontFamily,
+              fontSize: aiOriginalFontSize,
+              fontWeight: aiOriginalFontWeight,
               color: Color(0xFF2D3142),
               height: 1.5,
             ),
@@ -1280,9 +1434,9 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
         Text(
           parts[0],
           style: const TextStyle(
-            fontFamily: AI_ORIGINAL_FONT_FAMILY,
-            fontSize: AI_ORIGINAL_FONT_SIZE,
-            fontWeight: AI_ORIGINAL_FONT_WEIGHT,
+            fontFamily: aiOriginalFontFamily,
+            fontSize: aiOriginalFontSize,
+            fontWeight: aiOriginalFontWeight,
             color: Color(0xFF2D3142),
             height: 1.5,
           ),
@@ -1301,19 +1455,19 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
             child: Container(
               padding: const EdgeInsets.all(10),
               decoration: BoxDecoration(
-                color: Colors.white.withOpacity(0.3),
+                color: Colors.white.withValues(alpha: 0.3),
                 borderRadius: BorderRadius.circular(8),
                 border: Border.all(
-                  color: Colors.white.withOpacity(0.2),
+                  color: Colors.white.withValues(alpha: 0.2),
                   width: 1,
                 ),
               ),
               child: Text(
                 parts[1],
                 style: const TextStyle(
-                  fontFamily: AI_TRANSLATION_FONT_FAMILY,
-                  fontSize: AI_TRANSLATION_FONT_SIZE,
-                  fontWeight: AI_TRANSLATION_FONT_WEIGHT,
+                  fontFamily: aiTranslationFontFamily,
+                  fontSize: aiTranslationFontSize,
+                  fontWeight: aiTranslationFontWeight,
                   color: Color(0xFF2D3142),
                   height: 1.4,
                 ),
@@ -1381,16 +1535,16 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
     final List<String> sentences =
         EmotionAnalyzer.splitSentences(text, language: lang);
 
-    print('TTS 分句结果（共 ${sentences.length} 句）：');
+    debugPrint('TTS 分句结果（共 ${sentences.length} 句）：');
     for (int i = 0; i < sentences.length; i++) {
-      print('  [$i] ${sentences[i]}');
+      debugPrint('  [$i] ${sentences[i]}');
     }
 
     // --- 第二步：情绪分析 ---
     // 根据 _emotionAnalysisEnabled 开关决定是调用 DeepSeek 分析还是直接用默认情绪
     final List<SpeechEmotion> emotions;
     if (_emotionAnalysisEnabled) {
-      print('正在进行情绪分析...');
+      debugPrint('正在进行情绪分析...');
       emotions = await EmotionAnalyzer.analyzeEmotions(
         sentences: sentences,
         character: widget.character,
@@ -1405,11 +1559,11 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
           : (widget.character.emotionAudioMap?.availableEmotions.first ??
               SpeechEmotion.neutral);
       emotions = List.filled(sentences.length, fallback);
-      print('情绪分析已关闭，全部使用 ${fallback.name}');
+      debugPrint('情绪分析已关闭，全部使用 ${fallback.name}');
     }
 
     // --- 第三步：逐句生成 TTS 音频 ---
-    print('开始逐句生成情绪化语音...');
+    debugPrint('开始逐句生成情绪化语音...');
     final List<String> audioPaths = [];
 
     for (int i = 0; i < sentences.length; i++) {
@@ -1417,12 +1571,14 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
       final SpeechEmotion emotion = emotions[i];
       final referenceAudio = await _getValidReferenceAudio(emotion);
 
-      print('句子 [$i] 情绪：${emotion.name}，参考音频：${referenceAudio.referWavPath}');
+      debugPrint(
+          '句子 [$i] 情绪：${emotion.name}，参考音频：${referenceAudio.referWavPath}');
 
       // 发音替换：日语角色应用注音词典，中文角色只做用户名替换
       final correctedSentence = _applyPronunciationCorrection(sentence);
 
-      final List<String> generatedPaths = await ApiService.generateSpeechSegments(
+      final List<String> generatedPaths =
+          await ApiService.generateSpeechSegments(
         text: correctedSentence,
         referWavPath: referenceAudio.referWavPath,
         promptText: referenceAudio.promptText,
@@ -1433,9 +1589,9 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
 
       if (generatedPaths.isNotEmpty) {
         audioPaths.addAll(generatedPaths);
-        print('句子 [$i] 音频生成成功：${generatedPaths.join(', ')}');
+        debugPrint('句子 [$i] 音频生成成功：${generatedPaths.join(', ')}');
       } else {
-        print('句子 [$i] 音频生成失败，跳过该段');
+        debugPrint('句子 [$i] 音频生成失败，跳过该段');
       }
     }
 
@@ -1448,7 +1604,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
     if (await File(AppPaths.resolve(audio.referWavPath)).exists()) {
       return audio;
     }
-    print('情绪音频文件不存在（${emotion.name}）：${audio.referWavPath}，回退到默认参考音频');
+    debugPrint('情绪音频文件不存在（${emotion.name}）：${audio.referWavPath}，回退到默认参考音频');
     return EmotionReferenceAudio(
       referWavPath: widget.character.referWavPath,
       promptText: widget.character.promptText,
@@ -1471,30 +1627,28 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
     }
 
     // 2. 日语专有名词注音纠正（仅对日语角色生效，中文角色跳过）
-    if (ENABLE_PRONUNCIATION_CORRECTION && widget.character.language != 'zh') {
-      PRONUNCIATION_DICT.forEach((word, pronunciation) {
-        if (correctedText.contains(word)) {
-          if (PRONUNCIATION_MODE == 'bracket') {
-            correctedText =
-                correctedText.replaceAll(word, '$word[$pronunciation]');
-          } else {
-            correctedText = correctedText.replaceAll(word, pronunciation);
-          }
-        }
-      });
+    if (enablePronunciationCorrection && widget.character.language != 'zh') {
+      final expandedPronunciations = <String, String>{
+        ..._expandedPronunciationMap(pronunciationDict),
+        ..._expandedPronunciationMap(
+          widget.character.pronunciationOverrides ?? const <String, String>{},
+        ),
+      };
+      final pronunciationEntries = expandedPronunciations.entries.toList()
+        ..sort((a, b) => b.key.length.compareTo(a.key.length));
 
-      final characterPronunciationOverrides =
-          widget.character.pronunciationOverrides ?? const <String, String>{};
-      characterPronunciationOverrides.forEach((word, pronunciation) {
+      for (final entry in pronunciationEntries) {
+        final word = entry.key;
+        final pronunciation = entry.value;
         if (correctedText.contains(word)) {
-          if (PRONUNCIATION_MODE == 'bracket') {
+          if (pronunciationMode == 'bracket') {
             correctedText =
                 correctedText.replaceAll(word, '$word[$pronunciation]');
           } else {
             correctedText = correctedText.replaceAll(word, pronunciation);
           }
         }
-      });
+      }
     }
 
     return correctedText;
@@ -1656,14 +1810,36 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
     }
   }
 
-  void _scrollToBottom() {
+  void _scrollToBottom({
+    bool animated = true,
+    int settlePasses = 1,
+  }) {
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_scrollController.hasClients) {
+      if (!mounted || !_scrollController.hasClients) return;
+
+      final position = _scrollController.position;
+      if (!position.hasContentDimensions) {
+        if (settlePasses > 0) {
+          _scrollToBottom(animated: animated, settlePasses: settlePasses - 1);
+        }
+        return;
+      }
+
+      final target = position.maxScrollExtent;
+      if (animated) {
         _scrollController.animateTo(
-          _scrollController.position.maxScrollExtent,
+          target,
           duration: const Duration(milliseconds: 300),
           curve: Curves.easeOut,
         );
+      } else {
+        _scrollController.jumpTo(target);
+      }
+
+      if (settlePasses > 0) {
+        Future.delayed(const Duration(milliseconds: 50), () {
+          _scrollToBottom(animated: false, settlePasses: settlePasses - 1);
+        });
       }
     });
   }
@@ -1672,7 +1848,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
     final color = Color(int.parse('0xFF${widget.character.color}'));
     final confirm = await showDialog<bool>(
       context: context,
-      barrierColor: Colors.black.withOpacity(0.20),
+      barrierColor: Colors.black.withValues(alpha: 0.20),
       builder: (context) => Dialog(
         insetPadding: const EdgeInsets.symmetric(horizontal: 40),
         backgroundColor: Colors.transparent,
@@ -1688,20 +1864,20 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
                 child: Container(
                   padding: const EdgeInsets.fromLTRB(20, 18, 20, 16),
                   decoration: BoxDecoration(
-                    color: const Color(0xFFF8F7FA).withOpacity(0.90),
+                    color: const Color(0xFFF8F7FA).withValues(alpha: 0.90),
                     borderRadius: BorderRadius.circular(18),
                     border: Border.all(
-                      color: Colors.white.withOpacity(0.82),
+                      color: Colors.white.withValues(alpha: 0.82),
                       width: 1,
                     ),
                     boxShadow: [
                       BoxShadow(
-                        color: Colors.black.withOpacity(0.22),
+                        color: Colors.black.withValues(alpha: 0.22),
                         blurRadius: 34,
                         offset: const Offset(0, 18),
                       ),
                       BoxShadow(
-                        color: Colors.black.withOpacity(0.08),
+                        color: Colors.black.withValues(alpha: 0.08),
                         blurRadius: 70,
                         offset: const Offset(0, 34),
                       ),
@@ -1825,9 +2001,9 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
       if (await f.exists()) {
         try {
           await f.delete();
-          print('已删除音频缓存: $p');
+          debugPrint('已删除音频缓存: $p');
         } catch (e) {
-          print('删除音频缓存失败: $e');
+          debugPrint('删除音频缓存失败: $e');
         }
       }
     }
@@ -1842,7 +2018,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
       sessionId: _sessionId,
     );
     await _refreshChatSessions();
-    print('消息已删除（下标: $index）');
+    debugPrint('消息已删除（下标: $index）');
   }
 
   void _showMessageContextMenu(
@@ -1862,7 +2038,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
       context: context,
       position: position,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(7)),
-      color: Colors.white.withOpacity(0.96),
+      color: Colors.white.withValues(alpha: 0.96),
       elevation: 12,
       items: [
         PopupMenuItem<String>(
@@ -1902,7 +2078,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.transparent,
-      barrierColor: Colors.black.withOpacity(0.16),
+      barrierColor: Colors.black.withValues(alpha: 0.16),
       builder: (context) {
         final color = Color(int.parse('0xFF${widget.character.color}'));
         final screenWidth = MediaQuery.of(context).size.width;
@@ -1959,20 +2135,20 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
                     width: panelWidth,
                     padding: const EdgeInsets.fromLTRB(14, 8, 14, 12),
                     decoration: BoxDecoration(
-                      color: const Color(0xFFF8F7FA).withOpacity(0.90),
+                      color: const Color(0xFFF8F7FA).withValues(alpha: 0.90),
                       borderRadius: BorderRadius.circular(22),
                       border: Border.all(
-                        color: Colors.white.withOpacity(0.82),
+                        color: Colors.white.withValues(alpha: 0.82),
                         width: 1,
                       ),
                       boxShadow: [
                         BoxShadow(
-                          color: Colors.black.withOpacity(0.24),
+                          color: Colors.black.withValues(alpha: 0.24),
                           blurRadius: 36,
                           offset: const Offset(0, 18),
                         ),
                         BoxShadow(
-                          color: Colors.black.withOpacity(0.10),
+                          color: Colors.black.withValues(alpha: 0.10),
                           blurRadius: 76,
                           offset: const Offset(0, 34),
                         ),
@@ -1986,7 +2162,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
                           height: 4,
                           margin: const EdgeInsets.only(bottom: 10),
                           decoration: BoxDecoration(
-                            color: Colors.black.withOpacity(0.12),
+                            color: Colors.black.withValues(alpha: 0.12),
                             borderRadius: BorderRadius.circular(99),
                           ),
                         ),
@@ -2005,7 +2181,8 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
                                 ),
                               ),
                               Icon(Icons.wallpaper,
-                                  color: color.withOpacity(0.72), size: 19),
+                                  color: color.withValues(alpha: 0.72),
+                                  size: 19),
                             ],
                           ),
                         ),
@@ -2057,7 +2234,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
     final controller = TextEditingController(text: session.title);
     final newTitle = await showDialog<String>(
       context: context,
-      barrierColor: Colors.black.withOpacity(0.20),
+      barrierColor: Colors.black.withValues(alpha: 0.20),
       builder: (context) => Dialog(
         insetPadding: const EdgeInsets.symmetric(horizontal: 40),
         backgroundColor: Colors.transparent,
@@ -2073,20 +2250,20 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
                 child: Container(
                   padding: const EdgeInsets.fromLTRB(20, 18, 20, 16),
                   decoration: BoxDecoration(
-                    color: const Color(0xFFF8F7FA).withOpacity(0.90),
+                    color: const Color(0xFFF8F7FA).withValues(alpha: 0.90),
                     borderRadius: BorderRadius.circular(18),
                     border: Border.all(
-                      color: Colors.white.withOpacity(0.82),
+                      color: Colors.white.withValues(alpha: 0.82),
                       width: 1,
                     ),
                     boxShadow: [
                       BoxShadow(
-                        color: Colors.black.withOpacity(0.22),
+                        color: Colors.black.withValues(alpha: 0.22),
                         blurRadius: 34,
                         offset: const Offset(0, 18),
                       ),
                       BoxShadow(
-                        color: Colors.black.withOpacity(0.08),
+                        color: Colors.black.withValues(alpha: 0.08),
                         blurRadius: 70,
                         offset: const Offset(0, 34),
                       ),
@@ -2117,7 +2294,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
                           counterText: '',
                           hintText: '输入对话名称',
                           filled: true,
-                          fillColor: Colors.white.withOpacity(0.72),
+                          fillColor: Colors.white.withValues(alpha: 0.72),
                           contentPadding: const EdgeInsets.symmetric(
                             horizontal: 13,
                             vertical: 11,
@@ -2125,7 +2302,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
                           enabledBorder: OutlineInputBorder(
                             borderRadius: BorderRadius.circular(10),
                             borderSide: BorderSide(
-                              color: Colors.black.withOpacity(0.08),
+                              color: Colors.black.withValues(alpha: 0.08),
                               width: 1,
                             ),
                           ),
@@ -2193,7 +2370,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
   Future<void> _deleteChatSession(ChatSession session) async {
     final confirm = await showDialog<bool>(
       context: context,
-      barrierColor: Colors.black.withOpacity(0.20),
+      barrierColor: Colors.black.withValues(alpha: 0.20),
       builder: (context) => Dialog(
         insetPadding: const EdgeInsets.symmetric(horizontal: 40),
         backgroundColor: Colors.transparent,
@@ -2209,20 +2386,20 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
                 child: Container(
                   padding: const EdgeInsets.fromLTRB(20, 18, 20, 16),
                   decoration: BoxDecoration(
-                    color: const Color(0xFFF8F7FA).withOpacity(0.90),
+                    color: const Color(0xFFF8F7FA).withValues(alpha: 0.90),
                     borderRadius: BorderRadius.circular(18),
                     border: Border.all(
-                      color: Colors.white.withOpacity(0.82),
+                      color: Colors.white.withValues(alpha: 0.82),
                       width: 1,
                     ),
                     boxShadow: [
                       BoxShadow(
-                        color: Colors.black.withOpacity(0.22),
+                        color: Colors.black.withValues(alpha: 0.22),
                         blurRadius: 34,
                         offset: const Offset(0, 18),
                       ),
                       BoxShadow(
-                        color: Colors.black.withOpacity(0.08),
+                        color: Colors.black.withValues(alpha: 0.08),
                         blurRadius: 70,
                         offset: const Offset(0, 34),
                       ),
@@ -2343,7 +2520,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
         globalPosition.dy + 1,
       ),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-      color: Colors.white.withOpacity(0.96),
+      color: Colors.white.withValues(alpha: 0.96),
       elevation: 12,
       items: [
         PopupMenuItem<String>(
@@ -2387,7 +2564,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.transparent,
-      barrierColor: Colors.black.withOpacity(0.16),
+      barrierColor: Colors.black.withValues(alpha: 0.16),
       builder: (context) {
         final color = Color(int.parse('0xFF${widget.character.color}'));
         final screenWidth = MediaQuery.of(context).size.width;
@@ -2409,20 +2586,20 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
                       maxHeight: MediaQuery.of(context).size.height * 0.54,
                     ),
                     decoration: BoxDecoration(
-                      color: const Color(0xFFF8F7FA).withOpacity(0.90),
+                      color: const Color(0xFFF8F7FA).withValues(alpha: 0.90),
                       borderRadius: BorderRadius.circular(22),
                       border: Border.all(
-                        color: Colors.white.withOpacity(0.82),
+                        color: Colors.white.withValues(alpha: 0.82),
                         width: 1,
                       ),
                       boxShadow: [
                         BoxShadow(
-                          color: Colors.black.withOpacity(0.24),
+                          color: Colors.black.withValues(alpha: 0.24),
                           blurRadius: 36,
                           offset: const Offset(0, 18),
                         ),
                         BoxShadow(
-                          color: Colors.black.withOpacity(0.10),
+                          color: Colors.black.withValues(alpha: 0.10),
                           blurRadius: 76,
                           offset: const Offset(0, 34),
                         ),
@@ -2436,7 +2613,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
                           width: 36,
                           height: 4,
                           decoration: BoxDecoration(
-                            color: Colors.black.withOpacity(0.12),
+                            color: Colors.black.withValues(alpha: 0.12),
                             borderRadius: BorderRadius.circular(99),
                           ),
                         ),
@@ -2457,7 +2634,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
                               Tooltip(
                                 message: '新建对话',
                                 child: Material(
-                                  color: color.withOpacity(0.10),
+                                  color: color.withValues(alpha: 0.10),
                                   borderRadius: BorderRadius.circular(10),
                                   child: InkWell(
                                     borderRadius: BorderRadius.circular(10),
@@ -2486,7 +2663,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
                               height: 1,
                               indent: 12,
                               endIndent: 12,
-                              color: Colors.black.withOpacity(0.06),
+                              color: Colors.black.withValues(alpha: 0.06),
                             ),
                             itemBuilder: (context, index) {
                               final session = _chatSessions[index];
@@ -2516,7 +2693,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
                                           horizontal: 10),
                                       decoration: BoxDecoration(
                                         color: selected
-                                            ? color.withOpacity(0.10)
+                                            ? color.withValues(alpha: 0.10)
                                             : Colors.transparent,
                                         borderRadius: BorderRadius.circular(12),
                                       ),
@@ -2627,7 +2804,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
             borderRadius: BorderRadius.circular(7),
             boxShadow: [
               BoxShadow(
-                color: Colors.black.withOpacity(0.14),
+                color: Colors.black.withValues(alpha: 0.14),
                 blurRadius: 16,
                 offset: const Offset(0, 6),
               ),
@@ -2655,13 +2832,13 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
         borderRadius: BorderRadius.circular(10),
         overlayColor: WidgetStateProperty.resolveWith<Color?>((states) {
           if (states.contains(WidgetState.pressed)) {
-            return const Color(0xFF2D3142).withOpacity(0.10);
+            return const Color(0xFF2D3142).withValues(alpha: 0.10);
           }
           if (states.contains(WidgetState.hovered)) {
-            return const Color(0xFF2D3142).withOpacity(0.06);
+            return const Color(0xFF2D3142).withValues(alpha: 0.06);
           }
           if (states.contains(WidgetState.focused)) {
-            return const Color(0xFF2D3142).withOpacity(0.08);
+            return const Color(0xFF2D3142).withValues(alpha: 0.08);
           }
           return null;
         }),
@@ -2718,16 +2895,6 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
     if (item.type == ContextMenuButtonType.cut) return '剪切';
     if (item.type == ContextMenuButtonType.selectAll) return '全选';
     return item.label ?? '';
-  }
-
-  IconData _contextMenuIcon(ContextMenuButtonItem item) {
-    if (item.type == ContextMenuButtonType.paste) return Icons.content_paste;
-    if (item.type == ContextMenuButtonType.copy) return Icons.copy;
-    if (item.type == ContextMenuButtonType.cut) return Icons.content_cut;
-    if (item.type == ContextMenuButtonType.selectAll) {
-      return Icons.select_all;
-    }
-    return Icons.more_horiz;
   }
 
   @override
@@ -2795,19 +2962,19 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
                         begin: Alignment.topLeft,
                         end: Alignment.bottomRight,
                         colors: [
-                          Colors.white.withOpacity(0.25),
-                          Colors.white.withOpacity(0.15),
+                          Colors.white.withValues(alpha: 0.25),
+                          Colors.white.withValues(alpha: 0.15),
                         ],
                       ),
                       border: Border(
                         top: BorderSide(
-                          color: Colors.white.withOpacity(0.35),
+                          color: Colors.white.withValues(alpha: 0.35),
                           width: 1,
                         ),
                       ),
                       boxShadow: [
                         BoxShadow(
-                          color: Colors.black.withOpacity(0.10),
+                          color: Colors.black.withValues(alpha: 0.10),
                           blurRadius: 20,
                           offset: const Offset(0, -5),
                         ),
@@ -2879,8 +3046,8 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
                                         shape: BoxShape.circle,
                                         boxShadow: [
                                           BoxShadow(
-                                            color:
-                                                Colors.black.withOpacity(0.10),
+                                            color: Colors.black
+                                                .withValues(alpha: 0.10),
                                             blurRadius: 16,
                                             offset: const Offset(0, 6),
                                           ),
@@ -2898,20 +3065,21 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
                                                 end: Alignment.bottomRight,
                                                 colors: [
                                                   Colors.white
-                                                      .withOpacity(0.66),
+                                                      .withValues(alpha: 0.66),
                                                   Colors.white
-                                                      .withOpacity(0.34),
+                                                      .withValues(alpha: 0.34),
                                                 ],
                                               ),
                                               border: Border.all(
                                                 color: Colors.white
-                                                    .withOpacity(0.72),
+                                                    .withValues(alpha: 0.72),
                                                 width: 1.4,
                                               ),
                                             ),
                                             child: Icon(Icons.image_outlined,
                                                 size: 22,
-                                                color: color.withOpacity(0.78)),
+                                                color: color.withValues(
+                                                    alpha: 0.78)),
                                           ),
                                         ),
                                       ),
@@ -2924,7 +3092,8 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
                                       borderRadius: BorderRadius.circular(30),
                                       boxShadow: [
                                         BoxShadow(
-                                          color: Colors.black.withOpacity(0.10),
+                                          color: Colors.black
+                                              .withValues(alpha: 0.10),
                                           blurRadius: 18,
                                           offset: const Offset(0, 7),
                                         ),
@@ -2943,15 +3112,17 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
                                               begin: Alignment.topLeft,
                                               end: Alignment.bottomRight,
                                               colors: [
-                                                Colors.white.withOpacity(0.68),
-                                                Colors.white.withOpacity(0.42),
+                                                Colors.white
+                                                    .withValues(alpha: 0.68),
+                                                Colors.white
+                                                    .withValues(alpha: 0.42),
                                               ],
                                             ),
                                             borderRadius:
                                                 BorderRadius.circular(30),
                                             border: Border.all(
                                                 color: Colors.white
-                                                    .withOpacity(0.74),
+                                                    .withValues(alpha: 0.74),
                                                 width: 1.4),
                                           ),
                                           child: Listener(
@@ -3006,7 +3177,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
                                     shape: BoxShape.circle,
                                     boxShadow: [
                                       BoxShadow(
-                                          color: color.withOpacity(0.28),
+                                          color: color.withValues(alpha: 0.28),
                                           blurRadius: 18,
                                           offset: const Offset(0, 7))
                                     ],
@@ -3024,13 +3195,13 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
                                             colors: [
                                               Color.lerp(color, Colors.white,
                                                       0.22)!
-                                                  .withOpacity(0.92),
-                                              color.withOpacity(0.78),
+                                                  .withValues(alpha: 0.92),
+                                              color.withValues(alpha: 0.78),
                                             ],
                                           ),
                                           border: Border.all(
-                                            color:
-                                                Colors.white.withOpacity(0.50),
+                                            color: Colors.white
+                                                .withValues(alpha: 0.50),
                                             width: 1.2,
                                           ),
                                         ),
@@ -3077,13 +3248,13 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
                     // 外层浅阴影：制造悬浮离地感
                     // blurRadius 控制阴影扩散范围（可调 6~20），opacity 控制深浅（可调 0.04~0.15）
                     BoxShadow(
-                      color: Colors.black.withOpacity(0.15),
+                      color: Colors.black.withValues(alpha: 0.15),
                       blurRadius: 20,
                       offset: const Offset(0, 5),
                     ),
                     // 第二层更柔和的远距离阴影，增加空间层次感
                     BoxShadow(
-                      color: Colors.black.withOpacity(0.03),
+                      color: Colors.black.withValues(alpha: 0.03),
                       blurRadius: 30,
                       offset: const Offset(0, 8),
                     ),
@@ -3103,8 +3274,8 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
                         begin: Alignment.topCenter,
                         end: Alignment.bottomCenter,
                         colors: [
-                          Colors.white.withOpacity(0.94),
-                          Colors.white.withOpacity(0.78),
+                          Colors.white.withValues(alpha: 0.94),
+                          Colors.white.withValues(alpha: 0.78),
                         ],
                       ),
                       borderRadius: const BorderRadius.only(
@@ -3112,7 +3283,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
                         bottomRight: Radius.circular(18),
                       ),
                       border: Border.all(
-                        color: Colors.black.withOpacity(0.06),
+                        color: Colors.black.withValues(alpha: 0.06),
                         width: 0.8,
                       ),
                     ),
@@ -3138,19 +3309,20 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
                                   decoration: BoxDecoration(
                                     shape: BoxShape.circle,
                                     border: Border.all(
-                                        color: color.withOpacity(0.3),
+                                        color: color.withValues(alpha: 0.3),
                                         width: 2),
                                   ),
                                   child: ClipOval(
                                     child: _effectiveCharacterAvatarPath != null
                                         ? Image.file(
-                                            File(_effectiveCharacterAvatarPath!),
+                                            File(
+                                                _effectiveCharacterAvatarPath!),
                                             fit: BoxFit.cover)
                                         : Container(
                                             decoration: BoxDecoration(
                                               gradient: LinearGradient(colors: [
                                                 color,
-                                                color.withOpacity(0.7)
+                                                color.withValues(alpha: 0.7)
                                               ]),
                                             ),
                                             child: Center(
@@ -3255,13 +3427,13 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
           ),
           Container(
             color: Colors.white
-                .withOpacity(1.0 - widget.character.backgroundOpacity),
+                .withValues(alpha: 1.0 - widget.character.backgroundOpacity),
           ),
         ],
       );
     }
 
-    if (BACKGROUND_IMAGE_PATH.isNotEmpty) {
+    if (backgroundImagePath.isNotEmpty) {
       return Stack(
         fit: StackFit.expand,
         children: [
@@ -3270,11 +3442,11 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
               sigmaX: widget.character.backgroundBlurSigma,
               sigmaY: widget.character.backgroundBlurSigma,
             ),
-            child: Image.asset(BACKGROUND_IMAGE_PATH, fit: BoxFit.cover),
+            child: Image.asset(backgroundImagePath, fit: BoxFit.cover),
           ),
           Container(
             color: Colors.white
-                .withOpacity(1.0 - widget.character.backgroundOpacity),
+                .withValues(alpha: 1.0 - widget.character.backgroundOpacity),
           ),
         ],
       );
@@ -3285,92 +3457,8 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
         gradient: LinearGradient(
           begin: Alignment.topCenter,
           end: Alignment.bottomCenter,
-          colors: CHAT_BACKGROUND_GRADIENT,
+          colors: chatBackgroundGradient,
         ),
-      ),
-    );
-  }
-
-  Widget _buildTypingIndicator() {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            width: 36,
-            height: 36,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              border: Border.all(
-                  color: Color(int.parse('0xFF${widget.character.color}'))
-                      .withOpacity(0.3),
-                  width: 2),
-            ),
-            child: ClipOval(
-              child: _effectiveCharacterAvatarPath != null
-                  ? Image.file(File(_effectiveCharacterAvatarPath!),
-                      fit: BoxFit.cover)
-                  : Container(
-                      decoration: BoxDecoration(
-                        gradient: LinearGradient(colors: [
-                          Color(int.parse('0xFF${widget.character.color}')),
-                          Color(int.parse('0xFF${widget.character.color}'))
-                              .withOpacity(0.7),
-                        ]),
-                      ),
-                      child: Center(
-                        child: Text(widget.character.avatar,
-                            style: const TextStyle(fontSize: 18)),
-                      ),
-                    ),
-            ),
-          ),
-          const SizedBox(width: 10),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: const BorderRadius.only(
-                topLeft: Radius.circular(MESSAGE_BUBBLE_CORNER_RADIUS),
-                topRight: Radius.circular(MESSAGE_BUBBLE_RADIUS),
-                bottomLeft: Radius.circular(MESSAGE_BUBBLE_RADIUS),
-                bottomRight: Radius.circular(MESSAGE_BUBBLE_RADIUS),
-              ),
-              boxShadow: [
-                BoxShadow(
-                    color: Colors.black.withOpacity(0.05),
-                    blurRadius: 5,
-                    offset: const Offset(0, 2))
-              ],
-            ),
-            child: AnimatedBuilder(
-              animation: _typingAnimationController,
-              builder: (context, child) {
-                return Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: List.generate(3, (index) {
-                    final delay = index * 0.3;
-                    final value =
-                        (_typingAnimationController.value - delay) % 1.0;
-                    final opacity = (value < 0.5) ? value * 2 : (1 - value) * 2;
-                    return Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 2),
-                      child: Container(
-                        width: 8,
-                        height: 8,
-                        decoration: BoxDecoration(
-                          color: Colors.grey.withOpacity(0.3 + opacity * 0.5),
-                          shape: BoxShape.circle,
-                        ),
-                      ),
-                    );
-                  }),
-                );
-              },
-            ),
-          ),
-        ],
       ),
     );
   }
@@ -3413,7 +3501,8 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
                   height: 36,
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
-                    border: Border.all(color: color.withOpacity(0.3), width: 2),
+                    border: Border.all(
+                        color: color.withValues(alpha: 0.3), width: 2),
                   ),
                   child: ClipOval(
                     child: _effectiveCharacterAvatarPath != null
@@ -3421,8 +3510,10 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
                             fit: BoxFit.cover)
                         : Container(
                             decoration: BoxDecoration(
-                              gradient: LinearGradient(
-                                  colors: [color, color.withOpacity(0.7)]),
+                              gradient: LinearGradient(colors: [
+                                color,
+                                color.withValues(alpha: 0.7)
+                              ]),
                             ),
                             child: Center(
                               child: Text(widget.character.avatar,
@@ -3437,7 +3528,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
                 child: ConstrainedBox(
                   constraints: BoxConstraints(
                     maxWidth: MediaQuery.of(context).size.width *
-                        MESSAGE_MAX_WIDTH_RATIO,
+                        messageMaxWidthRatio,
                   ),
                   child: GestureDetector(
                     onSecondaryTapUp: (details) {
@@ -3446,8 +3537,8 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
                     },
                     child: Container(
                       padding: const EdgeInsets.symmetric(
-                        horizontal: MESSAGE_BUBBLE_HORIZONTAL_PADDING,
-                        vertical: MESSAGE_BUBBLE_VERTICAL_PADDING,
+                        horizontal: messageBubbleHorizontalPadding,
+                        vertical: messageBubbleVerticalPadding,
                       ),
                       decoration: BoxDecoration(
                         gradient: isUser
@@ -3457,26 +3548,25 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
                                 end: Alignment.bottomRight,
                                 colors: widget.character.aiBubbleGradient,
                               ),
-                        color: isUser ? color.withOpacity(0.6) : null,
+                        color: isUser ? color.withValues(alpha: 0.6) : null,
                         borderRadius: isUser
                             ? const BorderRadius.only(
-                                topLeft: Radius.circular(MESSAGE_BUBBLE_RADIUS),
-                                topRight: Radius.circular(
-                                    MESSAGE_BUBBLE_CORNER_RADIUS),
+                                topLeft: Radius.circular(messageBubbleRadius),
+                                topRight:
+                                    Radius.circular(messageBubbleCornerRadius),
                                 bottomLeft:
-                                    Radius.circular(MESSAGE_BUBBLE_RADIUS),
+                                    Radius.circular(messageBubbleRadius),
                                 bottomRight:
-                                    Radius.circular(MESSAGE_BUBBLE_RADIUS),
+                                    Radius.circular(messageBubbleRadius),
                               )
                             : const BorderRadius.only(
-                                topLeft: Radius.circular(
-                                    MESSAGE_BUBBLE_CORNER_RADIUS),
-                                topRight:
-                                    Radius.circular(MESSAGE_BUBBLE_RADIUS),
+                                topLeft:
+                                    Radius.circular(messageBubbleCornerRadius),
+                                topRight: Radius.circular(messageBubbleRadius),
                                 bottomLeft:
-                                    Radius.circular(MESSAGE_BUBBLE_RADIUS),
+                                    Radius.circular(messageBubbleRadius),
                                 bottomRight:
-                                    Radius.circular(MESSAGE_BUBBLE_RADIUS),
+                                    Radius.circular(messageBubbleRadius),
                               ),
                         border: !isUser
                             ? Border.all(
@@ -3485,14 +3575,14 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
                             : null,
                         boxShadow: [
                           BoxShadow(
-                              color: Colors.black.withOpacity(0.05),
+                              color: Colors.black.withValues(alpha: 0.05),
                               blurRadius: 5,
                               offset: const Offset(0, 2)),
                           if (!isUser)
                             BoxShadow(
                               color: widget.character.aiBubbleGlowColor
-                                  .withOpacity(AI_BUBBLE_GLOW_OPACITY),
-                              blurRadius: AI_BUBBLE_GLOW_BLUR,
+                                  .withValues(alpha: aiBubbleGlowOpacity),
+                              blurRadius: aiBubbleGlowBlur,
                               spreadRadius: -2,
                               offset: const Offset(0, 0),
                             ),
@@ -3588,17 +3678,20 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
                   height: 36,
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
-                    border: Border.all(color: color.withOpacity(0.3), width: 2),
+                    border: Border.all(
+                        color: color.withValues(alpha: 0.3), width: 2),
                   ),
                   child: ClipOval(
-                    child: USER_AVATAR_PATH.isNotEmpty &&
-                            File(AppPaths.resolve(USER_AVATAR_PATH)).existsSync()
-                        ? Image.file(File(AppPaths.resolve(USER_AVATAR_PATH)),
+                    child: userAvatarPath.isNotEmpty &&
+                            File(AppPaths.resolve(userAvatarPath)).existsSync()
+                        ? Image.file(File(AppPaths.resolve(userAvatarPath)),
                             fit: BoxFit.cover)
                         : Container(
                             decoration: BoxDecoration(
-                              gradient: LinearGradient(
-                                  colors: [color, color.withOpacity(0.7)]),
+                              gradient: LinearGradient(colors: [
+                                color,
+                                color.withValues(alpha: 0.7)
+                              ]),
                             ),
                             child: const Center(
                               child: Icon(Icons.person,

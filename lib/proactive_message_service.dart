@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:math';
+import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'character_config.dart';
 import 'storage_service.dart';
@@ -42,7 +43,7 @@ class ProactiveMessageService {
     for (final character in characters) {
       _scheduleNextCheck(character);
     }
-    print(
+    debugPrint(
         'ProactiveMessageService initialized for ${characters.length} characters');
     _checkOfflineMessages(characters);
   }
@@ -262,7 +263,7 @@ class ProactiveMessageService {
 
       // 主动消息已被用户关闭时，跳过该角色
       if (!enabled) {
-        print('[${character.name}] 主动消息已在设置中关闭，跳过补发检查');
+        debugPrint('[${character.name}] 主动消息已在设置中关闭，跳过补发检查');
         continue;
       }
 
@@ -271,7 +272,7 @@ class ProactiveMessageService {
       final lastProactiveMs = prefs.getInt(lastProactiveKey) ?? 0;
 
       if (lastProactiveMs == 0) {
-        print(
+        debugPrint(
             '[${character.name}] No previous proactive message, skipping startup check');
         continue;
       }
@@ -286,7 +287,7 @@ class ProactiveMessageService {
       // 使用从 prefs 读取的 chance，而不是 character.proactiveIdleChance
       if (Random().nextDouble() >= chance) continue;
 
-      print(
+      debugPrint(
           '[${character.name}] ${hoursSinceLast}h since last message, sending catch-up');
 
       final fakeTimestamp = _pickReasonableTimestamp(
@@ -319,6 +320,7 @@ class ProactiveMessageService {
             date: fakeTimestamp,
             contentInstruction: contentInstruction,
           ),
+          characterId: character.id,
           characterLanguage: character.language,
         );
 
@@ -326,7 +328,7 @@ class ProactiveMessageService {
         final chinese = responseMap['chinese'] ?? '';
         final primaryContent = character.language == 'zh' ? chinese : japanese;
         if (_isInvalidProactiveContent(primaryContent)) {
-          print(
+          debugPrint(
               '[${character.name}] Invalid content, discarding: $primaryContent');
           continue;
         }
@@ -343,7 +345,7 @@ class ProactiveMessageService {
         await prefs.setInt(
             lastProactiveKey, DateTime.now().millisecondsSinceEpoch);
       } catch (e) {
-        print('[${character.name}] Error generating catch-up message: $e');
+        debugPrint('[${character.name}] Error generating catch-up message: $e');
       }
     }
 
@@ -402,7 +404,7 @@ class ProactiveMessageService {
 
     _unreadCallbacks[characterId]?.call(newCount);
 
-    print(
+    debugPrint(
         '[$characterId] Offline message saved (timestamp: $timestamp), unread: $newCount');
   }
 
@@ -454,7 +456,7 @@ class ProactiveMessageService {
           'next_fire_${character.id}', nextFireAt.toIso8601String());
     });
 
-    print('[${character.name}] Next check in $randomMinutes minutes');
+    debugPrint('[${character.name}] Next check in $randomMinutes minutes');
 
     _timers[character.id] = Timer(
       Duration(minutes: randomMinutes),
@@ -482,7 +484,7 @@ class ProactiveMessageService {
 
     // 主动消息已被用户在设置页关闭时，跳过本次触发
     if (!enabled) {
-      print('[${character.name}] 主动消息已在设置中关闭，跳过本次触发');
+      debugPrint('[${character.name}] 主动消息已在设置中关闭，跳过本次触发');
       return;
     }
 
@@ -495,17 +497,18 @@ class ProactiveMessageService {
 
     // 使用从 prefs 读取的 intervalHours，而不是 character.proactiveMinIntervalHours
     if (hoursSinceLast < intervalHours) {
-      print('[${character.name}] Only ${hoursSinceLast}h since last, skipping');
+      debugPrint(
+          '[${character.name}] Only ${hoursSinceLast}h since last, skipping');
       return;
     }
 
     // 使用从 prefs 读取的 chance，而不是 character.proactiveIdleChance
     if (Random().nextDouble() >= chance) {
-      print('[${character.name}] Probability not met, skipping');
+      debugPrint('[${character.name}] Probability not met, skipping');
       return;
     }
 
-    print('[${character.name}] Proactive message triggered');
+    debugPrint('[${character.name}] Proactive message triggered');
 
     final latestMessages = await StorageService.loadConversation(
       character.id,
@@ -545,6 +548,7 @@ class ProactiveMessageService {
           date: displayTimestamp,
           contentInstruction: contentInstruction,
         ),
+        characterId: character.id,
         characterLanguage: character.language,
       );
 
@@ -552,7 +556,7 @@ class ProactiveMessageService {
       final chinese = responseMap['chinese'] ?? '';
       final primaryContent = character.language == 'zh' ? chinese : japanese;
       if (_isInvalidProactiveContent(primaryContent)) {
-        print(
+        debugPrint(
             '[${character.name}] Invalid content, discarding: $primaryContent');
         return;
       }
@@ -562,10 +566,10 @@ class ProactiveMessageService {
 
       final callback = _activeCallbacks[character.id];
       if (callback != null) {
-        print('[${character.name}] User in chat, delivering directly');
+        debugPrint('[${character.name}] User in chat, delivering directly');
         await callback(japanese, chinese);
       } else {
-        print('[${character.name}] User not in chat, saving offline');
+        debugPrint('[${character.name}] User not in chat, saving offline');
         await _saveOfflineMessagesWithTimestamp(
           character,
           japanese,
@@ -576,7 +580,7 @@ class ProactiveMessageService {
         );
       }
     } catch (e) {
-      print('[${character.name}] Error generating proactive message: $e');
+      debugPrint('[${character.name}] Error generating proactive message: $e');
     }
   }
 
@@ -710,7 +714,7 @@ class ProactiveMessageService {
   // 调试：强制立刻触发某个角色的主动消息（跳过冷却和概率）
   // ----------------------------------------
   Future<void> debugForceProactive(Character character) async {
-    print('[DEBUG] Force triggering proactive for ${character.name}');
+    debugPrint('[DEBUG] Force triggering proactive for ${character.name}');
 
     // 通知首页显示"消息收取中..."
     _fetchingCallbacks['__global__']?.call(true);
@@ -754,13 +758,14 @@ class ProactiveMessageService {
           date: displayTimestamp,
           contentInstruction: contentInstruction,
         ),
+        characterId: character.id,
         characterLanguage: character.language,
       );
       final japanese = responseMap['japanese'] ?? '';
       final chinese = responseMap['chinese'] ?? '';
       final primaryContent = character.language == 'zh' ? chinese : japanese;
       if (_isInvalidProactiveContent(primaryContent)) {
-        print('[DEBUG] Invalid content, discarding: $primaryContent');
+        debugPrint('[DEBUG] Invalid content, discarding: $primaryContent');
         return;
       }
 
@@ -784,9 +789,9 @@ class ProactiveMessageService {
           sessionId: sessionId,
         );
       }
-      print('[DEBUG] Force trigger complete');
+      debugPrint('[DEBUG] Force trigger complete');
     } catch (e) {
-      print('[DEBUG] Force trigger failed: $e');
+      debugPrint('[DEBUG] Force trigger failed: $e');
     } finally {
       // 无论成功失败都通知首页收取结束
       _fetchingCallbacks['__global__']?.call(false);

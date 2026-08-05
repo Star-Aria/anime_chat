@@ -77,6 +77,7 @@ const Map<String, String> kCharacterSeriesMap = {
   'giyu': '鬼灭之刃',
   // 以后加新角色, 在这里加映射
   'sakiko': 'BanG Dream',
+  'tomori': 'BanG Dream',
   'andy': '未分类',
 };
 
@@ -318,8 +319,6 @@ const double kHeroOverlayBottomAlpha = 0.20;
 
 // 波浪容器向上重叠头图的距离 (= 头图渲染高度 - 头图可见高度)
 // 这是个派生值, 不再独立调整 — 想改头图可见区或渲染区, 改上面的两个常量。
-// 保留这个常量是为了让旧代码 (注释 / painter 内部计算) 仍能直接引用,
-// 不必到处替换成减法表达式。
 const double kWaveOverlap = kHeroImageHeight - kHeroVisibleHeight;
 
 // ----------------------------------------
@@ -350,20 +349,9 @@ const Color kEdgeGlowMid = Color(0xFFC8B5E5); // 中段紫
 const Color kEdgeGlowEnd = Color(0xFFFFB8D0); // 粉 (≈ 文件夹终点)
 
 // ----------------------------------------
-// 角色卡片
-// ----------------------------------------
-// 卡片本身保持纯白玻璃质感, 渐变常量备用 (当前未使用 BackdropFilter 内已自带)
-const Color kCardGradientStart = Color(0xFFFFFFFF);
-const Color kCardGradientEnd = Color(0xFFFAFBFC);
-
 // 角色卡片阴影色调 (冷调海蓝, 配合彩色文件夹底)
 // 阴影实际使用时 alpha 较低 (0.05~0.10)
 const Color kCardShadowTint = Color(0xFF5688C9);
-
-// 注: 旧的点击流光颜色常量 kCardSweepColor 已被删除。
-//     新动效用 _DiagonalShimmerPainter (倾斜白光带) +
-//     边缘发光波纹 (用角色色 character.color), 不再需要单独的流光色。
-//     如果以后想恢复整片色块扫光, 可在这里加回类似的常量。
 
 // ----------------------------------------
 // 波浪容器主体投影色 (冷调海蓝)
@@ -381,10 +369,6 @@ const Color kLogoGradientEnd = Color(0xFFE8A0C0);
 // 实际渲染时, 文字本体是 kTitleColor, 投影是 kTitleShadowColor
 const Color kTitleColor = Color(0xFFFFFFFF);
 const Color kTitleShadowColor = Color(0xFF1A4870);
-
-// 旧的标题渐变色保留兼容, 当前未使用
-const Color kTitleGradientStart = Color(0xFFFFFFFF);
-const Color kTitleGradientEnd = Color(0xFFFFFFFF);
 
 // ========================================
 // 角色选择页面 (首页)
@@ -612,7 +596,7 @@ class _CharacterSelectionPageState extends State<CharacterSelectionPage> {
           //   - painter 内主波浪中线 = waveBaseY = 14
           //   - 主波浪在屏幕坐标 y = kHeroImageHeight - kWaveOverlap + 14
           //
-          //   - _FrostedGlassBand 高 _kBandHeight = 50
+          //   - _FrostedGlassBand 高 50
           //   - 玻璃带下波浪中线在 widget 内部 _kBandBottomY = 34
           //   - 让玻璃带下波浪 = 屏幕主波浪 (无缝衔接到容器顶白描边):
           //       Positioned.top + 34 = kHeroImageHeight - kWaveOverlap + 14
@@ -625,14 +609,14 @@ class _CharacterSelectionPageState extends State<CharacterSelectionPage> {
             top: kHeroImageHeight - kWaveOverlap - 20,
             left: 0,
             right: 0,
-            height: 50, // = _kBandHeight
+            height: 50,
             child: const _FrostedGlassBand(),
           ),
           Positioned(
             top: kHeroImageHeight - kWaveOverlap - 20,
             left: 0,
             right: 0,
-            height: 50, // = _kBandHeight
+            height: 50,
             child: const IgnorePointer(
               child: CustomPaint(
                 painter: _TopGlassLinePainter(),
@@ -735,7 +719,7 @@ class _CharacterSelectionPageState extends State<CharacterSelectionPage> {
                   '头图未找到\n请确认 $resolvedHeroImagePath 存在',
                   textAlign: TextAlign.center,
                   style: TextStyle(
-                    color: Colors.white.withOpacity(0.7),
+                    color: Colors.white.withValues(alpha: 0.7),
                     fontSize: 11,
                   ),
                 ),
@@ -750,53 +734,13 @@ class _CharacterSelectionPageState extends State<CharacterSelectionPage> {
                 begin: Alignment.topCenter,
                 end: Alignment.bottomCenter,
                 colors: [
-                  Colors.white.withOpacity(kHeroOverlayTopAlpha),
-                  Colors.white.withOpacity(kHeroOverlayBottomAlpha),
+                  Colors.white.withValues(alpha: kHeroOverlayTopAlpha),
+                  Colors.white.withValues(alpha: kHeroOverlayBottomAlpha),
                 ],
               ),
             ),
           ),
         ],
-      ),
-    );
-  }
-
-  // ----------------------------------------
-  // 构建背景模糊光斑
-  // ----------------------------------------
-  // 用 ImageFiltered + ImageFilter.blur 对圆形本身做真正的高斯模糊,
-  // 效果相当于 CSS 的 filter: blur(60px), 得到边界完全柔和的光晕,
-  // 而不是硬边圆 + 外阴影的组合。
-  Widget _buildBgBlob({
-    required Color color,
-    required Size size,
-    double? top,
-    double? bottom,
-    double? left,
-    double? right,
-  }) {
-    return Positioned(
-      top: top,
-      bottom: bottom,
-      left: left,
-      right: right,
-      child: IgnorePointer(
-        child: ImageFiltered(
-          // sigmaX/sigmaY 是高斯模糊的标准差, 值越大越柔
-          // 60 相当于 CSS 的 filter: blur(60px)
-          // 想让光晕更发散可以增大, 想让光斑边界更清晰可以减小
-          imageFilter: ui.ImageFilter.blur(sigmaX: 60, sigmaY: 60),
-          child: Container(
-            width: size.width,
-            height: size.height,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              // opacity 稍微高一点, 因为模糊后整体会变淡
-              // 可调: 0.5-0.7 之间
-              color: color.withOpacity(0.55),
-            ),
-          ),
-        ),
       ),
     );
   }
@@ -837,12 +781,12 @@ class _CharacterSelectionPageState extends State<CharacterSelectionPage> {
               // 想要更内敛: 减小 alpha
               boxShadow: [
                 BoxShadow(
-                  color: kLogoGradientStart.withOpacity(0.5),
+                  color: kLogoGradientStart.withValues(alpha: 0.5),
                   blurRadius: 16,
                   offset: const Offset(0, 8),
                 ),
                 BoxShadow(
-                  color: kLogoGradientEnd.withOpacity(0.4),
+                  color: kLogoGradientEnd.withValues(alpha: 0.4),
                   blurRadius: 24,
                   offset: const Offset(0, 14),
                 ),
@@ -875,25 +819,25 @@ class _CharacterSelectionPageState extends State<CharacterSelectionPage> {
             shadows: [
               // 大白色光晕 (最外发光)
               Shadow(
-                color: Colors.white.withOpacity(0.7),
+                color: Colors.white.withValues(alpha: 0.7),
                 offset: const Offset(0, 0),
                 blurRadius: 18,
               ),
               // 中白色光晕 (强化发光)
               Shadow(
-                color: Colors.white.withOpacity(0.85),
+                color: Colors.white.withValues(alpha: 0.85),
                 offset: const Offset(0, 0),
                 blurRadius: 8,
               ),
               // 深蓝阴影 (定义形状)
               Shadow(
-                color: kTitleShadowColor.withOpacity(0.6),
+                color: kTitleShadowColor.withValues(alpha: 0.6),
                 offset: const Offset(0, 2),
                 blurRadius: 4,
               ),
               // 深蓝硬阴影 (强化字形)
               Shadow(
-                color: kTitleShadowColor.withOpacity(0.4),
+                color: kTitleShadowColor.withValues(alpha: 0.4),
                 offset: const Offset(0, 1),
                 blurRadius: 1,
               ),
@@ -1045,7 +989,7 @@ class _CharacterSelectionPageState extends State<CharacterSelectionPage> {
         // 外面有一圈很弱的同色光晕, 发光不会散得很大, 紧贴边线
         boxShadow: [
           BoxShadow(
-            color: kEdgeGlowStart.withOpacity(0.4),
+            color: kEdgeGlowStart.withValues(alpha: 0.4),
             blurRadius: 6,
             spreadRadius: 0,
             offset: const Offset(0, 0),
@@ -1148,14 +1092,14 @@ class _CharacterSelectionPageState extends State<CharacterSelectionPage> {
             Icons.person_outline,
             size: 48,
             // 用半透明白, 在彩色文件夹底上柔和但可见
-            color: Colors.white.withOpacity(0.5),
+            color: Colors.white.withValues(alpha: 0.5),
           ),
           const SizedBox(height: 8),
           Text(
             '$series 暂无角色',
             style: TextStyle(
               fontSize: 13,
-              color: Colors.white.withOpacity(0.85),
+              color: Colors.white.withValues(alpha: 0.85),
             ),
           ),
         ],
@@ -1299,8 +1243,8 @@ class _WaveContainerPainter extends CustomPainter {
         Offset(w / 2, fadeTopY),
         Offset(w / 2, fadeBottomY),
         [
-          Colors.white.withOpacity(0.45), // 顶部透明
-          Colors.white.withOpacity(0.96), // 底部实白
+          Colors.white.withValues(alpha: 0.45), // 顶部透明
+          Colors.white.withValues(alpha: 0.96), // 底部实白
         ],
         [0.0, 1.0],
       );
@@ -1337,7 +1281,7 @@ class _WaveContainerPainter extends CustomPainter {
       waveBaseY - waveAmp * 0.5,
     );
     final topStrokePaint = Paint()
-      ..color = Colors.white.withOpacity(0.95)
+      ..color = Colors.white.withValues(alpha: 0.95)
       ..style = PaintingStyle.stroke
       ..strokeWidth = 2.5;
     canvas.drawPath(topWavePath, topStrokePaint);
@@ -1361,7 +1305,7 @@ class _WaveContainerPainter extends CustomPainter {
 // 实现真正的毛玻璃效果。
 //
 // 关键尺寸约定 (widget 内部坐标系, y=0 是 widget 顶部):
-//   - widget 总高 _kBandHeight = 50 (足够容纳上下波浪起伏 + 16px 玻璃区)
+//   - widget 总高 50 (足够容纳上下波浪起伏 + 16px 玻璃区)
 //   - 上波浪线中线 _kBandTopY = 18 (上下起伏 ±14, 范围 4~32)
 //   - 下波浪线中线 _kBandBottomY = 34 (上下起伏 ±14, 范围 20~48)
 //   - 磨砂玻璃区 = 上波浪 (~y18) 到下波浪 (~y34), 厚度只有 16px
@@ -1374,7 +1318,6 @@ class _WaveContainerPainter extends CustomPainter {
 //     "波浪容器主波浪线" 位置 (= kHeroImageHeight - kWaveOverlap + 14)
 //   - 即 Positioned.top = kHeroImageHeight - kWaveOverlap + 14 - 34
 //                       = kHeroImageHeight - kWaveOverlap - 20
-const double _kBandHeight = 50;
 const double _kBandTopY = 18; // 上波浪中线
 const double _kBandBottomY = 34; // 下波浪中线 (= 屏幕主波浪线位置)
 const double _kBandWaveAmp = 14; // 波浪起伏幅度
@@ -1397,7 +1340,7 @@ class _FrostedGlassBand extends StatelessWidget {
     return ClipPath(
       clipper: _FrostedGlassClipper(),
       child: Container(
-        color: Colors.white.withOpacity(0.25),
+        color: Colors.white.withValues(alpha: 0.25),
       ),
     );
   }
@@ -1519,7 +1462,7 @@ class _TopGlassLinePainter extends CustomPainter {
 
     // 想让独立线更明显: 增大 alpha (默认 0.9, 范围 0.6~1.0)
     final paint = Paint()
-      ..color = Colors.white.withOpacity(0.9)
+      ..color = Colors.white.withValues(alpha: 0.9)
       ..style = PaintingStyle.stroke
       ..strokeWidth = 1.0;
     canvas.drawPath(path, paint);
@@ -1565,7 +1508,7 @@ class _FolderTab extends StatelessWidget {
     // Tab 底色 (半透明白控制透明度, 文字本身保持清晰)
     // ----------------------------------------
     final Color tabFillColor =
-        active ? kFolderColor : kFolderColor.withOpacity(0.55);
+        active ? kFolderColor : kFolderColor.withValues(alpha: 0.55);
     // 文字色: 选中用白色 (= kFolderAccent), 未选中用深色保证可读性
     final Color textColor = active ? kFolderAccent : const Color(0xFF3F6A99);
     final FontWeight fontWeight = active ? FontWeight.w600 : FontWeight.w500;
@@ -1598,7 +1541,7 @@ class _FolderTab extends StatelessWidget {
                     ),
                     boxShadow: [
                       BoxShadow(
-                        color: kEdgeGlowStart.withOpacity(0.4),
+                        color: kEdgeGlowStart.withValues(alpha: 0.4),
                         blurRadius: 6,
                         spreadRadius: 0,
                         offset: const Offset(0, 0),
@@ -1886,8 +1829,8 @@ class _CharacterCardState extends State<_CharacterCard>
   // 卡片本体 + 边缘发光波纹层 (Stack 不裁剪, 让发光能溢出边缘)
   // ----------------------------------------
   Widget _buildCardWithGlow(Color characterColor) {
-    final glowColor = Color.lerp(characterColor, Colors.white, 0.18)!
-        .withBlue((characterColor.blue + 34).clamp(0, 255).toInt());
+    final glowColor = Color.lerp(characterColor, Colors.white, 0.18)!.withBlue(
+        ((characterColor.b * 255.0).round() + 34).clamp(0, 255).toInt());
     return Stack(
       // clipBehavior: Clip.none 让边缘发光波纹能溢出卡片边界
       // 这是 F 效果的关键 - 没有这个就看不到光晕扩散
@@ -1902,7 +1845,7 @@ class _CharacterCardState extends State<_CharacterCard>
             // 极淡外阴影: hover 时略加深
             boxShadow: [
               BoxShadow(
-                color: Colors.black.withOpacity(_hovering ? 0.08 : 0.05),
+                color: Colors.black.withValues(alpha: _hovering ? 0.08 : 0.05),
                 blurRadius: _hovering ? 14 : 10,
                 offset: const Offset(0, 4),
               ),
@@ -1941,11 +1884,11 @@ class _CharacterCardState extends State<_CharacterCard>
                   return Container(
                     decoration: BoxDecoration(
                       // 半透明白: alpha 0.28 让玻璃通透
-                      color: Colors.white.withOpacity(0.28),
+                      color: Colors.white.withValues(alpha: 0.28),
                       borderRadius: BorderRadius.circular(18),
                       // 描边 alpha 由动画驱动, 静态时是基础 0.55
                       border: Border.all(
-                        color: Colors.white.withOpacity(borderAlpha),
+                        color: Colors.white.withValues(alpha: borderAlpha),
                         width: 1.5,
                       ),
                     ),
@@ -2034,7 +1977,7 @@ class _CharacterCardState extends State<_CharacterCard>
 
                 return CustomPaint(
                   painter: _GlowRingPainter(
-                    color: glowColor.withOpacity(0.78 * opacity),
+                    color: glowColor.withValues(alpha: 0.78 * opacity),
                     ringExpand: ringExpand * 0.82,
                     blur: blur * 0.72,
                   ),
@@ -2107,12 +2050,12 @@ class _CharacterCardState extends State<_CharacterCard>
                   ? LinearGradient(
                       begin: Alignment.topLeft,
                       end: Alignment.bottomRight,
-                      colors: [color, color.withOpacity(0.7)],
+                      colors: [color, color.withValues(alpha: 0.7)],
                     )
                   : null,
               boxShadow: [
                 BoxShadow(
-                  color: kCardShadowTint.withOpacity(0.2),
+                  color: kCardShadowTint.withValues(alpha: 0.2),
                   blurRadius: 12,
                   offset: const Offset(0, 4),
                 ),
@@ -2150,7 +2093,7 @@ class _CharacterCardState extends State<_CharacterCard>
                   borderRadius: BorderRadius.circular(9),
                   boxShadow: [
                     BoxShadow(
-                      color: const Color(0xFFE85970).withOpacity(0.45),
+                      color: const Color(0xFFE85970).withValues(alpha: 0.45),
                       blurRadius: 6,
                       offset: const Offset(0, 2),
                     ),
@@ -2450,17 +2393,17 @@ class _FetchingCapsuleState extends State<_FetchingCapsule>
           padding: const EdgeInsets.symmetric(horizontal: kCapsulePaddingH),
           decoration: BoxDecoration(
             // 半透明白胶囊底色
-            color: Colors.white.withOpacity(kCapsuleBgOpacity),
+            color: Colors.white.withValues(alpha: kCapsuleBgOpacity),
             borderRadius: BorderRadius.circular(kCapsuleRadius),
             // 白描边: 和角色卡片描边保持一致，让玻璃感更统一
             border: Border.all(
-              color: Colors.white.withOpacity(0.5),
+              color: Colors.white.withValues(alpha: 0.5),
               width: 1,
             ),
             // 极淡外阴影: 让胶囊"浮在"背景上，不要让它和背景糊在一起
             boxShadow: [
               BoxShadow(
-                color: Colors.black.withOpacity(0.04),
+                color: Colors.black.withValues(alpha: 0.04),
                 blurRadius: 8,
                 offset: const Offset(0, 2),
               ),
@@ -2481,11 +2424,11 @@ class _FetchingCapsuleState extends State<_FetchingCapsule>
                     height: kDotSize,
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
-                      color: kDotColor.withOpacity(opacity),
+                      color: kDotColor.withValues(alpha: opacity),
                       // 圆点外发出一圈淡光晕, 和它的透明度联动
                       boxShadow: [
                         BoxShadow(
-                          color: kDotColor.withOpacity(opacity * 0.5),
+                          color: kDotColor.withValues(alpha: opacity * 0.5),
                           blurRadius: 6,
                           spreadRadius: 0.5,
                         ),
@@ -2607,11 +2550,11 @@ class _DiagonalShimmerPainter extends CustomPainter {
       Offset(shimmerLeft, 0),
       Offset(shimmerLeft + shimmerWidth, 0),
       [
-        Colors.white.withOpacity(0.0),
-        Colors.white.withOpacity(0.25 * envelopeAlpha),
-        Colors.white.withOpacity(0.85 * envelopeAlpha),
-        Colors.white.withOpacity(0.25 * envelopeAlpha),
-        Colors.white.withOpacity(0.0),
+        Colors.white.withValues(alpha: 0.0),
+        Colors.white.withValues(alpha: 0.25 * envelopeAlpha),
+        Colors.white.withValues(alpha: 0.85 * envelopeAlpha),
+        Colors.white.withValues(alpha: 0.25 * envelopeAlpha),
+        Colors.white.withValues(alpha: 0.0),
       ],
       [0.0, 0.30, 0.50, 0.70, 1.0],
     );

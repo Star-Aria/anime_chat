@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'api_keys.dart';
 import 'character_config.dart';
@@ -74,7 +75,7 @@ class EmotionAnalyzer {
 
     // 只有一种情绪时不需要分析，直接全部返回
     if (availableEmotions.length == 1) {
-      print(
+      debugPrint(
           '角色 ${character.id} 只有一种情绪（${availableEmotions.first.name}），跳过情绪分析');
       return defaults;
     }
@@ -171,7 +172,7 @@ class EmotionAnalyzer {
       );
 
       if (response.statusCode != 200) {
-        print('情绪分析 API 错误 ${response.statusCode}，回退到默认情绪');
+        debugPrint('情绪分析 API 错误 ${response.statusCode}，回退到默认情绪');
         return defaults;
       }
 
@@ -188,7 +189,7 @@ class EmotionAnalyzer {
         sentences: sentences,
       );
     } catch (e) {
-      print('情绪分析失败: $e，回退到默认情绪');
+      debugPrint('情绪分析失败: $e，回退到默认情绪');
       return defaults;
     }
   }
@@ -221,8 +222,8 @@ class EmotionAnalyzer {
       final int start = cleaned.indexOf('[');
       final int end = cleaned.lastIndexOf(']');
       if (start == -1 || end == -1 || end <= start) {
-        print('情绪分析：返回格式不含有效 JSON 数组，回退到默认情绪');
-        print('  原始内容：$cleaned');
+        debugPrint('情绪分析：返回格式不含有效 JSON 数组，回退到默认情绪');
+        debugPrint('  原始内容：$cleaned');
         return defaults;
       }
 
@@ -242,7 +243,7 @@ class EmotionAnalyzer {
               (parsed[i] as String? ?? '').toLowerCase().trim();
           if (!labelMap.containsKey(label)) {
             // 模型返回了该角色不支持的标签，打印警告，回退到 fallback
-            print('  警告：句子 [$i] 返回了不支持的标签 "$label"，'
+            debugPrint('  警告：句子 [$i] 返回了不支持的标签 "$label"，'
                 '已替换为 ${fallback.name}');
           }
           result.add(labelMap[label] ?? fallback);
@@ -253,15 +254,15 @@ class EmotionAnalyzer {
       }
 
       // 打印最终结果，附带对应句子内容，方便调试时对照检查情绪是否准确、是否有跳句
-      print('情绪分析完成（共 ${result.length} 句）：');
+      debugPrint('情绪分析完成（共 ${result.length} 句）：');
       for (int i = 0; i < result.length; i++) {
         final sentencePreview = i < sentences.length ? sentences[i] : '(无对应句子)';
-        print('  [$i] ${result[i].name} | $sentencePreview');
+        debugPrint('  [$i] ${result[i].name} | $sentencePreview');
       }
 
       return result;
     } catch (e) {
-      print('情绪分析解析失败: $e，回退到默认情绪');
+      debugPrint('情绪分析解析失败: $e，回退到默认情绪');
       return defaults;
     }
   }
@@ -273,13 +274,13 @@ class EmotionAnalyzer {
   // 按对应语言的句子结束符切分，切分结果同时用于情绪分析和逐句 TTS 调用。
   //
   // 注意：和 api_service.dart 里的 _splitTextIntoSegments 用途不同：
-  //   - _splitTextIntoSegments 是为了控制单段字数（不超过 30 字）
+  //   - _splitTextIntoSegments 默认保留完整句，只处理极长文本兜底
   //   - 这里是以完整句子为单位，保留完整语义供情绪分析
-  // 如果某句话超过 30 字，TTS 那边会在 generateSpeech 内部自动处理长句问题。
+  // TTS 那边不会再把普通句子按 30 字硬切开。
   //
   // 返回：过滤掉空字符串后的句子列表，至少包含一个元素
   static List<String> splitSentences(String text, {String language = 'ja'}) {
-    // 先清理括号内的动作描述，和 api_service.dart 里的规则保持一致
+    // TTS 不朗读括号里的动作/注释；UI 原文仍保留这些内容。
     String cleaned = text
         .replaceAll(RegExp(r'（[^）]*）'), '') // 全角圆括号
         .replaceAll(RegExp(r'\([^)]*\)'), '') // 半角圆括号
@@ -292,6 +293,8 @@ class EmotionAnalyzer {
     // 让后续 TTS 至少尝试合成，不会直接丢掉这条消息
     if (cleaned.isEmpty) return [text];
 
+    final protected = _protectMyGoName(cleaned);
+
     // 按句子结束符切分，lookbehind 保留标点在前面那句末尾
     // 中文角色额外在逗号、分号处切分，使单句语音更自然
     final RegExp splitPattern = language == 'zh'
@@ -299,10 +302,13 @@ class EmotionAnalyzer {
         : RegExp(r'(?<=[。！？\n!?])');
 
     final List<String> sentences = [];
-    final parts = cleaned.split(splitPattern);
+    final parts = protected.text.split(splitPattern);
 
     for (final part in parts) {
-      final trimmed = part.trim();
+      final trimmed = _restoreProtectedTokens(
+        part.trim(),
+        protected.placeholders,
+      );
       if (trimmed.isNotEmpty) {
         sentences.add(trimmed);
       }
@@ -313,4 +319,46 @@ class EmotionAnalyzer {
 
     return sentences;
   }
+
+  static _ProtectedSentenceText _protectMyGoName(String text) {
+    final placeholders = <String, String>{};
+    var result = text;
+    final pattern = RegExp(r'MyGO!!!!!');
+
+    final matches = pattern.allMatches(text).toList().reversed;
+    for (final match in matches) {
+      final token = match.group(0);
+      if (token == null || token.isEmpty) continue;
+
+      final placeholder = '__EXCLAMATION_NAME_${placeholders.length}__';
+      placeholders[placeholder] = token;
+      result = result.replaceRange(match.start, match.end, placeholder);
+    }
+
+    return _ProtectedSentenceText(
+      text: result,
+      placeholders: placeholders,
+    );
+  }
+
+  static String _restoreProtectedTokens(
+    String text,
+    Map<String, String> placeholders,
+  ) {
+    var result = text;
+    placeholders.forEach((placeholder, token) {
+      result = result.replaceAll(placeholder, token);
+    });
+    return result;
+  }
+}
+
+class _ProtectedSentenceText {
+  const _ProtectedSentenceText({
+    required this.text,
+    required this.placeholders,
+  });
+
+  final String text;
+  final Map<String, String> placeholders;
 }

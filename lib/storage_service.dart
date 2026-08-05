@@ -135,6 +135,22 @@ class Message {
 
 // 本地存储服务（无改动，和原来完全一样）
 class StorageService {
+  static const List<String> _userSettingBaseKeys = [
+    'user_name',
+    'user_name_translation',
+    'user_name_pronunciation',
+    'personality_override',
+    'tts_speed',
+    'emotion_analysis_enabled',
+    'show_original',
+    'show_translation',
+    'proactive_enabled',
+    'proactive_interval',
+    'proactive_chance',
+    'proactive_follow_up_chance',
+    'proactive_content_instruction',
+  ];
+
   static String _sessionsKey(String characterId) =>
       'chat_sessions_$characterId';
   static String _activeSessionKey(String characterId) =>
@@ -183,6 +199,12 @@ class StorageService {
     await prefs.setString(_activeSessionKey(characterId), session.id);
     await prefs.setString(
         _sessionConversationKey(characterId, session.id), '[]');
+    await _copyInitialSessionSettings(
+      prefs,
+      characterId,
+      sourceSessionId: _oldestSession(sessions).id,
+      targetSessionId: session.id,
+    );
     return session;
   }
 
@@ -231,22 +253,7 @@ class StorageService {
     }
 
     await prefs.remove(_sessionConversationKey(characterId, sessionId));
-    for (final baseKey in [
-      'user_name',
-      'user_name_translation',
-      'user_name_pronunciation',
-      'personality_override',
-      'tts_speed',
-      'emotion_analysis_enabled',
-      'show_original',
-      'show_translation',
-      'proactive_enabled',
-      'proactive_interval',
-      'proactive_chance',
-      'proactive_follow_up_chance',
-      'proactive_content_instruction',
-      'last_proactive',
-    ]) {
+    for (final baseKey in [..._userSettingBaseKeys, 'last_proactive']) {
       await prefs.remove(scopedSettingKey(baseKey, characterId, sessionId));
     }
 
@@ -258,6 +265,42 @@ class StorageService {
         : activeId;
     await prefs.setString(_activeSessionKey(characterId), nextActiveId);
     return nextActiveId;
+  }
+
+  static ChatSession _oldestSession(List<ChatSession> sessions) {
+    return sessions.reduce(
+      (oldest, session) =>
+          session.createdAt.isBefore(oldest.createdAt) ? session : oldest,
+    );
+  }
+
+  static Future<void> _copyInitialSessionSettings(
+    SharedPreferences prefs,
+    String characterId, {
+    required String sourceSessionId,
+    required String targetSessionId,
+  }) async {
+    for (final baseKey in _userSettingBaseKeys) {
+      final sourceKey = scopedSettingKey(baseKey, characterId, sourceSessionId);
+      final legacyKey = '${baseKey}_$characterId';
+      final targetKey = scopedSettingKey(baseKey, characterId, targetSessionId);
+      final value = prefs.get(sourceKey) ??
+          (sourceSessionId == 'default' ? prefs.get(legacyKey) : null);
+
+      if (value == null) {
+        await prefs.remove(targetKey);
+      } else if (value is String) {
+        await prefs.setString(targetKey, value);
+      } else if (value is bool) {
+        await prefs.setBool(targetKey, value);
+      } else if (value is int) {
+        await prefs.setInt(targetKey, value);
+      } else if (value is double) {
+        await prefs.setDouble(targetKey, value);
+      } else if (value is List<String>) {
+        await prefs.setStringList(targetKey, value);
+      }
+    }
   }
 
   static Future<void> _saveSessions(SharedPreferences prefs, String characterId,
