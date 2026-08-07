@@ -5,15 +5,16 @@ import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 import 'storage_service.dart';
 import 'api_keys.dart';
+import 'grounding_contract.dart';
 import 'name_pronunciation.dart';
 import 'path_service.dart';
 
 class ApiService {
-  static const String doubaoApiKey = ApiKeys.deepseekApiKey;
+  static const String deepSeekApiKey = ApiKeys.deepseekApiKey;
 
-  static const String doubaoModel = 'deepseek-v4-flash';
+  static const String deepSeekModel = 'deepseek-v4-flash';
 
-  static const String doubaoBaseUrl = 'https://api.deepseek.com/v1';
+  static const String deepSeekBaseUrl = 'https://api.deepseek.com/v1';
 
   // ========================================
   // 豆包视觉模型配置
@@ -28,15 +29,13 @@ class ApiService {
   // ========================================
   // 中译日校验与重试参数（可调）
   // ========================================
-  // _maxTranslationRetries：翻译失败时最多重试几次。
+  // _maxTranslationRetries：日语角色化翻译未通过本地门禁时最多尝试几次。
   //   网络抖动、API 偶发返回奇怪格式（如返回中文、返回空、返回带 markdown 的内容）时，
-  //   会自动再调用一次翻译 API。次数过多会拖慢响应速度，建议 2~4 之间。
-  // _japaneseFallbackText：所有重试都失败后兜底用的日语句子。
+  //   会自动再调用一次翻译 API。为控制延迟和额度，当前最多尝试 2 次。
+  // _japaneseFallbackTextForCharacter：所有重试都失败后按角色语体兜底。
   //   存在的意义是：宁可让 AI 随便说一句日语兜底，也绝不能把中文塞给 TTS（GPT-SoVITS）
   //   导致语音乱掉、字幕也是中文。如果想换文案，改这里即可，但必须是纯日语。
-  static const int _maxTranslationRetries = 3;
-  static const String _japaneseFallbackText = 'ごめん、ちょっと言葉が出てこなかった…もう一度話してくれる？';
-
+  static const int _maxTranslationRetries = 2;
   static const List<_NameEntry> _nameEntries = [
     _NameEntry(japanese: 'お館様', chinese: '主公大人'),
     _NameEntry(japanese: '蝶屋敷', chinese: '蝶屋'),
@@ -166,6 +165,26 @@ class ApiService {
     });
   }
 
+  @visibleForTesting
+  static String applyJapaneseNameMappingsForTest(
+    String chineseText, {
+    String? characterId,
+  }) {
+    final fixedCallNames = fixedCharacterCallNamesForCharacter(characterId);
+    final protectedText = _protectMappedNamesForJapaneseTranslation(
+      chineseText,
+      fixedCharacterCallNames: fixedCallNames,
+    );
+    final restored = _restoreProtectedMappedNames(
+      protectedText.text,
+      protectedText.placeholders,
+    );
+    return _applyFixedCharacterCallNames(
+      _applyStandardJapaneseNameSpellings(restored),
+      fixedCallNames,
+    );
+  }
+
   static List<String> nameTranslationGlossaryForPrompt() {
     final lines = <String>[];
     void addLine(String source, String chinese) {
@@ -254,7 +273,8 @@ class ApiService {
   // characterLanguage: 'ja' = 日语角色（默认），'zh' = 中文角色
   // 中文角色：AI 直接以中文回复，跳过日语校验与翻译步骤，
   //           返回 {'japanese': '', 'chinese': <中文回复>}
-  // 日语角色：保持原有流程，返回 {'japanese': <日文>, 'chinese': <中文翻译>}
+  // 日语角色：先生成中文角色回答，再进行受约束的日语角色化翻译，
+  //           返回 {'japanese': <日文>, 'chinese': <中文原稿>}
   static Future<Map<String, String>> generateResponse({
     required String characterPersonality,
     required List<Message> conversationHistory,
@@ -286,6 +306,8 @@ class ApiService {
       final isEmotionSupportTurn = _isEmotionSupportUserMessage(userMessage);
       final isRelationshipArcTurn = _isRelationshipArcQuestion(userMessage);
       final isEventProcessTurn = _isEventProcessQuestion(userMessage);
+      final timelineAnswerContract =
+          _TimelineAnswerContract.fromWebContext(webContext);
       final allowsBoundedRoleplay =
           (webContext?.contains('【有限角色发挥】') ?? false) ||
               (webContext?.contains('【明确设定与有限发挥并存】') ?? false);
@@ -299,7 +321,8 @@ class ApiService {
         characterPersonality,
         characterId: characterId,
       );
-      final standardJapaneseNames = _standardJapaneseNameRulesForPrompt();
+      final fixedChineseCallNames =
+          _fixedCharacterChineseCallNames(fixedCharacterCallNames);
 
       if (timeContext != null && timeContext.isNotEmpty) {
         systemBuffer.writeln();
@@ -336,9 +359,9 @@ class ApiService {
 - 歌曲名、乐队名、专有标题如果资料中以英文/罗马字出现，最终回复应保留原文表记，不要擅自音译成片假名或中文。
 - 如果用户询问某个事件“如何/怎么/经过”，回复要围绕用户问的动作目标筛选事实。只挑 2 到 4 个最相关的核心动作自然回答；不要因为资料或时间线里有后续事件，就把审判、冲突、结局等无关后续全部讲出来。
 - 如果用户问“如何支援/救援/协助/处理”，不要主动复述和支援目标相反的后续冲突、审判或结局补充；除非用户明确追问这些后续。
-- 联网事实中人物姓名后的“（男）/（女）”只是性别指代参考，角色日语回答里不要把这个括号标注读出来或写出来。
+- 联网事实中人物姓名后的“（男）/（女）”只是性别指代参考，任何最终角色回答都不得把这个括号标注读出来或写出来。
 - 如果用户询问人物关系、相互影响、救赎、关系变化或一段经历，不要只做抽象评价；从资料中挑能体现关系变化的核心转折自然回答，再给出角色自己的感受。
-- 对人物关系、相互影响、救赎、关系变化类问题，优先选择能串起变化的核心转折：相识/邀请、冲突/逃避、鼓励/追回、回归/和解、结果。资料里有明确地点、行动、台词或作品名时，优先使用这些事实锚点，不要只用“互相支持、互相救赎”之类的概括，也不要用无关旁支替代核心转折。
+- 对人物关系、相互影响、救赎、关系变化类问题，优先选择真正改变双方处境或关系的核心转折。问题明确询问双向作用时，必须分别用至少一个具体事实说明双方各自带来的影响；背景铺垫不得挤掉其中任何一方。资料里有明确地点、行动、台词或作品名时，优先使用这些事实锚点，不要只用抽象概括，也不要用无关旁支替代核心转折。
 - “去过某地点/某集出现某地点/去看某物”不等于“闲暇常去某地点”；只有资料明确写出兴趣、闲暇、常去、经常、休息日等习惯语义时，才能说成常去地点。
 ''');
       }
@@ -348,42 +371,16 @@ class ApiService {
         systemBuffer.write(proactiveInstruction);
       }
 
-      // 明确回复语言。角色人设大多用中文书写，如果不硬性指定，
-      // 模型容易先用中文回答，再触发后续翻译流程。
-      if (characterLanguage == 'zh') {
+      // 第一阶段始终生成中文角色回答。事实、时间线和人设保持同一语言，
+      // 先确定“说什么”，日语角色再在第二阶段独立处理表达。
+      systemBuffer.writeln();
+      systemBuffer.write('【语言要求】请全程用自然地道的中文回复，不要使用日语或其他语言。');
+      if (fixedChineseCallNames.isNotEmpty) {
         systemBuffer.writeln();
-        systemBuffer.write('【语言要求】请全程用自然地道的中文回复，不要使用日语或其他语言。');
-      } else {
-        systemBuffer.writeln();
-        systemBuffer.write(
-            '【语言要求】あなたは必ず自然な日本語だけで返答してください。中国語、翻訳文、説明文、前置きは出力しないでください。漢字は日本語の標準的な表記を使い、中国語の字形や中国語の語句を混ぜないでください。');
-        systemBuffer.writeln();
-        systemBuffer.write(
-            '【中文資料の扱い】参考資料が中国語で書かれている場合、必ず意味で日本語に訳してください。字形が似ているだけの日本語漢字語へ置き換えないでください。');
-        systemBuffer.writeln();
-        systemBuffer.write(
-            '【固有名詞の確認】中国語資料の人名・地名・技名は一語ずつ日本語表記に直してください。簡体字を日本語の字形に直しても、語中の文字順や固有名詞の構造を入れ替えてはいけません。');
-        systemBuffer.writeln();
-        systemBuffer.write(
-            '【日本語表現ルール】複数の人物名を列挙するときは「A、B、C」または「AとBとC」の形にしてください。列挙の区切りとして「Aに、B、C」のような書き方はしないでください。');
-        systemBuffer.writeln();
-        systemBuffer.write(
-            '【好みの扱い】ユーザーが「私はXが好き」と言っても、あなた自身もXが好きだとは限りません。資料にあなたのXへの好悪がない場合、「私も好き」「Xも素敵」「Xも可愛い」「嫌いではない」など、あなた自身の評価として書かないでください。「あなたが好きなら、それは素敵ですね」のように、ユーザーの好みとして受け止めてください。');
-        if (fixedCharacterCallNames.isNotEmpty) {
-          systemBuffer.writeln();
-          systemBuffer.write('【人物の呼び方】次の相手に触れるときは、必ず指定された呼び方をそのまま使ってください。'
-              '勝手にさん・ちゃん・くん等を足さないでください。\n');
-          for (final entry in fixedCharacterCallNames.entries) {
-            systemBuffer.writeln('- ${entry.key}：${entry.value}');
-          }
-        }
-        if (standardJapaneseNames.isNotEmpty) {
-          systemBuffer.writeln();
-          systemBuffer.write('【固有名詞の標準表記】以下の中国語名・別表記に触れる場合、'
-              '日本語の返答では必ず指定された標準表記を使ってください。漢字の後ろに読み仮名を括弧で足さないでください。\n');
-          for (final entry in standardJapaneseNames.entries) {
-            systemBuffer.writeln('- ${entry.key}：${entry.value}');
-          }
+        systemBuffer.write('【人物的称呼】提到以下人物时，必须使用指定的中文称呼，'
+            '不要擅自换成其他昵称或敬称。\n');
+        for (final entry in fixedChineseCallNames.entries) {
+          systemBuffer.writeln('- ${entry.key}：${entry.value}');
         }
       }
 
@@ -412,19 +409,20 @@ class ApiService {
 
       systemBuffer.writeln();
       systemBuffer.write(isEmotionSupportTurn
-          ? '【本轮回复篇幅】用户本轮明显在表达情绪困扰，可以适度写长。'
+          ? '【本轮回复篇幅】用户本轮明显在表达情绪困扰，可以适度写长，但不要为了显得体贴而重复同一层意思。'
           : isRelationshipArcTurn
-              ? '【本轮回复篇幅】用户本轮在问关系变化。可以比普通日常聊天稍长，但不要灌水；优先讲清关键转折，再控制语气自然。'
+              ? '【本轮回复篇幅】用户本轮在问关系变化。用4到7句讲清主要变化和感受，不要为了覆盖资料而继续展开。'
               : isEventProcessTurn
-                  ? '【本轮回复篇幅】用户本轮在问事件经过或处理方式。用聊天口吻挑最相关的核心动作回答，不要从头到尾念资料。'
-                  : '【本轮回复篇幅】用户本轮不是情绪倾诉。请用日常聊天篇幅回复，控制在4到8句左右。');
-      if (characterLanguage != 'zh' && isEventProcessTurn) {
-        systemBuffer.writeln();
-        systemBuffer.write(
-          '【今回の長さ】出来事の時系列は理解のための参考であり、回答用のチェックリストではありません。質問に直接関係する事実を2～4個だけ選び、全体を4～6文の日常会話にまとめてください。出力前に、中国語資料の簡体字表記や中国語の固有名詞が残っていないか確認し、すべて自然な日本語表記に直してください。',
-        );
-      }
-
+                  ? '【本轮回复篇幅】用户本轮在问事件经过或处理方式。用4到6句挑最相关的核心动作回答，不要从头到尾念资料。'
+                  : '【本轮回复篇幅】用户本轮不是情绪倾诉。请用日常聊天篇幅回复，控制在3到6句左右。');
+      systemBuffer.writeln();
+      systemBuffer.write('''
+【中文原稿表达方式】
+- 这是会话气泡里的角色回答，不是资料总结、小说旁白或舞台剧脚本。
+- 先回应用户真正问的内容，再选少量最相关的细节和感受自然聊开；不要因为 facts 很多就逐条使用。
+- 按适合翻成自然日语口语的短句节奏组织中文，不要写成过度铺陈、排比或抒情的中文网文腔。
+- 动作或神态描写默认不必添加。如果它确实能表现当下情绪，整段最多保留一处简短的括号描写，不要连续穿插舞台指示。
+''');
       systemBuffer.writeln();
       systemBuffer.write('''
 【日常聊天硬性禁句】
@@ -437,21 +435,23 @@ class ApiService {
 ''');
 
       systemBuffer.writeln();
-      systemBuffer.write(characterLanguage == 'zh'
-          ? '【最终输出语言】只输出中文回复正文。'
-          : '【最終出力言語】参考資料やユーザー発言が中国語でも、最終返答は必ず日本語だけで書いてください。中国語の文、翻訳文、説明文、括弧書きの動作描写は出力禁止です。');
+      if (timelineAnswerContract == null) {
+        systemBuffer.write('【最终输出语言】只输出中文回复正文。');
+      } else {
+        systemBuffer.write(timelineAnswerContract.outputInstruction);
+      }
 
-      final List<Map<String, String>> japaneseMessages = [
+      final List<Map<String, String>> responseMessages = [
         {
           'role': 'system',
           'content': systemBuffer.toString(),
         },
       ];
 
-      japaneseMessages.addAll(conversationHistory.map((msg) {
+      responseMessages.addAll(conversationHistory.map((msg) {
         String content = msg.content;
         if (msg.role == 'assistant' && content.contains('\n\n中文：')) {
-          content = content.split('\n\n中文：')[0];
+          content = content.split('\n\n中文：').last;
         }
         if (msg.role == 'user' &&
             msg.imageDescription != null &&
@@ -477,43 +477,54 @@ class ApiService {
               allowsBoundedRoleplay: allowsBoundedRoleplay,
             );
 
-      japaneseMessages.add(
+      responseMessages.add(
         proactiveInstruction != null
             ? {'role': 'user', 'content': ''}
             : {'role': 'user', 'content': currentUserContent},
       );
       final hasGroundingContext = webContext != null && webContext.isNotEmpty;
 
-      final japaneseResponse = await http.post(
-        Uri.parse('$doubaoBaseUrl/chat/completions'),
+      final response = await http.post(
+        Uri.parse('$deepSeekBaseUrl/chat/completions'),
         headers: {
-          'Authorization': 'Bearer $doubaoApiKey',
+          'Authorization': 'Bearer $deepSeekApiKey',
           'Content-Type': 'application/json',
         },
         body: jsonEncode({
-          'model': doubaoModel,
+          'model': deepSeekModel,
           'thinking': {'type': 'disabled'},
-          'messages': japaneseMessages,
+          'messages': responseMessages,
           'max_tokens': 1000,
           'temperature': hasGroundingContext ? 0.55 : 0.8,
           'stream': false,
           'top_p': hasGroundingContext ? 0.8 : 0.9,
           'presence_penalty': 0.0,
           'frequency_penalty': 0.0,
+          if (timelineAnswerContract != null)
+            'response_format': {'type': 'json_object'},
         }),
       );
 
-      if (japaneseResponse.statusCode != 200) {
-        debugPrint('DeepSeek API 错误: ${japaneseResponse.statusCode}');
-        debugPrint('错误内容: ${japaneseResponse.body}');
+      if (response.statusCode != 200) {
+        debugPrint('DeepSeek API 错误: ${response.statusCode}');
+        debugPrint('错误内容: ${response.body}');
         return {'japanese': '申し訳ございません...', 'chinese': '抱歉，我现在无法回答...'};
       }
 
-      final japaneseData = jsonDecode(utf8.decode(japaneseResponse.bodyBytes));
+      final responseData = jsonDecode(utf8.decode(response.bodyBytes));
       String rawResponseText =
-          japaneseData['choices'][0]['message']['content'] as String;
+          responseData['choices'][0]['message']['content'] as String;
       rawResponseText =
           _sanitizeUserNameHonorifics(rawResponseText, exactUserName);
+
+      if (timelineAnswerContract != null) {
+        rawResponseText = await _resolveTimelineConstrainedAnswer(
+          messages: responseMessages,
+          rawResponse: rawResponseText,
+          contract: timelineAnswerContract,
+          exactUserName: exactUserName,
+        );
+      }
 
       if (_weatherContextForbidsRain(webContext) &&
           _containsProhibitedRainClaim(rawResponseText)) {
@@ -522,9 +533,9 @@ class ApiService {
           '${_logPreview(rawResponseText)}',
         );
         rawResponseText = await _retryWeatherGroundedResponse(
-          messages: japaneseMessages,
+          messages: responseMessages,
           badResponse: rawResponseText,
-          characterLanguage: characterLanguage,
+          characterLanguage: 'zh',
           exactUserName: exactUserName,
         );
       }
@@ -534,27 +545,26 @@ class ApiService {
           '检测到助手式客套问句，自动重试生成回复: '
           '${_logPreview(rawResponseText)}',
         );
-        japaneseMessages.add({
+        responseMessages.add({
           'role': 'assistant',
           'content': rawResponseText,
         });
-        japaneseMessages.add({
+        responseMessages.add({
           'role': 'user',
-          'content': characterLanguage == 'zh'
-              ? '刚才的回复像客服或助手，并且包含"有什么事吗"这类禁句。请重新回答：自然回应我的上一句话，不要问我有什么事，不要说有什么需要帮助。'
-              : '先ほどの返答は事務的で、「何か用」「ご用件」のような禁止表現を含んでいます。必ず自然な日本語で返答し直してください。相手に用件を尋ねず、挨拶を返して、今の時間・気分・日常の小さな話題を一言添えてください。',
+          'content': '刚才的回复像客服或助手，并且包含"有什么事吗"这类禁句。'
+              '请用中文重新回答：自然回应我的上一句话，不要问我有什么事，不要说有什么需要帮助。',
         });
 
         final retryResponse = await http.post(
-          Uri.parse('$doubaoBaseUrl/chat/completions'),
+          Uri.parse('$deepSeekBaseUrl/chat/completions'),
           headers: {
-            'Authorization': 'Bearer $doubaoApiKey',
+            'Authorization': 'Bearer $deepSeekApiKey',
             'Content-Type': 'application/json',
           },
           body: jsonEncode({
-            'model': doubaoModel,
+            'model': deepSeekModel,
             'thinking': {'type': 'disabled'},
-            'messages': japaneseMessages,
+            'messages': responseMessages,
             'max_tokens': 1000,
             'temperature': 0.75,
             'stream': false,
@@ -577,12 +587,12 @@ class ApiService {
               '重试结果仍包含助手式客套问句，使用日常寒暄兜底: '
               '${_logPreview(retryText)}',
             );
-            rawResponseText = _casualGreetingFallback(characterLanguage);
+            rawResponseText = _casualGreetingFallback('zh');
           }
         } else {
           debugPrint('助手式问句重试 API 错误: ${retryResponse.statusCode}');
           debugPrint('错误内容: ${retryResponse.body}');
-          rawResponseText = _casualGreetingFallback(characterLanguage);
+          rawResponseText = _casualGreetingFallback('zh');
         }
       }
 
@@ -593,9 +603,9 @@ class ApiService {
           '${_logPreview(rawResponseText)}',
         );
         rawResponseText = await _retryWeatherLocationlessResponse(
-          messages: japaneseMessages,
+          messages: responseMessages,
           badResponse: rawResponseText,
-          characterLanguage: characterLanguage,
+          characterLanguage: 'zh',
           exactUserName: exactUserName,
         );
       }
@@ -614,227 +624,33 @@ class ApiService {
         };
       }
 
-      // ========================================
-      // 日语角色：中译日的核心校验逻辑
-      // ========================================
-      // 新版本采用「是否含日语假名（平假名/片假名）」作为「翻译成功」的判定依据：
-      //   - 任何一句正常日语都至少会有一个假名
-      //   - 纯中文不可能含假名，因此假名是中日文最可靠的区分点
-      if (_isLikelyJapanese(rawResponseText)) {
-        rawResponseText = await _normalizeJapaneseOrthographyIfUseful(
-          rawResponseText,
-          exactUserName,
-        );
-      }
-
-      if (!_isCleanJapaneseForTts(rawResponseText)) {
-        debugPrint(
-          '回复未通过日语纯净度检测，先忠实翻译为日文: '
-          '${_logPreview(rawResponseText)}',
-        );
-
-        final directlyTranslated = await _translateToJapanese(
-          rawResponseText,
+      final chineseText = rawResponseText.trim();
+      String japaneseText = '';
+      for (var attempt = 1; attempt <= _maxTranslationRetries; attempt++) {
+        japaneseText = await _translateChineseRoleResponseToJapanese(
+          chineseText,
           characterId: characterId,
-        );
-        if (_isAcceptableJapaneseForCharacter(
-          directlyTranslated,
-          characterId,
-        )) {
-          debugPrint('中文/混合语言首答已忠实翻译为日文');
-          rawResponseText = directlyTranslated;
-        } else {
-          debugPrint('忠实翻译仍未通过日语纯净度检测，重试生成日文...');
-          final regenerated = await _retryJapaneseOnlyResponse(
-            messages: japaneseMessages,
-            badResponse: rawResponseText,
-            exactUserName: exactUserName,
-            characterId: characterId,
-            isRelationshipArcTurn: isRelationshipArcTurn,
-            isEventProcessTurn: isEventProcessTurn,
-          );
-          if (_isAcceptableJapaneseForCharacter(regenerated, characterId)) {
-            rawResponseText = regenerated;
-          } else {
-            debugPrint('重试生成仍未通过日语纯净度检测，再次翻译为日文...');
-            debugPrint('  重试返回: $regenerated');
-
-            String translated = rawResponseText;
-            bool success = false;
-
-            for (int attempt = 1;
-                attempt <= _maxTranslationRetries;
-                attempt++) {
-              debugPrint('  翻译尝试 $attempt / $_maxTranslationRetries ...');
-              translated = await _translateToJapanese(
-                rawResponseText,
-                characterId: characterId,
-              );
-              translated =
-                  _sanitizeUserNameHonorifics(translated, exactUserName);
-
-              if (_isAcceptableJapaneseForCharacter(
-                translated,
-                characterId,
-              )) {
-                debugPrint('  翻译成功（第 $attempt 次）: $translated');
-                success = true;
-                break;
-              } else {
-                debugPrint('  翻译结果仍未通过日语纯净度检测，准备重试');
-                debugPrint('  本次返回: $translated');
-              }
-            }
-
-            if (success) {
-              rawResponseText = translated;
-            } else {
-              debugPrint('  翻译多次失败，使用兜底日语文本: $_japaneseFallbackText');
-              rawResponseText = _japaneseFallbackText;
-            }
-          }
-        }
-      }
-
-      String japaneseText = _removeChinese(rawResponseText);
-      japaneseText = _sanitizeUserNameHonorifics(japaneseText, exactUserName);
-      japaneseText = _removeRubyReadings(japaneseText);
-      japaneseText = _applyStandardJapaneseNameSpellings(japaneseText);
-      japaneseText =
-          _applyFixedCharacterCallNames(japaneseText, fixedCharacterCallNames);
-      japaneseText = await _normalizeJapaneseOrthographyIfUseful(
-        japaneseText,
-        exactUserName,
-      );
-      japaneseText = _applyStandardJapaneseNameSpellings(japaneseText);
-      japaneseText =
-          _applyFixedCharacterCallNames(japaneseText, fixedCharacterCallNames);
-      if (!_isCleanJapaneseForTts(japaneseText)) {
-        debugPrint('最终日语回复仍混入中文片段，重新翻译后再进入显示/TTS: $japaneseText');
-        final retranslated = await _translateToJapanese(
-          japaneseText,
-          characterId: characterId,
-        );
-        if (_isAcceptableJapaneseForCharacter(retranslated, characterId)) {
-          japaneseText = _applyStandardJapaneseNameSpellings(
-            _removeRubyReadings(
-              _sanitizeUserNameHonorifics(retranslated, exactUserName),
-            ),
-          );
-          japaneseText = _applyFixedCharacterCallNames(
-            japaneseText,
-            fixedCharacterCallNames,
-          );
-        } else {
-          debugPrint('中文残留重译失败，使用日语兜底: $retranslated');
-          japaneseText = _japaneseFallbackText;
-        }
-      }
-      if (_containsAssistantLikeGreetingQuestion(japaneseText)) {
-        debugPrint('最终日语回复仍包含助手式客套问句，使用日常寒暄兜底: $japaneseText');
-        japaneseText = _casualGreetingFallback(characterLanguage);
-      }
-      if (!isJapaneseStyleCompatible(japaneseText, characterId)) {
-        debugPrint(
-          '最终日语回复未通过角色语体检测，按角色设定重生成: '
-          '${_logPreview(japaneseText)}',
-        );
-        final restyled = await _retryJapaneseOnlyResponse(
-          messages: japaneseMessages,
-          badResponse: japaneseText,
-          exactUserName: exactUserName,
-          characterId: characterId,
-          isRelationshipArcTurn: isRelationshipArcTurn,
-          isEventProcessTurn: isEventProcessTurn,
-        );
-        if (_isAcceptableJapaneseForCharacter(restyled, characterId)) {
-          japaneseText = restyled;
-        } else {
-          debugPrint('角色语体重生成仍未通过，保留原回复并在审计中标记');
-        }
-      }
-
-      final textForTranslation = japaneseText.trim();
-
-      String chineseText;
-      if (textForTranslation.isEmpty) {
-        chineseText = '';
-      } else {
-        final protectedTranslationText = _protectMappedNamesForTranslation(
-          textForTranslation,
           exactUserName: exactUserName,
           translatedUserName: translatedUserName,
           fixedCharacterCallNames: fixedCharacterCallNames,
+          webContext: webContext,
+          isRetry: attempt > 1,
         );
-        final genderHints = _genderHintsForTranslationPrompt(webContext);
-        final characterStyle = _chineseTranslationStyle(characterId);
-        final translationMessages = [
-          {
-            'role': 'system',
-            'content': '你是一个专业的日语翻译。请将用户提供的日语文本翻译成中文。只输出翻译结果，不要有任何额外的解释或说明。\n'
-                '译文要像角色本人在用中文说话：自然，但不能把所有角色统一翻成随便、粗犷或网络化的口吻。\n'
-                '必须保留日语原文的礼貌程度、情绪强弱、措辞气质和人物性格；角色风格优先于笼统的口语化。\n'
-                '当前对话对象与角色关系亲近，第二人称默认使用“你/你的”，不要机械使用“您/您的/阁下”；除此之外，不得为了口语化擅自降低原文的优雅、克制或礼貌程度。\n'
-                '【当前说话角色的译文风格】$characterStyle\n'
-                '专有名词不要猜测性别或改写。\n'
-                '如果原文中出现形如 __USER_NAME__、__NAME_0__ 或 __NAMESEQ_0__ 的占位符，必须原样保留，不要翻译、删除或改写。\n'
-                '这些占位符中有一部分代表“当前说话角色对对方的固定称呼”，必须按占位符还原后的称呼翻译，不要自行扩写成全名，也不要改成对用户说话的“你”。\n'
-                '严格保留日语助词表达的动作主体、对象、起点、方向和同行关系；地点起点不能误译成同行者，主语和宾语也不能互换。\n'
-                '如果日语原文是在列举多个人名，译文也必须写成中文姓名并列，不要把姓名后的「に」误译成“对……来说/对于……”。\n'
-                '如果原文明确说的是女孩子或女性群体，中文代词优先使用“她们”或“这些孩子”；否则日语的“たち”不要默认译成“她们”，可以译成“他们”“这些人”“这些孩子”。\n'
-                '如果原文没有明确的性别代词，尽量重复姓名、称呼或使用“那孩子/对方”，不要自行猜成“他”或“她”。\n'
-                '$genderHints'
-                '除用户称呼占位符外，其他人名后的さん、ちゃん、くん、君、様、先生等称呼后缀要根据人物关系和上下文自然翻译，可以译成同学、学姐、学长、先生、小姐、老师、大人、酱、君等；不要机械保留日语后缀。',
-          },
-          {
-            'role': 'user',
-            'content': '请将以下日语翻译成中文：\n${protectedTranslationText.text}',
-          },
-        ];
-
-        final translationResponse = await http.post(
-          Uri.parse('$doubaoBaseUrl/chat/completions'),
-          headers: {
-            'Authorization': 'Bearer $doubaoApiKey',
-            'Content-Type': 'application/json',
-          },
-          body: jsonEncode({
-            'model': doubaoModel,
-            'thinking': {'type': 'disabled'},
-            'messages': translationMessages,
-            'max_tokens': 1000,
-            'temperature': 0.3,
-            'stream': false,
-            'top_p': 0.9,
-            'presence_penalty': 0.0,
-            'frequency_penalty': 0.0,
-          }),
-        );
-
-        if (translationResponse.statusCode == 200) {
-          final translationData =
-              jsonDecode(utf8.decode(translationResponse.bodyBytes));
-          chineseText =
-              translationData['choices'][0]['message']['content'] as String;
-          chineseText = _restoreProtectedMappedNames(
-            chineseText,
-            protectedTranslationText.placeholders,
-          );
-          chineseText = _localizeUserNameForChineseTranslation(
-            chineseText,
-            exactUserName,
-            translatedUserName,
-          );
-          chineseText = _casualizeChineseTranslation(chineseText);
-          chineseText = _fixThirdPersonFixedCallTranslation(
-            chineseText,
-            textForTranslation,
-            fixedCharacterCallNames,
-          );
-        } else {
-          debugPrint('翻译 API 错误: ${translationResponse.statusCode}');
-          chineseText = '[翻译失败]';
+        if (_isAcceptableJapaneseForCharacter(japaneseText, characterId)) {
+          break;
         }
+        debugPrint(
+          '日语角色化翻译未通过本地校验: '
+          'attempt=$attempt, '
+          'cleanJapanese=${_isCleanJapaneseForTts(japaneseText)}, '
+          'baseStyle=${isJapaneseStyleCompatible(japaneseText, characterId)}, '
+          'translationStyle=${isJapaneseTranslationStyleCompatible(japaneseText, characterId)}, '
+          'text=${_logPreview(japaneseText)}',
+        );
+      }
+      if (!_isAcceptableJapaneseForCharacter(japaneseText, characterId)) {
+        debugPrint('日语角色化翻译失败，使用日语兜底文本');
+        japaneseText = _japaneseFallbackTextForCharacter(characterId);
       }
 
       return {
@@ -867,13 +683,20 @@ class ApiService {
     }
 
     final processReminder = _isRelationshipArcQuestion(userMessage)
-        ? '\n【本轮写作提醒】用户问的是人物关系、相互影响、救赎或关系变化。不要只取资料开头的一条事实，也不要只做抽象评价；请按时间线挑选能体现关系变化的核心转折回答。资料里有明确地点、行动、台词或作品名时优先使用，但不需要把所有资料逐条复述。\n'
+        ? '\n【本轮写作提醒】用户问的是人物关系、相互影响、救赎或关系变化。不要只取资料开头的一条事实，也不要只做抽象评价；请按时间线优先选择真正改变双方处境或关系的核心转折。问题明确询问双向作用时，必须分别用至少一个具体事实说明双方各自带来的影响，背景铺垫不得挤掉其中任何一方。资料里有明确地点、行动、台词或作品名时优先使用，但不需要把所有资料逐条复述。\n'
         : _isEventProcessQuestion(userMessage)
             ? '\n【本轮写作提醒】用户问的是事件经过、处理方式或支援方式。时间线只用于理解顺序，不是回答清单；请只选2到4个和用户问点直接相关的核心事实，用4到6句日常聊天回答。资料里的后续审判、旁支冲突、结局补充，如果不是用户问点所需，不要主动展开。用户问“如何支援/救援/协助/处理”时，不要主动复述和支援目标相反的后续冲突。\n'
             : '';
     final boundedRoleplayReminder = allowsBoundedRoleplay
         ? '\n【本轮角色发挥提醒】网页摘要负责限定真实候选和事实边界。你可以从摘要明确列出的候选中自然表达角色自己的选择、习惯、偏好、感受或评价；不要创造新专名、新能力、新经历或新因果，也不要说“资料没有写”或“搜索结果没有说明”。\n'
         : '';
+    final responseShapeReminder = _isEmotionSupportUserMessage(userMessage)
+        ? '\n【本轮表达节奏】可以根据情绪需要适度写长，但不要重复同一层意思。动作或神态括号描写最多一处，也可以不写。\n'
+        : _isRelationshipArcQuestion(userMessage)
+            ? '\n【本轮表达节奏】最终只写4到7句日常聊天式回答。动作或神态括号描写最多一处，也可以不写；不要为了覆盖所有 facts 继续增加段落。\n'
+            : _isEventProcessQuestion(userMessage)
+                ? '\n【本轮表达节奏】最终只写4到6句日常聊天式回答。动作或神态括号描写最多一处，也可以不写。\n'
+                : '\n【本轮表达节奏】最终只写3到6句日常聊天式回答。动作或神态括号描写最多一处，也可以不写。\n';
 
     return '''
 【系统提供的本轮实时资料，不是用户发言】
@@ -881,18 +704,102 @@ $webContext
 【使用要求】
 回答本轮用户问题时，必须优先服从上面的实时资料。可以自然融入角色语气，但不要和实时资料相反；不要逐字念出资料来源。
 如果实时资料中有【事实时间线】，先按时间线理解事件顺序，再组织角色回复；不要把时间线约束中标明不连续的事件直接写成连续发生。
+时间线中相邻节点如果共同构成同一过程，前一节点仅负责转场、追赶或带离现场时，必须结合后一节点记载的实际谈话、行动与结果来表达，否则省略这个过渡节点。后一节点明确写出的归队、和解或关系变化必须保留，不能被前一节点的动作替代。
+改写 facts 时必须保持动作的施事意图、移动方向和完成程度。单独一个过渡动作不能被概括成问题已经解决；只有后续事实明确给出结果时，才能写出相应结果。不能从结果反推当事人有意促成，也不能把阶段性接触写成关系状态已经改变。写完后逐句核对所属阶段，不要输出核对过程。
 地点、篇章、事件名、人物名、敌人名必须以实时资料为准，不要替换成同作品里另一个相似设定。
 如果用户问某个具体事实，而实时资料没有写出对应答案，不要用模型记忆或联想补具体名词；请说明没有明确听说，再说资料中能确认的内容。
 如果用户问“叫什么/名字/是谁/有哪些人”，只回答被问对象的名字和必要身份，不要展开同一网页里的相邻人物或旁支设定。
 如果用户只是说自己喜欢某个东西，不要把它改写成当前角色也喜欢；只有实时资料明确写出当前角色喜欢，才能说“我也喜欢”。资料没有写出当前角色对这个东西的喜恶时，不要评价“也不错/很可爱/挺喜欢/不讨厌/讨厌”，只能接住用户的喜好。
-如果用户问人物关系、相互影响、救赎或关系变化，请优先按实时资料中的时间线回答，选用能体现关系变化的核心转折；资料里有明确地点、行动、台词或作品名时要优先使用，不要只给抽象评价。
+如果用户问人物关系、相互影响、救赎或关系变化，请优先按实时资料中的时间线回答，选用真正改变双方处境或关系的核心转折。问题明确询问双向作用时，必须分别用至少一个具体事实说明双方各自带来的影响，背景铺垫不得挤掉其中任何一方；不要只给抽象评价。
 如果用户问事件经过、处理方式或支援方式，请围绕用户问点筛选事实，不要把时间线里的无关后续都讲出来。
 
 【用户原话】
 $baseUserMessage
 $processReminder
 $boundedRoleplayReminder
+$responseShapeReminder
 ''';
+  }
+
+  static Future<String> _resolveTimelineConstrainedAnswer({
+    required List<Map<String, String>> messages,
+    required String rawResponse,
+    required _TimelineAnswerContract contract,
+    required String? exactUserName,
+  }) async {
+    var parsed = contract.parse(rawResponse);
+    if (parsed.isValid) {
+      debugPrint(
+        '中文回答时间线契约通过: '
+        'sentences=${parsed.sentenceCount}, refs=${parsed.references.join('>')}',
+      );
+      return parsed.text;
+    }
+
+    debugPrint('中文回答时间线契约未通过，使用同一上下文修正一次: ${parsed.issue}');
+    try {
+      final retryMessages = <Map<String, String>>[
+        ...messages,
+        {'role': 'assistant', 'content': rawResponse},
+        {
+          'role': 'user',
+          'content': '刚才的输出没有通过时间线结构校验：${parsed.issue}。'
+              '请重新输出同一回答，不要增加新事实。每个事实句都要引用其实际依据的时间线编号，'
+              '句子和编号必须共同保持时间先后顺序。只输出规定的 JSON 对象。',
+        },
+      ];
+      final response = await http.post(
+        Uri.parse('$deepSeekBaseUrl/chat/completions'),
+        headers: {
+          'Authorization': 'Bearer $deepSeekApiKey',
+          'Content-Type': 'application/json',
+        },
+        body: jsonEncode({
+          'model': deepSeekModel,
+          'thinking': {'type': 'disabled'},
+          'messages': retryMessages,
+          'max_tokens': 1000,
+          'temperature': 0.2,
+          'stream': false,
+          'response_format': {'type': 'json_object'},
+        }),
+      );
+      if (response.statusCode == 200) {
+        final data = jsonDecode(utf8.decode(response.bodyBytes));
+        final retryRaw = '${data['choices']?[0]?['message']?['content'] ?? ''}';
+        parsed = contract.parse(
+          _sanitizeUserNameHonorifics(retryRaw, exactUserName),
+        );
+        if (parsed.isValid) {
+          debugPrint(
+            '中文回答时间线契约修正通过: '
+            'sentences=${parsed.sentenceCount}, refs=${parsed.references.join('>')}',
+          );
+          return parsed.text;
+        }
+        debugPrint('中文回答时间线契约修正仍未通过: ${parsed.issue}');
+      } else {
+        debugPrint('中文回答时间线契约修正 API 错误: ${response.statusCode}');
+      }
+    } catch (e) {
+      debugPrint('中文回答时间线契约修正失败: $e');
+    }
+
+    return _timelineContractFallback();
+  }
+
+  static String _timelineContractFallback() =>
+      '嗯，这件事的前后经过有些复杂。我确实有所耳闻，不过不想把其中的顺序说错，还是不随意拼凑细节了。';
+
+  @visibleForTesting
+  static String? parseTimelineAnswerForTest({
+    required String webContext,
+    required String response,
+  }) {
+    final contract = _TimelineAnswerContract.fromWebContext(webContext);
+    if (contract == null) return null;
+    final parsed = contract.parse(response);
+    return parsed.isValid ? parsed.text : null;
   }
 
   static bool _isRelationshipArcQuestion(String userMessage) {
@@ -975,13 +882,13 @@ $boundedRoleplayReminder
 
     try {
       final retryResponse = await http.post(
-        Uri.parse('$doubaoBaseUrl/chat/completions'),
+        Uri.parse('$deepSeekBaseUrl/chat/completions'),
         headers: {
-          'Authorization': 'Bearer $doubaoApiKey',
+          'Authorization': 'Bearer $deepSeekApiKey',
           'Content-Type': 'application/json',
         },
         body: jsonEncode({
-          'model': doubaoModel,
+          'model': deepSeekModel,
           'thinking': {'type': 'disabled'},
           'messages': retryMessages,
           'max_tokens': 1000,
@@ -1036,13 +943,13 @@ $boundedRoleplayReminder
 
     try {
       final retryResponse = await http.post(
-        Uri.parse('$doubaoBaseUrl/chat/completions'),
+        Uri.parse('$deepSeekBaseUrl/chat/completions'),
         headers: {
-          'Authorization': 'Bearer $doubaoApiKey',
+          'Authorization': 'Bearer $deepSeekApiKey',
           'Content-Type': 'application/json',
         },
         body: jsonEncode({
-          'model': doubaoModel,
+          'model': deepSeekModel,
           'thinking': {'type': 'disabled'},
           'messages': retryMessages,
           'max_tokens': 700,
@@ -1081,73 +988,6 @@ $boundedRoleplayReminder
         .replaceAll('東京', 'この辺り')
         .replaceAll('东京都', '这边')
         .replaceAll('东京', '这边');
-  }
-
-  static Future<String> _retryJapaneseOnlyResponse({
-    required List<Map<String, String>> messages,
-    required String badResponse,
-    required String? exactUserName,
-    required String? characterId,
-    required bool isRelationshipArcTurn,
-    required bool isEventProcessTurn,
-  }) async {
-    final contentSelectionInstruction = isRelationshipArcTurn
-        ? '人物関係・相互影響・救済・関係変化について聞かれている場合は、資料の時系列を守り、関係の変化が分かる主要な転機だけを自然に選んでください。すべての段階を逐一説明する必要はありません。'
-        : isEventProcessTurn
-            ? '出来事の経緯・対処・支援について聞かれている場合は、質問された点に直接関係する中心的な行動を2～4個だけ選び、日常会話の長さで答えてください。資料や時系列を最初から最後まで逐一説明しないでください。'
-            : '質問に直接必要な事実だけを選び、資料を逐一読み上げないでください。';
-    final retryMessages = List<Map<String, String>>.from(messages)
-      ..add({
-        'role': 'assistant',
-        'content': badResponse,
-      })
-      ..add({
-        'role': 'user',
-        'content': '直前の返答は日本語キャラクターの返答として不適切です。'
-            '必ず同じキャラクター本人として、自然な日本語だけで返答し直してください。'
-            '中国語を混ぜないでください。翻訳文ではなく、最初から日本語で話してください。'
-            '一人称、語尾、相手への呼び方はキャラクター設定に従ってください。'
-            '本輪にリアルタイム資料や検索事実がある場合は、それを必ず使ってください。'
-            '中国語資料にある人名・地名・技名などの固有名詞は、文脈ごと機械的に置換せず、一語ずつ日本語の標準表記に直してから文章を組み立ててください。'
-            '字形を直す場合も、語中の文字順や固有名詞の構造を入れ替えないでください。'
-            '【話し方】${_japaneseTranslationStyle(characterId)}'
-            '$contentSelectionInstruction',
-      });
-
-    try {
-      final retryResponse = await http.post(
-        Uri.parse('$doubaoBaseUrl/chat/completions'),
-        headers: {
-          'Authorization': 'Bearer $doubaoApiKey',
-          'Content-Type': 'application/json',
-        },
-        body: jsonEncode({
-          'model': doubaoModel,
-          'thinking': {'type': 'disabled'},
-          'messages': retryMessages,
-          'max_tokens': 1000,
-          'temperature': 0.55,
-          'stream': false,
-          'top_p': 0.85,
-          'presence_penalty': 0.0,
-          'frequency_penalty': 0.25,
-        }),
-      );
-
-      if (retryResponse.statusCode == 200) {
-        final retryData = jsonDecode(utf8.decode(retryResponse.bodyBytes));
-        final retryText =
-            retryData['choices'][0]['message']['content'] as String;
-        return _sanitizeUserNameHonorifics(retryText, exactUserName);
-      }
-
-      debugPrint('日语重生成 API 错误: ${retryResponse.statusCode}');
-      debugPrint('错误内容: ${retryResponse.body}');
-    } catch (e) {
-      debugPrint('日语重生成失败: $e');
-    }
-
-    return badResponse;
   }
 
   // 生成语音（GPT-SoVITS api_v2 TTS）
@@ -1292,6 +1132,11 @@ $boundedRoleplayReminder
     }
 
     return cleaned;
+  }
+
+  @visibleForTesting
+  static String stripActionDescriptionsForTest(String text) {
+    return _stripActionDescriptions(text);
   }
 
   static List<String> _splitTextIntoSegments(String text) {
@@ -1476,14 +1321,24 @@ $boundedRoleplayReminder
       final variants = <String>{
         displayName,
         _applyStandardJapaneseNameSpellings(displayName),
+        _callNameChineseTarget(displayName, callName),
       }.where((value) => value.isNotEmpty && value != callName).toList()
         ..sort((a, b) => b.length.compareTo(a.length));
 
       for (final variant in variants) {
+        for (final suffix in _knownJapaneseHonorifics) {
+          result = result.replaceAll('$variant$suffix', callName);
+        }
         result = _replaceNameTerm(result, variant, callName);
       }
 
-      if (!_endsWithKnownHonorific(callName)) {
+      if (_endsWithKnownHonorific(callName)) {
+        for (final suffix in _knownJapaneseHonorifics) {
+          if (callName.endsWith(suffix)) {
+            result = result.replaceAll('$callName$suffix', callName);
+          }
+        }
+      } else {
         for (final suffix in _knownJapaneseHonorifics) {
           result = result.replaceAll('$callName$suffix', callName);
         }
@@ -1538,123 +1393,7 @@ $boundedRoleplayReminder
     return result;
   }
 
-  static String _localizeUserNameForChineseTranslation(
-    String text,
-    String? exactUserName,
-    String? translatedUserName,
-  ) {
-    if (exactUserName == null || exactUserName.isEmpty) return text;
-
-    if (translatedUserName != null && translatedUserName.isNotEmpty) {
-      final baseName = _stripKnownHonorific(exactUserName);
-      return text
-          .replaceAll(exactUserName, translatedUserName)
-          .replaceAll('$baseName先生', translatedUserName)
-          .replaceAll('$baseName小姐', translatedUserName)
-          .replaceAll('$baseName同学', translatedUserName)
-          .replaceAll('$baseName酱', translatedUserName);
-    }
-
-    final honorificMap = <String, String>{
-      'さん': '同学',
-      'ちゃん': '酱',
-      'くん': '君',
-      '君': '君',
-      '様': '大人',
-      'さま': '大人',
-      '先生': '老师',
-    };
-
-    for (final entry in honorificMap.entries) {
-      final suffix = entry.key;
-      if (!exactUserName.endsWith(suffix)) continue;
-
-      final baseName =
-          exactUserName.substring(0, exactUserName.length - suffix.length);
-      if (baseName.isEmpty) return text;
-
-      final localizedName = '$baseName${entry.value}';
-      return text
-          .replaceAll(exactUserName, localizedName)
-          .replaceAll('$baseName先生', localizedName)
-          .replaceAll('$baseName小姐', localizedName)
-          .replaceAll('$baseName同学', localizedName);
-    }
-
-    return text;
-  }
-
-  static String _fixThirdPersonFixedCallTranslation(
-    String chineseText,
-    String japaneseSourceText,
-    Map<String, String> fixedCharacterCallNames,
-  ) {
-    if (chineseText.isEmpty ||
-        japaneseSourceText.isEmpty ||
-        fixedCharacterCallNames.isEmpty) {
-      return chineseText;
-    }
-
-    var result = chineseText;
-    for (final entry in fixedCharacterCallNames.entries) {
-      final callName = entry.value.trim();
-      if (callName.isEmpty) continue;
-      final target = _callNameChineseTarget(entry.key, callName);
-      if (target.isEmpty) continue;
-
-      final thirdPersonInSource = RegExp(
-        '${RegExp.escape(callName)}(?:は|が|も|の|に|を|と|では|には)',
-      ).hasMatch(japaneseSourceText);
-      if (!thirdPersonInSource) continue;
-
-      result = _fixSecondPersonPronounsInTargetSentences(result, target);
-    }
-    return result;
-  }
-
-  static String _fixSecondPersonPronounsInTargetSentences(
-    String text,
-    String target,
-  ) {
-    final buffer = StringBuffer();
-    final sentencePattern = RegExp(r'[^。！？!?]+[。！？!?]?');
-    var lastEnd = 0;
-    for (final match in sentencePattern.allMatches(text)) {
-      if (match.start > lastEnd) {
-        buffer.write(text.substring(lastEnd, match.start));
-      }
-      var sentence = match.group(0) ?? '';
-      if (sentence.contains(target)) {
-        sentence = sentence
-            .replaceAll('$target你', target)
-            .replaceAll('$target您', target)
-            .replaceAll('$target你的', '$target的')
-            .replaceAll('$target您的', '$target的')
-            .replaceAll('你喜欢', '$target喜欢')
-            .replaceAll('您喜欢', '$target喜欢')
-            .replaceAll('你常', '$target常')
-            .replaceAll('您常', '$target常')
-            .replaceAll('你经常', '$target经常')
-            .replaceAll('您经常', '$target经常')
-            .replaceAll('你会', '$target会')
-            .replaceAll('您会', '$target会')
-            .replaceAll('你去', '$target去')
-            .replaceAll('您去', '$target去')
-            .replaceAll('你拿', '$target拿')
-            .replaceAll('您拿', '$target拿')
-            .replaceAll('你的', '$target的')
-            .replaceAll('您的', '$target的');
-      }
-      buffer.write(sentence);
-      lastEnd = match.end;
-    }
-    if (lastEnd < text.length) {
-      buffer.write(text.substring(lastEnd));
-    }
-    return buffer.toString();
-  }
-
-  static _ProtectedTranslationText _protectMappedNamesForTranslation(
+  static _ProtectedTranslationText _protectMappedNamesForJapaneseTranslation(
     String text, {
     String? exactUserName,
     String? translatedUserName,
@@ -1662,167 +1401,32 @@ $boundedRoleplayReminder
   }) {
     var protectedText = text;
     final placeholders = <String, String>{};
+    final nameMap = <String, String>{};
 
-    final userNameTarget = _userNameChineseTranslationTarget(
-      exactUserName,
-      translatedUserName,
-    );
-    if (exactUserName != null &&
-        exactUserName.isNotEmpty &&
-        userNameTarget != null &&
-        protectedText.contains(exactUserName)) {
-      const placeholder = '__USER_NAME__';
-      protectedText = protectedText.replaceAll(exactUserName, placeholder);
-      placeholders[placeholder] = userNameTarget;
-    }
-
-    final entries = {
-      ..._fixedCallNameTranslationMap(fixedCharacterCallNames),
-      ..._expandedJapaneseNameTranslationMap(),
-    }.entries.toList()
-      ..sort((a, b) => b.key.length.compareTo(a.key.length));
-
-    final sequenceProtected = _protectMappedNameSequences(
-      protectedText,
-      entries,
-      placeholders,
-    );
-    protectedText = sequenceProtected;
-
-    for (final entry in entries) {
-      if (!protectedText.contains(entry.key)) continue;
-
-      final placeholder = '__NAME_${placeholders.length}__';
-      protectedText = protectedText.replaceAll(entry.key, placeholder);
-      placeholders[placeholder] = entry.value;
-    }
-
-    return _ProtectedTranslationText(
-      text: protectedText,
-      placeholders: placeholders,
-    );
-  }
-
-  static String _protectMappedNameSequences(
-    String text,
-    List<MapEntry<String, String>> entries,
-    Map<String, String> placeholders,
-  ) {
-    if (entries.isEmpty || text.isEmpty) return text;
-
-    final byJapanese = <String, String>{
-      for (final entry in entries)
-        if (entry.key.trim().isNotEmpty) entry.key: entry.value,
-    };
-    final names = byJapanese.keys.toList()
-      ..sort((a, b) => b.length.compareTo(a.length));
-
-    String? matchNameAt(String source, int index) {
-      for (final name in names) {
-        if (index + name.length <= source.length &&
-            source.substring(index, index + name.length) == name) {
-          return name;
-        }
-      }
-      return null;
-    }
-
-    var result = '';
-    var index = 0;
-    while (index < text.length) {
-      final firstName = matchNameAt(text, index);
-      if (firstName == null) {
-        result += text[index];
-        index++;
-        continue;
-      }
-
-      final matchedNames = <String>[firstName];
-      var cursor = index + firstName.length;
-      var sequenceEnd = cursor;
-
-      while (cursor < text.length) {
-        final separatorStart = cursor;
-        cursor = _consumeNameSequenceSeparator(text, cursor);
-        if (cursor == separatorStart) break;
-
-        final nextName = matchNameAt(text, cursor);
-        if (nextName == null) break;
-
-        matchedNames.add(nextName);
-        cursor += nextName.length;
-        sequenceEnd = cursor;
-      }
-
-      if (matchedNames.length < 2) {
-        result += firstName;
-        index += firstName.length;
-        continue;
-      }
-
-      final placeholder = '__NAMESEQ_${placeholders.length}__';
-      placeholders[placeholder] =
-          matchedNames.map((name) => byJapanese[name] ?? name).join('、');
-      result += placeholder;
-      index = sequenceEnd;
-    }
-
-    return result;
-  }
-
-  static int _consumeNameSequenceSeparator(String text, int start) {
-    var index = start;
-    var consumed = false;
-    while (index < text.length) {
-      final char = text[index];
-      if (RegExp(r'[\s　、,，・･·]').hasMatch(char)) {
-        consumed = true;
-        index++;
-        continue;
-      }
-      break;
-    }
-
-    if (index < text.length && text.startsWith('に', index)) {
-      final afterNi = index + 'に'.length;
-      if (afterNi < text.length &&
-          RegExp(r'[\s　、,，・･·]').hasMatch(text[afterNi])) {
-        consumed = true;
-        index = afterNi;
-        while (index < text.length) {
-          final char = text[index];
-          if (RegExp(r'[\s　、,，・･·]').hasMatch(char)) {
-            index++;
-            continue;
-          }
-          break;
-        }
+    if (exactUserName != null && exactUserName.trim().isNotEmpty) {
+      nameMap[exactUserName.trim()] = exactUserName.trim();
+      if (translatedUserName != null && translatedUserName.trim().isNotEmpty) {
+        nameMap[translatedUserName.trim()] = exactUserName.trim();
       }
     }
 
-    if (index < text.length &&
-        (text.startsWith('と', index) || text.startsWith('や', index))) {
-      consumed = true;
-      index++;
-      while (index < text.length) {
-        final char = text[index];
-        if (RegExp(r'[\s　、,，・･·]').hasMatch(char)) {
-          index++;
-          continue;
-        }
-        break;
+    for (final entry in fixedCharacterCallNames.entries) {
+      final displayName = entry.key.trim();
+      final japaneseCallName = entry.value.trim();
+      if (displayName.isEmpty || japaneseCallName.isEmpty) continue;
+      nameMap[displayName] = japaneseCallName;
+      final chineseCallName =
+          _callNameChineseTarget(displayName, japaneseCallName);
+      if (chineseCallName.isNotEmpty) {
+        nameMap[chineseCallName] = japaneseCallName;
       }
     }
 
-    return consumed ? index : start;
-  }
+    for (final entry in _chineseToJapaneseNameMap().entries) {
+      nameMap.putIfAbsent(entry.key, () => entry.value);
+    }
 
-  static _ProtectedTranslationText _protectMappedNamesForJapaneseTranslation(
-    String text,
-  ) {
-    var protectedText = text;
-    final placeholders = <String, String>{};
-    final entries = _chineseToJapaneseNameMap().entries.toList()
+    final entries = nameMap.entries.toList()
       ..sort((a, b) => b.key.length.compareTo(a.key.length));
 
     for (final entry in entries) {
@@ -1919,76 +1523,6 @@ $boundedRoleplayReminder
     return RegExp(r'[、，,・･と和与及跟还有\s]').hasMatch(char);
   }
 
-  static String? _userNameChineseTranslationTarget(
-    String? exactUserName,
-    String? translatedUserName,
-  ) {
-    if (exactUserName == null || exactUserName.isEmpty) return null;
-    if (translatedUserName != null && translatedUserName.isNotEmpty) {
-      return translatedUserName;
-    }
-
-    final honorificMap = <String, String>{
-      'さん': '同学',
-      'ちゃん': '酱',
-      'くん': '君',
-      '君': '君',
-      '様': '大人',
-      'さま': '大人',
-      '先生': '老师',
-    };
-
-    for (final entry in honorificMap.entries) {
-      final suffix = entry.key;
-      if (!exactUserName.endsWith(suffix)) continue;
-
-      final baseName =
-          exactUserName.substring(0, exactUserName.length - suffix.length);
-      if (baseName.isEmpty) return exactUserName;
-      return '$baseName${entry.value}';
-    }
-
-    return exactUserName;
-  }
-
-  static Map<String, String> _expandedJapaneseNameTranslationMap() {
-    final expanded = <String, String>{};
-    for (final entry in _japaneseToChineseNameMap().entries) {
-      expanded[entry.key] = entry.value;
-
-      final compactKey = entry.key.replaceAll(RegExp(r'[\s　]+'), '');
-      if (compactKey != entry.key) {
-        expanded[compactKey] = entry.value.replaceAll(RegExp(r'[\s　]+'), '');
-      }
-
-      final sourceParts = _splitNameLikeText(entry.key);
-      final targetParts = _splitTranslationTarget(entry.value, sourceParts);
-      if (sourceParts.length == targetParts.length && sourceParts.length > 1) {
-        for (int i = 0; i < sourceParts.length; i++) {
-          expanded.putIfAbsent(sourceParts[i], () => targetParts[i]);
-        }
-      }
-    }
-
-    return expanded;
-  }
-
-  static Map<String, String> _japaneseToChineseNameMap() {
-    final result = <String, String>{};
-    for (final entry in characterNamePronunciations) {
-      result[entry.japanese] = entry.chinese;
-      result[entry.compactJapanese] = entry.chinese;
-      result[entry.reading] = entry.chinese;
-      for (final alias in entry.aliases.keys) {
-        result[alias] = entry.chinese;
-      }
-    }
-    for (final entry in _nameEntries) {
-      result[entry.japanese] = entry.chinese;
-    }
-    return result;
-  }
-
   static Map<String, String> _chineseToJapaneseNameMap() {
     final result = <String, String>{};
     for (final entry in characterNamePronunciations) {
@@ -2006,24 +1540,7 @@ $boundedRoleplayReminder
     return result;
   }
 
-  static Map<String, String> _standardJapaneseNameRulesForPrompt() {
-    final result = <String, String>{};
-    for (final entry in characterNamePronunciations) {
-      result[entry.chinese] = entry.compactJapanese;
-      for (final alias in entry.chineseAliases) {
-        result[alias] = entry.compactJapanese;
-      }
-      for (final alias in entry.aliases.keys) {
-        result[alias] = entry.compactJapanese;
-      }
-    }
-    for (final entry in _nameEntries) {
-      result[entry.chinese] = entry.japanese;
-    }
-    return result;
-  }
-
-  static Map<String, String> _fixedCallNameTranslationMap(
+  static Map<String, String> _fixedCharacterChineseCallNames(
     Map<String, String> fixedCharacterCallNames,
   ) {
     final result = <String, String>{};
@@ -2031,10 +1548,9 @@ $boundedRoleplayReminder
       final displayName = entry.key.trim();
       final callName = entry.value.trim();
       if (displayName.isEmpty || callName.isEmpty) continue;
-
-      final translatedCallName = _callNameChineseTarget(displayName, callName);
-      if (translatedCallName.isNotEmpty) {
-        result[callName] = translatedCallName;
+      final chineseCallName = _callNameChineseTarget(displayName, callName);
+      if (chineseCallName.isNotEmpty) {
+        result[displayName] = chineseCallName;
       }
     }
     return result;
@@ -2128,114 +1644,12 @@ $boundedRoleplayReminder
     return buffer.toString();
   }
 
-  static List<String> _splitTranslationTarget(
-    String target,
-    List<String> sourceParts,
-  ) {
-    final separated = _splitByNameSeparators(target);
-    if (separated.length == sourceParts.length) return separated;
-
-    if (sourceParts.length <= 1) return [target];
-
-    if (target.startsWith(sourceParts.first) &&
-        target.length > sourceParts.first.length) {
-      return [
-        sourceParts.first,
-        target.substring(sourceParts.first.length),
-      ];
-    }
-
-    final totalSourceLength =
-        sourceParts.fold<int>(0, (sum, part) => sum + part.length);
-    if (target.length == totalSourceLength) {
-      final parts = <String>[];
-      int start = 0;
-      for (final sourcePart in sourceParts) {
-        final end = start + sourcePart.length;
-        parts.add(target.substring(start, end));
-        start = end;
-      }
-      return parts;
-    }
-
-    return [target];
-  }
-
-  static List<String> _splitNameLikeText(String text) {
-    final separated = _splitByNameSeparators(text);
-    if (separated.length > 1) return separated;
-
-    final parts = <String>[];
-    final buffer = StringBuffer();
-    _NameCharKind? currentKind;
-
-    for (final rune in text.runes) {
-      final char = String.fromCharCode(rune);
-      final kind = _nameCharKind(rune);
-      if (currentKind != null && kind != currentKind) {
-        parts.add(buffer.toString());
-        buffer.clear();
-      }
-      buffer.write(char);
-      currentKind = kind;
-    }
-
-    if (buffer.isNotEmpty) {
-      parts.add(buffer.toString());
-    }
-
-    return parts.where((part) => part.trim().isNotEmpty).toList();
-  }
-
-  static List<String> _splitByNameSeparators(String text) {
-    return text
-        .split(RegExp(r'[\s　・･·]+'))
-        .map((part) => part.trim())
-        .where((part) => part.isNotEmpty)
-        .toList();
-  }
-
-  static _NameCharKind _nameCharKind(int rune) {
-    if ((rune >= 0x3040 && rune <= 0x309F) ||
-        (rune >= 0x30A0 && rune <= 0x30FF)) {
-      return _NameCharKind.kana;
-    }
-    if (rune >= 0x4E00 && rune <= 0x9FFF) {
-      return _NameCharKind.cjk;
-    }
-    if ((rune >= 0x0041 && rune <= 0x005A) ||
-        (rune >= 0x0061 && rune <= 0x007A) ||
-        (rune >= 0x0030 && rune <= 0x0039)) {
-      return _NameCharKind.latin;
-    }
-    return _NameCharKind.other;
-  }
-
-  static String _casualizeChineseTranslation(String text) {
-    return text
-        .replaceAll('您的', '你的')
-        .replaceAll('您', '你')
-        .replaceAll('阁下', '你')
-        .replaceAll('君她们', '君他们');
-  }
-
-  static String _chineseTranslationStyle(String? characterId) {
-    return switch (characterId) {
-      'shinobu' => '蝴蝶忍：温柔、优雅、礼貌而从容，关怀和调侃都较含蓄；避免粗俗、豪爽或过度随便的措辞。',
-      'muichirou' => '时透无一郎：安静、简洁、稍显淡然，语气直白但不粗鲁；偶尔流露少年感，不要翻得热烈健谈。',
-      'giyu' => '富冈义勇：寡言、克制、平静而直接，情绪表达内敛；用短而自然的句子，不要添加活泼语气。',
-      'sakiko' => '丰川祥子：优雅、克制、有教养，带自然的大小姐气质；即使亲近也不使用粗俗或过度随便的口吻。',
-      'tomori' => '高松灯：柔软、真诚、略显迟疑和内向，表达朴素而细腻；不要翻得圆滑、强势或过度成熟。',
-      _ => '忠实保留日语原文体现出的说话方式、礼貌程度和情绪，不额外改变人物口吻。',
-    };
-  }
-
   static String _japaneseTranslationStyle(String? characterId) {
     return switch (characterId) {
       'shinobu' =>
         '胡蝶しのぶらしい、柔らかく上品で落ち着いた丁寧語を使ってください。基本は「です・ます」調とし、乱暴または過度にくだけた語尾にしないでください。',
       'sakiko' =>
-        '豊川祥子らしい、上品で抑制の利いた丁寧語を使ってください。基本は「です・ます」調とし、「ですわ・ますわ・ですの」も文脈に応じて自然に使えます。「だよ・だね・なんだ」のようなくだけた常体を続けないでください。',
+        '豊川祥子らしい、上品で抑制の利いた丁寧語を使ってください。地の文を含む各文の結びは一貫して「です・ます」調にし、4文以上の返答では「ですわ・ますわ・ですの」のいずれかを全体に少なくとも1回、文脈に合わせて自然に使ってください。引用した台詞以外を常体で結ばないでください。',
       'muichirou' => '時透無一郎らしい、静かで簡潔な少年の常体を使ってください。無理に丁寧語や華やかな表現を足さないでください。',
       'giyu' => '冨岡義勇らしい、短く抑制された常体を使ってください。感情や語尾を過度に飾らないでください。',
       'tomori' => '高松燈らしい、素朴で柔らかく、少しためらいのある自然な話し方にしてください。強気で流暢すぎる表現にしないでください。',
@@ -2243,14 +1657,15 @@ $boundedRoleplayReminder
     };
   }
 
-  static String _stripKnownHonorific(String exactUserName) {
-    const suffixes = ['さん', 'ちゃん', 'くん', '君', '様', 'さま', '先生'];
-    for (final suffix in suffixes) {
-      if (exactUserName.endsWith(suffix)) {
-        return exactUserName.substring(0, exactUserName.length - suffix.length);
-      }
-    }
-    return exactUserName;
+  static String _japaneseFallbackTextForCharacter(String? characterId) {
+    return switch (characterId) {
+      'shinobu' => 'すみません、うまく言葉にできませんでした。もう一度お話ししていただけますか？',
+      'sakiko' => '申し訳ありませんわ。うまく言葉にできませんでしたの。もう一度お話しいただけますか？',
+      'muichirou' => 'ごめん、うまく言葉にできなかった。もう一度話してくれる？',
+      'giyu' => 'すまない。うまく言えなかった。もう一度話してくれ。',
+      'tomori' => 'ごめんなさい。うまく言葉にできなくて……もう一度、話してくれる？',
+      _ => 'ごめん、ちょっと言葉が出てこなかった…もう一度話してくれる？',
+    };
   }
 
   static String _casualGreetingFallback(String characterLanguage) {
@@ -2296,7 +1711,39 @@ $boundedRoleplayReminder
     String? characterId,
   ) {
     return _isCleanJapaneseForTts(text) &&
-        isJapaneseStyleCompatible(text, characterId);
+        isJapaneseTranslationStyleCompatible(text, characterId);
+  }
+
+  @visibleForTesting
+  static bool isJapaneseTranslationStyleCompatible(
+    String text,
+    String? characterId,
+  ) {
+    if (!isJapaneseStyleCompatible(text, characterId)) return false;
+    if (characterId == 'sakiko' || characterId == 'shinobu') {
+      if (!_hasConsistentPoliteSentenceEndings(text)) return false;
+    }
+    if (characterId != 'sakiko') return true;
+
+    final clauses = _japaneseValidationClauses(text);
+    if (clauses.length < 4) return true;
+    return RegExp(r'ですわ|ますわ|ですの|ませんの|ですこと').hasMatch(text);
+  }
+
+  static bool _hasConsistentPoliteSentenceEndings(String text) {
+    final sentences = text
+        .split(RegExp(r'[。！？!?]+'))
+        .map((part) => part.trim())
+        .where((part) => part.isNotEmpty)
+        .toList();
+    if (sentences.length <= 2) return true;
+
+    final politeSentences = sentences.where((sentence) {
+      return RegExp(
+        r'(?:です|ます|ません|でした|ました|でしょう|ございます|ですわ|ますわ|ですの|ませんの|ですこと)(?:ね|よ|か|わ)?$',
+      ).hasMatch(sentence);
+    }).length;
+    return politeSentences * 4 >= sentences.length * 3;
   }
 
   static bool isJapaneseStyleCompatible(String text, String? characterId) {
@@ -2314,7 +1761,10 @@ $boundedRoleplayReminder
       return RegExp(r'(?:だよ|だね|なんだ|なんだよ|だろ|じゃん)$').hasMatch(clause);
     }).length;
     final minimumPoliteClauses = clauses.length <= 3 ? 1 : 2;
-    return politeClauses >= minimumPoliteClauses && stronglyCasualClauses <= 1;
+    if (politeClauses < minimumPoliteClauses || stronglyCasualClauses > 1) {
+      return false;
+    }
+    return true;
   }
 
   static bool _containsChineseResidueInJapanese(String text) {
@@ -2354,178 +1804,96 @@ $boundedRoleplayReminder
     return pattern.allMatches(text).length;
   }
 
-  static Future<String> _normalizeJapaneseOrthographyIfUseful(
-    String text,
-    String? exactUserName,
-  ) async {
-    final trimmed = text.trim();
-    if (trimmed.isEmpty || !_isLikelyJapanese(trimmed)) return text;
-
-    final protectedText = _protectCanonicalJapaneseNames(trimmed);
-    final normalized = await _normalizeJapaneseOrthography(protectedText.text);
-    if (normalized.isEmpty || !_isLikelyJapanese(normalized)) {
-      return text;
-    }
-
-    final restored = _restoreProtectedMappedNames(
-      normalized,
-      protectedText.placeholders,
-    );
-    return _applyStandardJapaneseNameSpellings(
-      _sanitizeUserNameHonorifics(restored, exactUserName),
-    );
-  }
-
-  static _ProtectedTranslationText _protectCanonicalJapaneseNames(String text) {
-    var protectedText = text;
-    final placeholders = <String, String>{};
-    final names = <String>{
-      for (final entry in characterNamePronunciations)
-        if (entry.compactJapanese.isNotEmpty) entry.compactJapanese,
-      for (final entry in _nameEntries)
-        if (entry.japanese.trim().isNotEmpty) entry.japanese,
-    }.toList()
-      ..sort((a, b) => b.length.compareTo(a.length));
-
-    for (final name in names) {
-      if (!protectedText.contains(name)) continue;
-
-      final placeholder = '__CANON_JP_NAME_${placeholders.length}__';
-      final replaced = _replaceNameTerm(protectedText, name, placeholder);
-      if (replaced == protectedText) continue;
-
-      protectedText = replaced;
-      placeholders[placeholder] = name;
-    }
-
-    return _ProtectedTranslationText(
-      text: protectedText,
-      placeholders: placeholders,
-    );
-  }
-
-  static Future<String> _normalizeJapaneseOrthography(
-      String japaneseText) async {
-    try {
-      final response = await http.post(
-        Uri.parse('$doubaoBaseUrl/chat/completions'),
-        headers: {
-          'Authorization': 'Bearer $doubaoApiKey',
-          'Content-Type': 'application/json',
-        },
-        body: jsonEncode({
-          'model': doubaoModel,
-          'thinking': {'type': 'disabled'},
-          'messages': [
-            {
-              'role': 'system',
-              'content': 'あなたは日本語表記の校正者です。\n'
-                  '入力文の意味、話し方、敬語、語尾、改行、記号を保ったまま、日本語として自然な表記に整えてください。\n'
-                  '日本語文の中に中国語の字形や中国語の語句が混じっている場合は、日本語の標準的な漢字表記と自然な日本語表現に直してください。\n'
-                  'すでに自然な日本語なら、できるだけそのまま返してください。\n'
-                  '出力は修正後の日本語本文のみ。説明、注釈、引用符、翻訳文は出力しないでください。',
-            },
-            {
-              'role': 'user',
-              'content': japaneseText,
-            },
-          ],
-          'max_tokens': 1000,
-          'temperature': 0.0,
-          'stream': false,
-          'top_p': 0.9,
-          'presence_penalty': 0.0,
-          'frequency_penalty': 0.0,
-        }),
-      );
-
-      if (response.statusCode != 200) {
-        debugPrint('日语表记规范化 API 错误: ${response.statusCode}');
-        debugPrint('错误内容: ${response.body}');
-        return '';
-      }
-
-      final data = jsonDecode(utf8.decode(response.bodyBytes));
-      return (data['choices'][0]['message']['content'] as String)
-          .replaceAll('```', '')
-          .trim();
-    } catch (e) {
-      debugPrint('日语表记规范化异常: $e');
-      return '';
-    }
-  }
-
-  // ========================================
-  // 调用 DeepSeek 把中文翻译成日语
-  // ========================================
-  // 调用方：generateResponse 内部，在判定回复非日语时使用。
-  // 改动点：
-  //   - 增加了对返回内容的清洗（去掉可能残留的代码块、前缀说明等）
-  //   - 把 system prompt 改为更明确的指令，要求只返回日语本体
-  //   - 不再在异常时静默返回原中文，而是返回空字符串，
-  //     由外层 generateResponse 的 _isLikelyJapanese 校验决定是否重试或兜底，
-  //     彻底杜绝把中文继续传给 TTS 的可能
-  static Future<String> _translateToJapanese(
+  static Future<String> _translateChineseRoleResponseToJapanese(
     String chineseText, {
     required String? characterId,
+    required String? exactUserName,
+    required String? translatedUserName,
+    required Map<String, String> fixedCharacterCallNames,
+    required String? webContext,
+    required bool isRetry,
   }) async {
     try {
-      final protectedText =
-          _protectMappedNamesForJapaneseTranslation(chineseText);
+      final protectedText = _protectMappedNamesForJapaneseTranslation(
+        chineseText,
+        exactUserName: exactUserName,
+        translatedUserName: translatedUserName,
+        fixedCharacterCallNames: fixedCharacterCallNames,
+      );
+      final sourceUnits = _splitChineseTranslationUnits(protectedText.text);
+      if (sourceUnits.isEmpty) return '';
+      final genderHints = _genderHintsForTranslationPrompt(webContext);
+      final retryInstruction = isRetry
+          ? '前回の出力は、文対応・主語と目的語・能動と受動・日本語の純粋さ・キャラクターの話し方のいずれかの検査に通りませんでした。今回は原文の各文を一文ずつ照合し、関係を変えずに修正してください。\n'
+          : '';
+      final sourcePayload = jsonEncode({
+        'source_sentences': [
+          for (var i = 0; i < sourceUnits.length; i++)
+            {'source_index': i + 1, 'text': sourceUnits[i]},
+        ],
+      });
       final response = await http.post(
-        Uri.parse('$doubaoBaseUrl/chat/completions'),
+        Uri.parse('$deepSeekBaseUrl/chat/completions'),
         headers: {
-          'Authorization': 'Bearer $doubaoApiKey',
+          'Authorization': 'Bearer $deepSeekApiKey',
           'Content-Type': 'application/json',
         },
         body: jsonEncode({
-          'model': doubaoModel,
+          'model': deepSeekModel,
           'thinking': {'type': 'disabled'},
           'messages': [
             {
               'role': 'system',
-              'content': 'あなたはプロの中日翻訳者です。\n'
-                  'ユーザーが入力した中国語のテキストを、自然で口語的な日本語に翻訳してください。\n'
+              'content': 'あなたはキャラクター会話の中日翻訳者です。\n'
+                  '入力は内容とキャラクター性を確定済みの中国語返答です。'
+                  '日本語話者が日常会話で自然に話す文章として翻訳してください。\n'
                   '\n'
                   '厳守事項:\n'
-                  '1. 出力は日本語のみ。中国語の文字、説明、注釈、コードブロック、引用符を一切含めないこと。\n'
-                  '2. 「翻訳:」「日本語:」のような前置きを付けない。翻訳本文のみを出力する。\n'
-                  '3. 元のテキストに括弧書きの動作描写（例:（笑顔で））がある場合は日本語の括弧で残してよい。\n'
-                  '4. 必ず平仮名または片仮名を含む自然な日本語で出力すること。\n'
-                  '5. __JP_NAME_0__ のような占位符が含まれる場合は、翻訳せず、そのまま残すこと。\n'
-                  '6. 人名・地名・技名などの固有名詞は一語ずつ識別して日本語の標準表記に直すこと。字形を直しても、語中の文字順や固有名詞の構造を入れ替えないこと。\n'
-                  '7. 内容を要約・追加・再構成せず、原文の文数、事実の範囲、主語と目的語、時間順序を保つこと。\n'
-                  '8. ${_japaneseTranslationStyle(characterId)}',
+                  '1. 次の形の JSON オブジェクトだけを出力すること: '
+                  '{"translations":[{"source_index":1,"text":"日本語訳"}]}。コードブロックや説明を付けない。\n'
+                  '2. 入力の各 source_index に対して翻訳を一つだけ出し、件数と順序を完全に一致させる。文を別の index に移動、結合、分割しない。\n'
+                  '3. text は日本語だけにし、中国語の語句、説明、注釈、前置きを残さない。\n'
+                  '4. 各文の事実範囲、動作主、対象、能動・受動、因果関係、完了の程度を変えない。自然な日本語にするための語順変更はよいが、誰が誰に何をしたかを変えない。\n'
+                  '5. 元の文にある __JP_NAME_0__ のような占位符は、その同じ index の訳文に一文字も変えず残す。別の文へ移さない。\n'
+                  '6. 元のテキストに括弧書きの動作や表情がある場合は、削除せず自然な日本語にして括弧内に残す。\n'
+                  '7. 必ず平仮名または片仮名を含む自然な日本語にし、中国語の漢字語を字形だけで残さない。\n'
+                  '8. $genderHints'
+                  '9. ${_japaneseTranslationStyle(characterId)}\n'
+                  '10. 出力前に各 source_index の原文と訳文を一対一で照合し、主語と能動・受動が一致しているか確認する。\n'
+                  '$retryInstruction',
             },
             {
               'role': 'user',
-              'content': protectedText.text,
+              'content': sourcePayload,
             },
           ],
           'max_tokens': 1000,
-          'temperature': 0.3,
+          'temperature': isRetry ? 0.2 : 0.3,
           'stream': false,
+          'response_format': {'type': 'json_object'},
         }),
       );
       if (response.statusCode == 200) {
         final data = jsonDecode(utf8.decode(response.bodyBytes));
-        String result = data['choices'][0]['message']['content'] as String;
-        // 清理模型有时会返回的 markdown 代码块标记和常见前缀
-        // 即使 system prompt 已经禁止，仍偶发出现，这里再兜一层
-        result = result
-            .replaceAll('```japanese', '')
-            .replaceAll('```ja', '')
-            .replaceAll('```', '')
-            .trim();
-        // 去掉一些可能的中文前缀（如「翻译：」「日文：」）
-        // 只在开头匹配，避免误删正文里的内容
-        result = result.replaceFirst(RegExp(r'^(翻訳|翻译|日本語|日文|译文)[:：]\s*'), '');
-        result = _restoreProtectedMappedNames(
-          result,
+        final rawResult = data['choices'][0]['message']['content'] as String;
+        final parsed = _parseAlignedJapaneseTranslations(
+          sourceUnits: sourceUnits,
+          rawResponse: rawResult,
+          placeholders: protectedText.placeholders,
+        );
+        if (!parsed.isValid) {
+          debugPrint('日语逐句翻译契约未通过: ${parsed.issue}');
+          return '';
+        }
+        debugPrint('日语逐句翻译契约通过: sentences=${sourceUnits.length}');
+        var result = _restoreProtectedMappedNames(
+          parsed.text,
           protectedText.placeholders,
         );
+        result = _sanitizeUserNameHonorifics(result, exactUserName);
         result =
             _applyStandardJapaneseNameSpellings(_removeRubyReadings(result));
+        result = _applyFixedCharacterCallNames(result, fixedCharacterCallNames);
         return result.trim();
       } else {
         debugPrint('日文转换 API 错误: ${response.statusCode}');
@@ -2534,22 +1902,135 @@ $boundedRoleplayReminder
     } catch (e) {
       debugPrint('日文转换失败: $e');
     }
-    // 失败时返回空字符串而不是原中文。
-    // 外层 generateResponse 会用 _isLikelyJapanese 判断这个空串"不是日语"，
-    // 进入下一次重试或兜底文案，从而保证最终一定是日语进 TTS。
     return '';
   }
 
-  static String _removeChinese(String text) {
-    final chineseBracketPattern = RegExp(r'（[^）]*[\u4e00-\u9fff][^）]*）');
-    String result = text.replaceAll(chineseBracketPattern, '').trim();
-    if (result.isEmpty) return text;
-    return result;
+  static List<String> _splitChineseTranslationUnits(String text) {
+    const protectedMyGo = '__MYGO_FIVE_EXCLAMATIONS__';
+    final protectedText = text.replaceAll('MyGO!!!!!', protectedMyGo);
+    final units = <String>[];
+    final buffer = StringBuffer();
+    const sentenceEndings = {'。', '！', '？', '!', '?'};
+    for (final rune in protectedText.runes) {
+      final character = String.fromCharCode(rune);
+      buffer.write(character);
+      if (sentenceEndings.contains(character)) {
+        final unit = buffer.toString().trim();
+        if (unit.isNotEmpty) units.add(unit);
+        buffer.clear();
+      }
+    }
+    final remainder = buffer.toString().trim();
+    if (remainder.isNotEmpty) units.add(remainder);
+    return units
+        .map((unit) => unit.replaceAll(protectedMyGo, 'MyGO!!!!!'))
+        .toList(growable: false);
   }
 
-  // ========================================
-  // 图片理解：调用豆包视觉模型
-  // ========================================
+  static _AlignedTranslationParseResult _parseAlignedJapaneseTranslations({
+    required List<String> sourceUnits,
+    required String rawResponse,
+    required Map<String, String> placeholders,
+  }) {
+    final cleaned = rawResponse
+        .replaceAll(RegExp(r'^\s*```(?:json)?\s*', caseSensitive: false), '')
+        .replaceAll(RegExp(r'\s*```\s*$'), '')
+        .trim();
+    dynamic decoded;
+    try {
+      decoded = jsonDecode(cleaned);
+    } catch (_) {
+      return const _AlignedTranslationParseResult.invalid('输出不是有效 JSON');
+    }
+    if (decoded is! Map || decoded['translations'] is! List) {
+      return const _AlignedTranslationParseResult.invalid(
+        '缺少 translations 数组',
+      );
+    }
+    final translations = decoded['translations'] as List;
+    if (translations.length != sourceUnits.length) {
+      return _AlignedTranslationParseResult.invalid(
+        '翻译句数 ${translations.length} 与原文 ${sourceUnits.length} 不一致',
+      );
+    }
+
+    final translatedUnits = <String>[];
+    final placeholderPattern = RegExp(r'__JP_NAME_\d+__');
+    for (var i = 0; i < sourceUnits.length; i++) {
+      final rawTranslation = translations[i];
+      if (rawTranslation is! Map || rawTranslation['source_index'] != i + 1) {
+        return _AlignedTranslationParseResult.invalid(
+          '第 ${i + 1} 项的 source_index 不匹配',
+        );
+      }
+      final translatedText = '${rawTranslation['text'] ?? ''}'.trim();
+      if (translatedText.isEmpty) {
+        return _AlignedTranslationParseResult.invalid('第 ${i + 1} 项译文为空');
+      }
+
+      final expectedPlaceholders = placeholders.keys
+          .where((placeholder) => sourceUnits[i].contains(placeholder))
+          .toSet();
+      final actualPlaceholders = placeholderPattern
+          .allMatches(translatedText)
+          .map((match) => match.group(0)!)
+          .toSet();
+      if (!_sameStringSet(expectedPlaceholders, actualPlaceholders)) {
+        return _AlignedTranslationParseResult.invalid(
+          '第 ${i + 1} 项的人名占位符发生丢失或跨句移动',
+        );
+      }
+      if (_hasPotentialPassiveVoiceShift(
+        sourceUnits[i],
+        translatedText,
+        expectedPlaceholders,
+      )) {
+        return _AlignedTranslationParseResult.invalid(
+          '第 ${i + 1} 项疑似把主动关系翻成了被动关系',
+        );
+      }
+      translatedUnits.add(translatedText);
+    }
+    return _AlignedTranslationParseResult.valid(translatedUnits.join());
+  }
+
+  static bool _sameStringSet(Set<String> left, Set<String> right) =>
+      left.length == right.length && left.containsAll(right);
+
+  static bool _hasPotentialPassiveVoiceShift(
+    String source,
+    String translation,
+    Set<String> placeholders,
+  ) {
+    if (RegExp(r'被|遭|受到').hasMatch(source)) return false;
+    for (final placeholder in placeholders) {
+      final namedPassive = RegExp(
+        '${RegExp.escape(placeholder)}(?:は|が)[^。！？!?]{0,48}'
+        r'され(?:る|た|て|ない|ます|ました|ません|ている|ています)',
+      );
+      if (namedPassive.hasMatch(translation)) return true;
+    }
+    return false;
+  }
+
+  @visibleForTesting
+  static List<String> splitChineseTranslationUnitsForTest(String text) =>
+      _splitChineseTranslationUnits(text);
+
+  @visibleForTesting
+  static String? parseAlignedJapaneseTranslationsForTest({
+    required List<String> sourceUnits,
+    required String response,
+    Map<String, String> placeholders = const {},
+  }) {
+    final parsed = _parseAlignedJapaneseTranslations(
+      sourceUnits: sourceUnits,
+      rawResponse: response,
+      placeholders: placeholders,
+    );
+    return parsed.isValid ? parsed.text : null;
+  }
+
   static Future<String> _describeImage(String imagePath) async {
     try {
       final file = File(imagePath);
@@ -2617,6 +2098,172 @@ $boundedRoleplayReminder
   }
 }
 
+class _TimelineAnswerContract {
+  final List<GroundingTimelineSnapshot> timeline;
+
+  const _TimelineAnswerContract(this.timeline);
+
+  static _TimelineAnswerContract? fromWebContext(String? webContext) {
+    if (webContext == null ||
+        webContext.trim().isEmpty ||
+        !webContext.contains('【事实时间线】')) {
+      return null;
+    }
+    final snapshot = GroundingSnapshot.fromAudit(
+      logs: const [],
+      webContext: webContext,
+    );
+    if (snapshot.timeline.isEmpty) return null;
+    return _TimelineAnswerContract(snapshot.timeline);
+  }
+
+  String get outputInstruction => '''
+【最终输出语言与时间线结构契约】
+只输出一个 JSON 对象，不要输出代码块或说明：
+{"sentences":[{"text":"一条自然的中文角色台词","timeline_refs":[1]}]}
+
+- sentences 按最终说话顺序排列，text 拼接后就是完整回复。
+- 陈述剧情事实的句子必须在 timeline_refs 中填写它实际依据的【时间线】编号；纯粹的问候、感受或评价填写空数组。
+- timeline_refs 只能使用 1 到 ${timeline.length}，同一句引用多个阶段时必须连续递增；整段回复引用的编号也必须随句子递增，不能倒序。
+- 可以省略不重要的时间线阶段，不必使用全部编号；但不得为了缩短篇幅交换事件顺序。
+- 编号只用于程序校验，不要把编号写进 text。
+''';
+
+  _TimelineAnswerParseResult parse(String rawResponse) {
+    final cleaned = rawResponse
+        .replaceAll(RegExp(r'^\s*```(?:json)?\s*', caseSensitive: false), '')
+        .replaceAll(RegExp(r'\s*```\s*$'), '')
+        .trim();
+    dynamic decoded;
+    try {
+      decoded = jsonDecode(cleaned);
+    } catch (_) {
+      return const _TimelineAnswerParseResult.invalid('输出不是有效 JSON');
+    }
+    if (decoded is! Map || decoded['sentences'] is! List) {
+      return const _TimelineAnswerParseResult.invalid('缺少 sentences 数组');
+    }
+
+    final sentenceTexts = <String>[];
+    final allReferences = <int>[];
+    var previousReference = 0;
+    final rawSentences = decoded['sentences'] as List;
+    if (rawSentences.isEmpty) {
+      return const _TimelineAnswerParseResult.invalid('sentences 为空');
+    }
+
+    for (var sentenceIndex = 0;
+        sentenceIndex < rawSentences.length;
+        sentenceIndex++) {
+      final rawSentence = rawSentences[sentenceIndex];
+      if (rawSentence is! Map) {
+        return _TimelineAnswerParseResult.invalid(
+          '第 ${sentenceIndex + 1} 句不是对象',
+        );
+      }
+      final text = '${rawSentence['text'] ?? ''}'.trim();
+      if (text.isEmpty) {
+        return _TimelineAnswerParseResult.invalid(
+          '第 ${sentenceIndex + 1} 句正文为空',
+        );
+      }
+      final rawReferences = rawSentence['timeline_refs'];
+      if (rawReferences is! List) {
+        return _TimelineAnswerParseResult.invalid(
+          '第 ${sentenceIndex + 1} 句缺少 timeline_refs 数组',
+        );
+      }
+
+      final references = <int>[];
+      for (final rawReference in rawReferences) {
+        final reference =
+            rawReference is int ? rawReference : int.tryParse('$rawReference');
+        if (reference == null || reference < 1 || reference > timeline.length) {
+          return _TimelineAnswerParseResult.invalid(
+            '第 ${sentenceIndex + 1} 句引用了无效时间线编号',
+          );
+        }
+        if (references.isNotEmpty && reference <= references.last) {
+          return _TimelineAnswerParseResult.invalid(
+            '第 ${sentenceIndex + 1} 句的时间线编号没有严格递增',
+          );
+        }
+        if (references.isNotEmpty && reference != references.last + 1) {
+          return _TimelineAnswerParseResult.invalid(
+            '第 ${sentenceIndex + 1} 句合并了不相邻的时间线阶段',
+          );
+        }
+        references.add(reference);
+      }
+
+      if (references.isNotEmpty) {
+        if (references.first < previousReference) {
+          return _TimelineAnswerParseResult.invalid(
+            '第 ${sentenceIndex + 1} 句的事件顺序发生倒退',
+          );
+        }
+        previousReference = references.last;
+        allReferences.addAll(references);
+      }
+      sentenceTexts.add(text);
+    }
+
+    if (allReferences.isEmpty) {
+      return const _TimelineAnswerParseResult.invalid('回答没有引用任何时间线阶段');
+    }
+    return _TimelineAnswerParseResult.valid(
+      _joinTimelineAnswerSentences(sentenceTexts),
+      sentenceTexts.length,
+      allReferences,
+    );
+  }
+
+  static String _joinTimelineAnswerSentences(List<String> sentences) {
+    final buffer = StringBuffer();
+    final terminalPunctuation = RegExp(r'[。！？!?…）」】”]$');
+    for (final sentence in sentences) {
+      buffer.write(sentence);
+      if (!terminalPunctuation.hasMatch(sentence)) buffer.write('。');
+    }
+    return buffer.toString();
+  }
+}
+
+class _TimelineAnswerParseResult {
+  final bool isValid;
+  final String text;
+  final int sentenceCount;
+  final List<int> references;
+  final String issue;
+
+  const _TimelineAnswerParseResult.valid(
+    this.text,
+    this.sentenceCount,
+    this.references,
+  )   : isValid = true,
+        issue = '';
+
+  const _TimelineAnswerParseResult.invalid(this.issue)
+      : isValid = false,
+        text = '',
+        sentenceCount = 0,
+        references = const [];
+}
+
+class _AlignedTranslationParseResult {
+  final bool isValid;
+  final String text;
+  final String issue;
+
+  const _AlignedTranslationParseResult.valid(this.text)
+      : isValid = true,
+        issue = '';
+
+  const _AlignedTranslationParseResult.invalid(this.issue)
+      : isValid = false,
+        text = '';
+}
+
 class _ProtectedTranslationText {
   final String text;
   final Map<String, String> placeholders;
@@ -2636,5 +2283,3 @@ class _NameEntry {
     required this.chinese,
   });
 }
-
-enum _NameCharKind { cjk, kana, latin, other }

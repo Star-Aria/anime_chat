@@ -6272,12 +6272,39 @@ ${factLines.join('\n')}
       grouped[key]!.add(fact);
     }
 
+    final quotas = <String, int>{for (final source in sourceOrder) source: 0};
+    var allocated = 0;
+    while (allocated < maxFacts) {
+      var changed = false;
+      for (final source in sourceOrder) {
+        final sourceFacts = grouped[source] ?? const <_DoubaoGroundedFact>[];
+        final currentQuota = quotas[source] ?? 0;
+        if (currentQuota >= sourceFacts.length) continue;
+        quotas[source] = currentQuota + 1;
+        allocated += 1;
+        changed = true;
+        if (allocated >= maxFacts) break;
+      }
+      if (!changed) break;
+    }
+
+    final sampledBySource = <String, List<_DoubaoGroundedFact>>{};
+    for (final source in sourceOrder) {
+      final sourceFacts = grouped[source] ?? const <_DoubaoGroundedFact>[];
+      final quota = quotas[source] ?? 0;
+      final indexes = _spreadSampleIndexes(sourceFacts.length, quota);
+      sampledBySource[source] = [
+        for (final index in indexes) sourceFacts[index]
+      ];
+    }
+
     final selected = <_DoubaoGroundedFact>[];
     var offset = 0;
     while (selected.length < maxFacts) {
       var added = false;
       for (final source in sourceOrder) {
-        final sourceFacts = grouped[source] ?? const <_DoubaoGroundedFact>[];
+        final sourceFacts =
+            sampledBySource[source] ?? const <_DoubaoGroundedFact>[];
         if (offset >= sourceFacts.length) continue;
         selected.add(sourceFacts[offset]);
         added = true;
@@ -6287,6 +6314,24 @@ ${factLines.join('\n')}
       offset += 1;
     }
     return selected;
+  }
+
+  static List<int> _spreadSampleIndexes(int total, int count) {
+    if (total <= 0 || count <= 0) return const [];
+    if (count >= total) return [for (var i = 0; i < total; i++) i];
+    if (count == 1) return const [0];
+
+    final indexes = <int>[];
+    for (var i = 0; i < count; i++) {
+      final index = (i * (total - 1) / (count - 1)).round();
+      if (indexes.isEmpty || indexes.last != index) indexes.add(index);
+    }
+    return indexes;
+  }
+
+  @visibleForTesting
+  static List<int> spreadSampleIndexesForTest(int total, int count) {
+    return _spreadSampleIndexes(total, count);
   }
 
   static bool _looksLikeProductionMetaFact(String text) {

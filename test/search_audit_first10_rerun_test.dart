@@ -289,7 +289,7 @@ String _formatReport(List<_AuditRecord> records, int expectedCount) {
       ..writeln(record.japaneseAnswer.trim())
       ..writeln('```')
       ..writeln()
-      ..writeln('**中文翻译**')
+      ..writeln('**中文回答（DeepSeek原稿）**')
       ..writeln()
       ..writeln('```text')
       ..writeln(record.chineseAnswer.trim())
@@ -386,7 +386,10 @@ _AuditRecord? _recordFromLegacyReport(_AuditItem item, String text) {
   final logs = _legacyCodeBlock(text, '**搜索/生成日志**');
   final webContext = _legacyCodeBlock(text, '**返回给模型的联网上下文**');
   final japaneseAnswer = _legacyCodeBlock(text, '**日语回答**');
-  final chineseAnswer = _legacyCodeBlock(text, '**中文翻译**');
+  final chineseDraft = _legacyCodeBlock(text, '**中文回答（DeepSeek原稿）**');
+  final chineseAnswer = chineseDraft.trim().isNotEmpty
+      ? chineseDraft
+      : _legacyCodeBlock(text, '**中文翻译**');
   if (question.trim().isEmpty &&
       logs.trim().isEmpty &&
       webContext.trim().isEmpty &&
@@ -694,7 +697,7 @@ class _AuditRecord {
     if (webContext.trim().isEmpty) result.add('联网上下文为空');
     if (webContext.contains('【网页搜索失败】')) result.add('网页搜索失败');
     if (japaneseAnswer.trim().isEmpty) result.add('日语回答为空');
-    if (chineseAnswer.trim().isEmpty) result.add('中文翻译为空');
+    if (chineseAnswer.trim().isEmpty) result.add('中文回答为空');
     if (_containsObviousChinese(japaneseAnswer)) {
       result.add('日语回答疑似残留中文');
     }
