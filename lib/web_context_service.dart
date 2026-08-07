@@ -26,10 +26,10 @@ class WebContextService {
   // 普通联网请求最多等 8 秒。
   // 如果天气或 planner 太慢，就放弃这部分信息，避免聊天一直卡住。
   static const Duration _timeout = Duration(seconds: 8);
-  // 搜索 API 偶尔会超过 8 秒，尤其是 Tavily advanced search。
+  // 搜索 API 偶尔会超过 8 秒，尤其是联网搜索和页面正文补全。
   // 搜索比天气更能容忍稍慢一点，所以单独给更宽松的超时。
   static const Duration _searchTimeout = Duration(seconds: 18);
-  static const Duration _factExtractionTimeout = Duration(seconds: 60);
+  static const Duration _factExtractionTimeout = Duration(seconds: 90);
 
   // 用 DeepSeek 做“是否需要联网”的智能判断。
   // 注意：这里不是正式聊天回复，只是让模型输出一小段 JSON 搜索计划。
@@ -37,8 +37,6 @@ class WebContextService {
   static const String _deepSeekModel = 'deepseek-v4-flash';
   static const String _deepSeekBaseUrl = 'https://api.deepseek.com/v1';
   static const String _baiduMapAk = ApiKeys.baiduMapAk;
-  static const String _tavilyApiKey = ApiKeys.tavilyApiKey;
-  static const String _searchCacheVersion = 'search-v37';
   static const String _answerModeStrictFact = 'strict_fact';
   static const String _answerModeBoundedRoleplay = 'bounded_roleplay';
   static const String _answerModeAdaptive = 'adaptive';
@@ -96,15 +94,7 @@ class WebContextService {
     if (_verboseSearchDiagnostics) debugPrint(message);
   }
 
-  // 普通网页搜索的内存缓存。
-  //
-  // 只缓存 Tavily/DuckDuckGo 的网页搜索结果，不缓存实时天气。
-  // 作用：
-  // - 同一话题连续追问时更快
-  // - 少花 Tavily 调用额度
-  // - 搜索结果更稳定，不会每句话都换一批网页
-  static final Map<String, _CachedSearchResult> _searchCache = {};
-  static const int _maxSearchCacheEntries = 40;
+  static const int _maxDoubaoSearchApiCallsPerTurn = 6;
 
   // ========================================
   // 入口方法：聊天页每次用户发消息时会调用这里
@@ -142,6 +132,7 @@ class WebContextService {
       userMessage: userMessage,
       characterId: characterId,
     );
+    final runState = _WebContextRunState();
     final context = await runZoned(
       () => _buildContextInternal(
         userMessage: userMessage,
@@ -149,7 +140,10 @@ class WebContextService {
         characterName: characterName,
         conversationHistory: conversationHistory,
       ),
-      zoneValues: {#groundingRunTrace: trace},
+      zoneValues: {
+        #groundingRunTrace: trace,
+        #webContextRunState: runState,
+      },
     );
     trace.finish();
     debugPrint('联网调用统计: ${trace.compactSummary}');
@@ -158,6 +152,9 @@ class WebContextService {
 
   static GroundingRunTrace? get _activeTrace =>
       Zone.current[#groundingRunTrace] as GroundingRunTrace?;
+
+  static _WebContextRunState? get _activeRunState =>
+      Zone.current[#webContextRunState] as _WebContextRunState?;
 
   static Future<String> _buildContextInternal({
     required String userMessage,
@@ -220,24 +217,11 @@ class WebContextService {
     var resolvedAnswerBasis = _answerBasisInsufficient;
 
     // 节日信息：
-    // 现在优先联网搜索近期节日，让它随年份和地区自动更新。
-    // 本地节日表仍然保留，只有联网搜索失败时才作为兜底。
+    // 使用受角色地区约束的本地节日表；旧网页搜索兜底已移除。
     if (profile.includeFestivals && plan.includeFestivals) {
-      final rawFestivalResults = await _searchWeb(
-        _buildFestivalSearchQuery(DateTime.now(), profile),
-        category: 'festival',
-      );
-      final festivalResults = _filterFestivalSearchResults(
-        rawFestivalResults,
-        profile.festivalScope,
-      );
-      if (festivalResults.isNotEmpty) {
-        sections.add('【联网节日信息】\n${festivalResults.join('\n')}');
-      } else {
-        final festivalContext = _buildFestivalContext(DateTime.now(), profile);
-        if (festivalContext.isNotEmpty) {
-          sections.add(festivalContext);
-        }
+      final festivalContext = _buildFestivalContext(DateTime.now(), profile);
+      if (festivalContext.isNotEmpty) {
+        sections.add(festivalContext);
       }
     }
 
@@ -266,22 +250,7 @@ class WebContextService {
       }
     }
 
-    // 物候信息：
-    // 物候指现实世界里“花开、发芽、蝉鸣、红叶、落叶”等季节现象。
-    // 天气接口本身不提供物候，所以这里用网页搜索补充。
-    // 规则：
-    // - 用户直接问外面景色、季节感、花、树、红叶等，才查物候
-    // - 单纯问“今天天气如何”只查天气，避免物候搜索里的梅雨/季节描述干扰实时天气
-    // - 地区仍然按角色 profile 限制，鬼灭/祥子查东京或日本，安迪查上海
-    if (profile.includePhenology && plan.includePhenology) {
-      final phenologyResults = await _searchWeb(
-        _buildPhenologySearchQuery(DateTime.now(), profile),
-        category: 'phenology',
-      );
-      if (phenologyResults.isNotEmpty) {
-        sections.add('【联网物候信息】\n${phenologyResults.join('\n')}');
-      }
-    }
+    // 物候信息旧版依赖普通网页搜索兜底；旧链路移除后暂不生成物候上下文。
 
     // 网页搜索：
     // 天气有专门接口，普通天气问题不走网页搜索。
@@ -338,43 +307,15 @@ class WebContextService {
       }
 
       if (results.isEmpty &&
-          !(doubaoSearchConfigured && plan.category == 'canon') &&
-          !_requiresAuthoritativeDoubaoSearch(plan.category, profile)) {
-        final rawRelatedCanonTerm = plan.category == 'canon' &&
-                _shouldUseRelatedCanonTerm(
-                  executionSearchQuery,
-                  text,
-                  profile.characterName,
-                )
-            ? profile.characterName
-            : '';
-        final directTitleHints = plan.category == 'canon'
-            ? _canonDirectTitleHints(
-                executionSearchQuery,
-                text,
-                profile,
-                rawRelatedCanonTerm,
-              )
-            : const <String>[];
-        final relatedCanonTerm = directTitleHints.any(_isExplicitCanonTitleTerm)
-            ? ''
-            : rawRelatedCanonTerm;
-        if (directTitleHints.isNotEmpty) {
-          debugPrint('旧搜索兜底词条候选: ${directTitleHints.join(', ')}');
-        }
-        results = await _searchWeb(
-          executionSearchQuery,
-          category: plan.category,
-          preferMoegirl: profile.preferMoegirlCanonSearch,
-          relatedCanonTerm: relatedCanonTerm,
-          directTitleHints: directTitleHints,
-          profile: profile,
-        );
-      } else if (results.isEmpty &&
           doubaoSearchConfigured &&
           plan.category == 'canon') {
         debugPrint(
           '豆包原作搜索事实不足，不进入旧搜索兜底: query=$executionSearchQuery',
+        );
+      } else if (results.isEmpty) {
+        debugPrint(
+          '豆包搜索事实不足，旧网页搜索兜底已移除: '
+          'category=${plan.category}, query=$executionSearchQuery',
         );
       }
 
@@ -649,12 +590,14 @@ JSON 格式：
 8. query 要写成适合搜索引擎的中文关键词，不要太长；原作搜索时 query 只是兜底描述，真正搜索对象必须写进 primary_objects / secondary_objects。
 9. 经济、新闻、政策类问题如果用户没有指定年份，query 必须包含当前年份 ${now.year} 和“最新/近期”等词。
 10. 只要当前消息或最近对话涉及作品内事实，宁可 web_search=true、category="canon"，不要让聊天模型凭记忆回答。作品内事实包括人物、人物关系、乐队/组织/学校/店铺/地点、事件、台词、口头禅、喜好、食物、身份、职位、集数、剧情和设定。
-11. 如果当前消息出现新对象，query 必须围绕新对象，不要沿用最近对话里的旧对象。
-12. 原作 query 必须包含用户真正询问的对象；不要因为当前聊天角色是 ${profile.characterName} 就把 ${profile.characterName} 放进 query，除非用户确实在问 ${profile.characterName} 本人。
-13. 如果问题围绕当前角色与另一个人物、地点或事件的作品内联系，query 优先写“被问到的具体对象 + 关系/事件 + 作品名”；当前角色名只能作为辅助词，不能重复出现。
-14. 原作搜索对象拆分规则：先解析用户真正询问的主要对象，再解析需要补充的次要对象；每个数组元素只能是一个干净对象名，不要把问题整句、作品名、感想、关系词或多个对象拼成一项。例如问“KiLLKiSS这首歌怎么样”时，主要对象是“KiLLKiSS”；问“灯喜欢什么动物”时，主要对象是“高松灯”；问“你当初在那田蜘蛛山如何支援”且当前角色就是被问者时，主要对象是当前角色。
-15. answer_requirements 只拆分用户实际需要回答的独立信息需求，不得在搜索前判断它是明确设定还是主观表达，也不要把寒暄、称呼或感想单独列成问项。
-16. direct_evidence_cues 只描述原文直接回答该问项时必须明确表达的关系或限定语，不得填写人物、招式、地点等答案，不得判断网页中是否存在答案。它用于读取网页后的命题核验；没有特殊限定时可以为空数组。
+11. 如果用户是在问番剧、动画、漫画、电影、电视剧、书影音、角色、剧情、设定、歌曲、乐队、作品感想或“我最近在看什么”，不要判成 slang；这类优先 general 或 canon。
+12. 如果用户是在辨认一句短的、口语化的、像网络热词/流行说法的表达，即使没有明确写“什么意思”，也可以判 slang。
+13. 如果当前消息出现新对象，query 必须围绕新对象，不要沿用最近对话里的旧对象。
+14. 原作 query 必须包含用户真正询问的对象；不要因为当前聊天角色是 ${profile.characterName} 就把 ${profile.characterName} 放进 query，除非用户确实在问 ${profile.characterName} 本人。
+15. 如果问题围绕当前角色与另一个人物、地点或事件的作品内联系，query 优先写“被问到的具体对象 + 关系/事件 + 作品名”；当前角色名只能作为辅助词，不能重复出现。
+16. 原作搜索对象拆分规则：先解析用户真正询问的主要对象，再解析需要补充的次要对象；每个数组元素只能是一个干净对象名，不要把问题整句、作品名、感想、关系词或多个对象拼成一项。例如问“KiLLKiSS这首歌怎么样”时，主要对象是“KiLLKiSS”；问“灯喜欢什么动物”时，主要对象是“高松灯”；问“你当初在那田蜘蛛山如何支援”且当前角色就是被问者时，主要对象是当前角色。
+17. answer_requirements 只拆分用户实际需要回答的独立信息需求，不得在搜索前判断它是明确设定还是主观表达，也不要把寒暄、称呼或感想单独列成问项。
+18. direct_evidence_cues 只描述原文直接回答该问项时必须明确表达的关系或限定语，不得填写人物、招式、地点等答案，不得判断网页中是否存在答案。它用于读取网页后的命题核验；没有特殊限定时可以为空数组。
 ''';
   }
 
@@ -797,6 +740,33 @@ JSON 格式：
     var category = plan.category;
     final isPlainWeatherQuestion =
         keywordWeather && !RegExp(r'新闻|台风|暴雨|预警|灾害|最近|近期').hasMatch(text);
+    final entertainmentTopicPattern = RegExp(
+      r'番剧|动画|漫画|电影|电视剧|书影音|乐队|歌曲|曲子|音乐|作品|角色|剧情|设定|台词|人设|追番',
+      caseSensitive: false,
+    );
+    final slangIntentPattern = RegExp(
+      r'流行语|梗|热梗|网络热词|网络流行说法|什么意思|指什么|怎么理解|最近.*流行|最近.*很火|这词|这句话',
+      caseSensitive: false,
+    );
+
+    if (category == 'slang' && !slangIntentPattern.hasMatch(text)) {
+      category = entertainmentTopicPattern.hasMatch(text) ? 'general' : 'none';
+      searchQuery = null;
+    } else if ((category == 'none' || category == 'general') &&
+        !entertainmentTopicPattern.hasMatch(text) &&
+        slangIntentPattern.hasMatch(text)) {
+      category = 'slang';
+    }
+    if ((category == 'none' || category == 'general') &&
+        searchQuery == null &&
+        _textLooksLikeCurrentAffairsQuestion(text) &&
+        _requiresAuthoritativeDoubaoSearch('general', profile)) {
+      category = 'general';
+      searchQuery = _buildSearchQuery(text, profile);
+    }
+    if (searchQuery == null && category == 'slang') {
+      searchQuery = _buildSearchQuery(text, profile);
+    }
 
     if (searchQuery != null && searchQuery.isNotEmpty) {
       if (category == 'canon' &&
@@ -1113,41 +1083,6 @@ JSON 格式：
       final item = _stripSearchIndex(result).trim();
       return '本地角色设定：相关事实：$item';
     }).toList(growable: false);
-  }
-
-  static bool _shouldUseRelatedCanonTerm(
-    String query,
-    String userText,
-    String relatedTerm,
-  ) {
-    final related = relatedTerm.trim();
-    if (related.isEmpty) return false;
-    if (_canonTextContainsTerm(query, related) ||
-        _canonTextContainsTerm(userText, related)) {
-      return true;
-    }
-
-    final terms = _snippetSearchTerms(query);
-    final concreteTerms = terms
-        .where((term) => !_canonQueryContextTerms.contains(term.toLowerCase()))
-        .where((term) => !_isCanonAspectTerm(term))
-        .toList();
-    final asksAboutCurrentCharacter =
-        _asksAboutCurrentCharacterInCanon(userText);
-    if (concreteTerms.length >= 2) return asksAboutCurrentCharacter;
-    if (_userTextAddressesCharacter(userText, related)) return true;
-
-    return asksAboutCurrentCharacter || RegExp(r'当时|那时').hasMatch(userText);
-  }
-
-  static bool _userTextAddressesCharacter(String text, String characterName) {
-    if (characterName.isEmpty) return false;
-    final chars = characterName.runes.toList();
-    if (chars.isEmpty) return false;
-    final lastChar = String.fromCharCode(chars.last);
-    return RegExp(
-      '${RegExp.escape(lastChar)}(?:小姐|先生|老师|前辈|学姐|学长|同学|さん|ちゃん|くん|君|様)',
-    ).hasMatch(text);
   }
 
   static List<String> _canonDirectTitleHints(
@@ -1511,7 +1446,7 @@ query 规则：
   }
 
   // 原作搜索词要短：作品名 + 被追问对象 + 本轮问题焦点。
-  // 搜索词越接近日常检索习惯，Tavily/DuckDuckGo 越不容易跑偏或超时。
+  // 搜索词越接近日常检索习惯，豆包搜索越不容易跑偏或超时。
   static String _buildCanonFollowUpSearchQuery(
     String text,
     String topic,
@@ -1685,7 +1620,10 @@ query 规则：
 
   // 判断是否和日期/节日有关。
   static bool _shouldMentionDateOrFestival(String text) {
-    return RegExp(r'今天|现在|日期|星期|周几|节日|假期|最近|近期|明天|后天').hasMatch(text);
+    return RegExp(
+      r'日期|星期|周几|节日|假期|节气|纪念日|生日|什么日子|几月几|'
+      r'明天|后天|今天.*(?:节|假|星期|周几|日期|什么日子)|(?:节|假).*今天',
+    ).hasMatch(text);
   }
 
   // 判断是否和天气有关。
@@ -1773,62 +1711,6 @@ query 规则：
       return '$trimmed$regionHint 最新';
     }
     return trimmed;
-  }
-
-  // 联网搜索节日时使用的搜索词。
-  //
-  // 注意：节日范围按“番剧/作品名”划分，而不是按单个角色划分。
-  // - 鬼灭之刃：只搜大正时期已经存在的日本民俗/季节行事
-  // - BanG Dream：搜现代日本非政治节日/行事
-  // - 欢乐颂：搜中国 + 国际近期节日
-  //
-  // 日本角色统一排除天皇、建国、昭和、宪法等政治色彩较强的节日。
-  static String _buildFestivalSearchQuery(DateTime now, _WebProfile profile) {
-    final month = now.month;
-
-    switch (profile.festivalScope) {
-      case _FestivalScope.kimetsuTaishoJapan:
-        return '$month月 日本 大正時代 传统 民俗 季节 年中行事 节日 -天皇 -建国 -昭和 -宪法 -憲法 -政治 -国民の祝日';
-      case _FestivalScope.modernJapanNonPolitical:
-        return '${now.year}年$month月 日本 现代 民俗 季节 行事 樱花季 夏日祭 花火大会 十五夜 国际节日 -天皇 -建国 -昭和 -宪法 -憲法 -政治';
-      case _FestivalScope.chinaInternational:
-        return '${now.year}年$month月 中国 国际 近期 节日 假期';
-      case _FestivalScope.internationalOnly:
-        return '${now.year}年$month月 近期 国际 节日';
-    }
-  }
-
-  // 联网搜索物候时使用的搜索词。
-  // 这里会把角色所在地区和当月放进去，尽量搜到“当下真实状态”。
-  static String _buildPhenologySearchQuery(DateTime now, _WebProfile profile) {
-    final month = now.month;
-    return '${profile.phenologyRegion} ${now.year}年$month月 物候 花期 开花 红叶 落叶 季节 景色';
-  }
-
-  static List<String> _filterFestivalSearchResults(
-    List<String> results,
-    _FestivalScope scope,
-  ) {
-    if (scope == _FestivalScope.chinaInternational ||
-        scope == _FestivalScope.internationalOnly) {
-      return results;
-    }
-
-    final forbidden = <RegExp>[
-      RegExp(r'天皇|皇室|建国|建國|紀元節|纪元节|昭和|宪法|憲法|政治'),
-    ];
-
-    if (scope == _FestivalScope.kimetsuTaishoJapan) {
-      forbidden.addAll([
-        RegExp(r'成人の日|成人之日|海の日|海之日|山の日|山之日'),
-        RegExp(r'敬老の日|敬老之日|体育の日|体育之日|スポーツの日|运动之日'),
-        RegExp(r'みどりの日|绿之日|勤労感謝の日|勤劳感谢日|国民の祝日|国定假日'),
-      ]);
-    }
-
-    return results.where((result) {
-      return !forbidden.any((pattern) => pattern.hasMatch(result));
-    }).toList();
   }
 
   // ========================================
@@ -2351,7 +2233,21 @@ ${location.name}：数据源 Open-Meteo；天气数据时间 $currentTime；当�
   // 1. 按火山引擎联网搜索 API 的官方字段请求网页结果。
   // 2. 让模型从搜索结果里抽取“能直接回答用户问题”的事实。
   //
-  // 如果搜索 key 没配置、搜索失败、或事实抽取判定资料不足，再进入旧搜索兜底。
+  // facts 只允许由豆包/火山方舟抽取；服务不可用时立即停止本轮事实链，
+  // 不切换其他模型，也不继续搜索更多页面浪费额度。
+  static bool get _factExtractorUnavailableThisTurn =>
+      _activeRunState?.factExtractorUnavailable == true;
+
+  static bool _stopSearchAfterFactExtractorFailure() {
+    final runState = _activeRunState;
+    if (runState?.factExtractorUnavailable != true) return false;
+    if (!runState!.factExtractorStopLogged) {
+      _logSearch('事实抽取服务不可用，停止本轮后续搜索与事实调用');
+      runState.factExtractorStopLogged = true;
+    }
+    return true;
+  }
+
   static Future<List<String>> _searchDoubaoGroundedFacts(
     String query, {
     required String userText,
@@ -2365,7 +2261,7 @@ ${location.name}：数据源 Open-Meteo；天气数据时间 $currentTime；当�
 
     final apiKey = _doubaoSearchApiKey;
     if (apiKey.isEmpty) {
-      debugPrint('豆包搜索 API 未配置 key，使用旧搜索兜底');
+      debugPrint('豆包搜索 API 未配置 key，停止豆包搜索');
       return const [];
     }
 
@@ -2400,10 +2296,26 @@ ${location.name}：数据源 Open-Meteo；天气数据时间 $currentTime；当�
         category == 'canon' && _isEventProcessCanonQuestion(userText);
     final includeTimeline = needsBroadFactCoverage || eventProcessSearch;
     final extractionFactLimit = factLimit;
-    final minimumFactTarget = includeTimeline ? _complexCanonFactTarget : 2;
+    final minimumFactTarget = _minimumDoubaoFactTarget(
+      category: category,
+      profile: profile,
+      userText: userText,
+      needsBroadFactCoverage: needsBroadFactCoverage,
+      eventProcessSearch: eventProcessSearch,
+    );
+    final minimumSourceTarget = _minimumDoubaoSourceTarget(
+      category: category,
+      profile: profile,
+      userText: userText,
+    );
+    final collectFactLimit = minimumSourceTarget > 1
+        ? 40
+        : (needsBroadFactCoverage ? 40 : factLimit);
+    final separateFactOutput = needsBroadFactCoverage;
     var collectedAnswerBasis = _answerBasisInsufficient;
     final displayQuery =
         searchTargets.isNotEmpty ? searchTargets.join(' / ') : baseQuery;
+    var searchBudgetLogWritten = false;
 
     for (final priority in orderedPriorities) {
       final phaseAttempts =
@@ -2415,6 +2327,7 @@ ${location.name}：数据源 Open-Meteo；天气数据时间 $currentTime；当�
       var phaseAdoptLayerName = phaseLayerName;
       var phaseHasCompleteAnswer = false;
       var phaseResultCount = 0;
+      var phaseReached = false;
 
       if (category == 'canon' &&
           priority == 0 &&
@@ -2423,6 +2336,7 @@ ${location.name}：数据源 Open-Meteo；天气数据时间 $currentTime；当�
           searchTargets.isNotEmpty ? searchTargets : [baseQuery],
         );
         if (directItems.isNotEmpty) {
+          phaseReached = true;
           var extraction = const _DoubaoFactExtraction.empty();
           if (minimumFactTarget > 2 && directItems.length > 1) {
             final perPageFacts = <_DoubaoGroundedFact>[];
@@ -2439,6 +2353,7 @@ ${location.name}：数据源 Open-Meteo；天气数据时间 $currentTime；当�
                 minimumFactTarget: minimumFactTarget - perPageFacts.length > 0
                     ? minimumFactTarget - perPageFacts.length
                     : 1,
+                minimumSourceTarget: minimumSourceTarget,
                 preferEvidenceText: needsBroadFactCoverage,
                 answerMode: answerMode,
                 answerRequirements: answerRequirements,
@@ -2455,6 +2370,7 @@ ${location.name}：数据源 Open-Meteo；天气数据时间 $currentTime；当�
               if (pageExtraction.provider != 'none') {
                 perPageProvider = pageExtraction.provider;
               }
+              if (_factExtractorUnavailableThisTurn) break;
             }
             extraction = _DoubaoFactExtraction(
               status:
@@ -2473,12 +2389,13 @@ ${location.name}：数据源 Open-Meteo；天气数据时间 $currentTime；当�
               items: directItems,
               factLimit: extractionFactLimit,
               minimumFactTarget: minimumFactTarget,
+              minimumSourceTarget: minimumSourceTarget,
               preferEvidenceText: needsBroadFactCoverage,
               answerMode: answerMode,
               answerRequirements: answerRequirements,
             );
           }
-          if (extraction.facts.isEmpty) {
+          if (extraction.facts.isEmpty && !_factExtractorUnavailableThisTurn) {
             _logSearch('萌娘百科直达事实首次抽取为空，执行一次同页候选事实复核');
             extraction = await _extractDoubaoFactsWithModel(
               searchQuery: displayQuery,
@@ -2488,6 +2405,7 @@ ${location.name}：数据源 Open-Meteo；天气数据时间 $currentTime；当�
               items: directItems,
               factLimit: extractionFactLimit,
               minimumFactTarget: minimumFactTarget,
+              minimumSourceTarget: minimumSourceTarget,
               preferEvidenceText: needsBroadFactCoverage,
               answerMode: answerMode,
               answerRequirements: answerRequirements,
@@ -2495,6 +2413,7 @@ ${location.name}：数据源 Open-Meteo；天气数据时间 $currentTime；当�
             );
           }
           if (minimumFactTarget > 2 &&
+              !_factExtractorUnavailableThisTurn &&
               extraction.facts.length >= minimumFactTarget - 1 &&
               extraction.facts.length < minimumFactTarget &&
               _factsCoverAnswerRequirements(
@@ -2533,6 +2452,7 @@ ${location.name}：数据源 Open-Meteo；天气数据时间 $currentTime；当�
                   : directItems,
               factLimit: extractionFactLimit,
               minimumFactTarget: minimumFactTarget - extraction.facts.length,
+              minimumSourceTarget: minimumSourceTarget,
               preferEvidenceText: needsBroadFactCoverage,
               answerMode: answerMode,
               answerRequirements: answerRequirements,
@@ -2573,13 +2493,13 @@ ${location.name}：数据源 Open-Meteo；天气数据时间 $currentTime；当�
             _addUniqueDoubaoFacts(
               collectedFacts,
               extraction.facts,
-              maxFacts: needsBroadFactCoverage ? 40 : factLimit,
+              maxFacts: collectFactLimit,
             );
             phaseHasCompleteAnswer = _hasEnoughDoubaoFactsForSearchStop(
               collectedFacts,
               factLimit: factLimit,
-              needsBroadFactCoverage: needsBroadFactCoverage,
-              eventProcessSearch: eventProcessSearch,
+              minimumFactTarget: minimumFactTarget,
+              minimumSourceTarget: minimumSourceTarget,
               extractionStatus: extraction.status,
               answerRequirements: answerRequirements,
             );
@@ -2588,6 +2508,8 @@ ${location.name}：数据源 Open-Meteo；天气数据时间 $currentTime；当�
         }
       }
 
+      if (_stopSearchAfterFactExtractorFailure()) break;
+
       if (category == 'canon' && priority == 1) {
         final browserItems = await _searchSecondaryCanonBrowserItems(
           baseQuery,
@@ -2595,6 +2517,7 @@ ${location.name}：数据源 Open-Meteo；天气数据时间 $currentTime；当�
           profile: profile,
         );
         if (browserItems.isNotEmpty) {
+          phaseReached = true;
           final extraction = await _extractDoubaoFactsWithModel(
             searchQuery: baseQuery,
             userText: userText,
@@ -2603,6 +2526,7 @@ ${location.name}：数据源 Open-Meteo；天气数据时间 $currentTime；当�
             items: browserItems,
             factLimit: extractionFactLimit,
             minimumFactTarget: minimumFactTarget,
+            minimumSourceTarget: minimumSourceTarget,
             preferEvidenceText: needsBroadFactCoverage,
             answerMode: answerMode,
             answerRequirements: answerRequirements,
@@ -2626,13 +2550,13 @@ ${location.name}：数据源 Open-Meteo；天气数据时间 $currentTime；当�
             _addUniqueDoubaoFacts(
               collectedFacts,
               extraction.facts,
-              maxFacts: needsBroadFactCoverage ? 40 : factLimit,
+              maxFacts: collectFactLimit,
             );
             phaseHasCompleteAnswer = _hasEnoughDoubaoFactsForSearchStop(
               collectedFacts,
               factLimit: factLimit,
-              needsBroadFactCoverage: needsBroadFactCoverage,
-              eventProcessSearch: eventProcessSearch,
+              minimumFactTarget: minimumFactTarget,
+              minimumSourceTarget: minimumSourceTarget,
               extractionStatus: extraction.status,
               answerRequirements: answerRequirements,
             );
@@ -2642,10 +2566,24 @@ ${location.name}：数据源 Open-Meteo；天气数据时间 $currentTime；当�
         }
       }
 
+      if (_stopSearchAfterFactExtractorFailure()) break;
+
       final directFactsEnough = phaseHasCompleteAnswer;
 
       if (!directFactsEnough) {
         for (final attempt in phaseAttempts) {
+          if ((_activeTrace?.searchApiCalls ?? 0) >=
+              _maxDoubaoSearchApiCallsPerTurn) {
+            if (!searchBudgetLogWritten) {
+              _logSearch(
+                '搜索 API 预算已用完: '
+                '本轮上限=$_maxDoubaoSearchApiCallsPerTurn，'
+                '停止后续豆包搜索并保留已有事实',
+              );
+              searchBudgetLogWritten = true;
+            }
+            break;
+          }
           final searchQuery = _truncateDoubaoQuery(attempt.query);
           final attemptKey =
               '$priority::${attempt.useGlobal}::${attempt.sites ?? ''}::${attempt.authInfoLevel}::$searchQuery';
@@ -2658,6 +2596,7 @@ ${location.name}：数据源 Open-Meteo；天气数据时间 $currentTime；当�
               : '';
           final engineLog = attempt.useGlobal ? ', engine=Global' : '';
           final layerName = _searchLayerName(priority, attempt.label);
+          phaseReached = true;
           _logSearch(
             '搜索步骤开始[$layerName]: '
             '${attempt.useGlobal ? 'Global' : 'Custom'} | '
@@ -2695,6 +2634,7 @@ ${location.name}：数据源 Open-Meteo；天气数据时间 $currentTime；当�
             items,
             query: searchQuery,
             category: category,
+            needsSourceDiversity: minimumSourceTarget > 1,
           );
           if (!_sameDoubaoContentLengths(items, enrichedItems)) {
             _logSearchVerbose(
@@ -2721,10 +2661,15 @@ ${location.name}：数据源 Open-Meteo；天气数据时间 $currentTime；当�
             items: enrichedItems,
             factLimit: extractionFactLimit,
             minimumFactTarget: minimumFactTarget,
+            minimumSourceTarget: minimumSourceTarget,
             preferEvidenceText: needsBroadFactCoverage,
             answerMode: answerMode,
             answerRequirements: answerRequirements,
           );
+          if (_factExtractorUnavailableThisTurn) {
+            _stopSearchAfterFactExtractorFailure();
+            break;
+          }
           final enrichedContentCount =
               enrichedItems.where((item) => item.content.isNotEmpty).length;
           _logSearch(
@@ -2746,13 +2691,13 @@ ${location.name}：数据源 Open-Meteo；天气数据时间 $currentTime；当�
             _addUniqueDoubaoFacts(
               collectedFacts,
               extraction.facts,
-              maxFacts: needsBroadFactCoverage ? 40 : factLimit,
+              maxFacts: collectFactLimit,
             );
             phaseHasCompleteAnswer = _hasEnoughDoubaoFactsForSearchStop(
               collectedFacts,
               factLimit: factLimit,
-              needsBroadFactCoverage: needsBroadFactCoverage,
-              eventProcessSearch: eventProcessSearch,
+              minimumFactTarget: minimumFactTarget,
+              minimumSourceTarget: minimumSourceTarget,
               extractionStatus: extraction.status,
               answerRequirements: answerRequirements,
             );
@@ -2769,6 +2714,8 @@ ${location.name}：数据源 Open-Meteo；天气数据时间 $currentTime；当�
         }
       }
 
+      if (_stopSearchAfterFactExtractorFailure()) break;
+
       final phaseHasEnoughFacts = phaseHasCompleteAnswer;
 
       if (phaseHasEnoughFacts) {
@@ -2780,7 +2727,7 @@ ${location.name}：数据源 Open-Meteo；天气数据时间 $currentTime；当�
           collectedFacts,
           originalQuery: displayQuery,
           maxFacts: factLimit,
-          separateFacts: needsBroadFactCoverage,
+          separateFacts: separateFactOutput,
           includeTimeline: includeTimeline,
           userText: userText,
           profile: profile,
@@ -2794,16 +2741,11 @@ ${location.name}：数据源 Open-Meteo；天气数据时间 $currentTime；当�
             ...formatted,
             '$_doubaoAnswerBasisResultPrefix$resolvedCollectedBasis',
           ];
-          _writeSearchCache(
-            _searchCacheKey('doubao::$answerMode::$baseQuery', category),
-            resultsWithBasis,
-            'DoubaoSearch',
-          );
           return resultsWithBasis;
         }
       }
 
-      if (collectedFacts.isNotEmpty) {
+      if (collectedFacts.isNotEmpty && phaseReached) {
         _logSearch(
           '当前搜索层未满足，进入下一层: '
           '$phaseLayerName，命中结果=$phaseResultCount，'
@@ -2823,7 +2765,7 @@ ${location.name}：数据源 Open-Meteo；天气数据时间 $currentTime；当�
         collectedFacts,
         originalQuery: displayQuery,
         maxFacts: factLimit,
-        separateFacts: needsBroadFactCoverage,
+        separateFacts: separateFactOutput,
         includeTimeline: includeTimeline,
         userText: userText,
         profile: profile,
@@ -2837,11 +2779,6 @@ ${location.name}：数据源 Open-Meteo；天气数据时间 $currentTime；当�
           ...formatted,
           '$_doubaoAnswerBasisResultPrefix$resolvedCollectedBasis',
         ];
-        _writeSearchCache(
-          _searchCacheKey('doubao::$answerMode::$baseQuery', category),
-          resultsWithBasis,
-          'DoubaoSearch',
-        );
         return resultsWithBasis;
       }
     }
@@ -2854,8 +2791,11 @@ ${location.name}：数据源 Open-Meteo；天气数据时间 $currentTime；当�
     List<_DoubaoSearchItem> items, {
     required String query,
     required String category,
+    bool needsSourceDiversity = false,
   }) async {
-    if (items.isEmpty || category != 'canon') return items;
+    if (items.isEmpty || (category != 'canon' && !needsSourceDiversity)) {
+      return items;
+    }
 
     final enriched = <_DoubaoSearchItem>[];
     for (final item in items.take(_doubaoFactMaxResults)) {
@@ -3194,20 +3134,16 @@ ${location.name}：数据源 Open-Meteo；天气数据时间 $currentTime；当�
           secondaryQueries.add(clean);
         }
 
-        for (final query in primaryQueries) {
-          if (_queryAsksMusicInfo(userText) &&
-              _isExplicitCanonTitleTerm(query)) {
-            addSecondaryQuery(
-              _secondaryCanonDoubaoQuery(
-                query,
-                cleanQueries,
-                userText: userText,
-                profile: profile,
-              ),
-            );
-          } else {
-            addSecondaryQuery(query);
-          }
+        final orderedSecondaryObjects = [
+          ...primaryQueries.where(
+            (query) => !_canonTextContainsTerm(query, profile.characterName),
+          ),
+          ...primaryQueries.where(
+            (query) => _canonTextContainsTerm(query, profile.characterName),
+          ),
+        ];
+        for (final query in orderedSecondaryObjects) {
+          addSecondaryQuery(query);
         }
         final fallbackGlobalQuery = secondaryQueries.isNotEmpty
             ? secondaryQueries.first
@@ -3272,6 +3208,19 @@ ${location.name}：数据源 Open-Meteo；天气数据时间 $currentTime；当�
           label: '权威全网',
           priority: 1,
         ),
+        if (category == 'general' || category == 'slang')
+          _DoubaoSearchAttempt(
+            query: baseQuery,
+            label: '开放全网',
+            priority: 2,
+          ),
+        if (category == 'general' || category == 'slang')
+          _DoubaoSearchAttempt(
+            query: baseQuery,
+            useGlobal: true,
+            label: 'Global全网兜底',
+            priority: 3,
+          ),
       ];
     }
 
@@ -3304,38 +3253,6 @@ ${location.name}：数据源 Open-Meteo；天气数据时间 $currentTime；当�
       return false;
     }
     return true;
-  }
-
-  static String _secondaryCanonDoubaoQuery(
-    String primaryQuery,
-    List<String> cleanQueries, {
-    required String userText,
-    required _WebProfile profile,
-  }) {
-    if (primaryQuery.isEmpty) return '';
-    if (_queryAsksMusicInfo(userText) &&
-        _isExplicitCanonTitleTerm(primaryQuery)) {
-      final context = cleanQueries.skip(1).map(_truncateDoubaoQuery).firstWhere(
-            (query) => query.isNotEmpty && query != profile.characterName,
-            orElse: () => profile.canonSearchPrefix,
-          );
-      final withContext = _truncateDoubaoQuery('$primaryQuery $context');
-      if (withContext.isNotEmpty && withContext != primaryQuery) {
-        return withContext;
-      }
-    }
-    if (cleanQueries.length > 1) {
-      final next = _truncateDoubaoQuery(cleanQueries[1]);
-      if (next.isNotEmpty && next != primaryQuery) return next;
-    }
-    if (profile.canonSearchPrefix.isNotEmpty) {
-      final withPrefix =
-          _truncateDoubaoQuery('$primaryQuery ${profile.canonSearchPrefix}');
-      if (withPrefix.isNotEmpty && withPrefix != primaryQuery) {
-        return withPrefix;
-      }
-    }
-    return '';
   }
 
   static String _globalSiteScopedQuery(String query, String site) {
@@ -3548,13 +3465,44 @@ ${location.name}：数据源 Open-Meteo；天气数据时间 $currentTime；当�
     }
     for (final object in plan.secondarySearchObjects) {
       if (_queryAsksProfileTraits(userText) &&
-          !_isKnownCanonCharacterSearchObject(object, profile)) {
+          !_isKnownCanonCharacterSearchObject(object, profile) &&
+          !_isExplicitCanonTitleTerm(object)) {
         continue;
       }
       addTarget(object);
     }
 
     return targets.take(6).toList(growable: false);
+  }
+
+  @visibleForTesting
+  static List<String> canonSearchTargetsForTest({
+    required String userText,
+    required String query,
+    required String characterId,
+    required String characterName,
+    List<String> primaryObjects = const [],
+    List<String> secondaryObjects = const [],
+  }) {
+    final profile = _WebProfile.forCharacter(
+      characterId: characterId,
+      characterName: characterName,
+    );
+    return _canonSearchTargetsForPlan(
+      _SearchPlan(
+        includeWeather: false,
+        weatherCity: null,
+        includeFestivals: false,
+        includePhenology: false,
+        searchQuery: query,
+        category: 'canon',
+        primarySearchObjects: primaryObjects,
+        secondarySearchObjects: secondaryObjects,
+      ),
+      userText,
+      query,
+      profile,
+    );
   }
 
   static bool _isKnownCanonCharacterSearchObject(
@@ -3955,6 +3903,13 @@ ${location.name}：数据源 Open-Meteo；天气数据时间 $currentTime；当�
     _WebProfile? profile,
   }) async {
     try {
+      if ((_activeTrace?.searchApiCalls ?? 0) >=
+          _maxDoubaoSearchApiCallsPerTurn) {
+        _logSearchVerbose(
+          '豆包搜索请求被本地预算门禁拦截: query=${_truncateDoubaoQuery(query)}',
+        );
+        return const [];
+      }
       final body = <String, dynamic>{
         'Query': _truncateDoubaoQuery(query),
         'SearchType': 'web',
@@ -4384,6 +4339,7 @@ ${location.name}：数据源 Open-Meteo；天气数据时间 $currentTime；当�
     required List<_DoubaoSearchItem> items,
     required int factLimit,
     required int minimumFactTarget,
+    int minimumSourceTarget = 1,
     required bool preferEvidenceText,
     required String answerMode,
     required List<_AnswerRequirement> answerRequirements,
@@ -4415,6 +4371,7 @@ ${location.name}：数据源 Open-Meteo；天气数据时间 $currentTime；当�
             category,
             factLimit: factLimit,
             minimumFactTarget: minimumFactTarget,
+            minimumSourceTarget: minimumSourceTarget,
             answerMode: answerMode,
             answerRequirements: answerRequirements,
           ),
@@ -4433,7 +4390,7 @@ ${answerRequirements.asMap().entries.map((entry) {
             return '${entry.key}. ${entry.value.text}（$cues）';
           }).join('\n')}
 
-本轮最低有效事实目标：$minimumFactTarget 条。只有原文确实不足时才可以少于这个数量并返回 partial；不得用旁支信息凑数。
+本轮最低有效事实目标：$minimumFactTarget 条。${minimumSourceTarget > 1 ? '如果输入中有多个相关网页，事实应尽量覆盖至少 $minimumSourceTarget 个不同网页来源；每条 fact 应是自然可回答的信息块，不要为了凑数量把同一句话或紧密相连的同一原因拆成多个碎片。' : ''}只有原文确实不足时才可以少于这个数量并返回 partial；不得用旁支信息凑数。
 
 ${candidateRecoveryPass ? '这是同一批直达正文的唯一一次复核。首次抽取没有返回事实，请重新通读全文；如果没有直接频率、偏好或评价结论，但正文列出了真实候选、使用记录、特征或效果，必须按 bounded_candidates 输出，不能仅因缺少直接结论再次判 insufficient。' : ''}
 
@@ -4482,6 +4439,7 @@ $rawResults
         extraction,
         userText: userText,
         items: items,
+        category: category,
         preferEvidenceText: preferEvidenceText,
         factLimit: factLimit,
         answerMode: answerMode,
@@ -4499,6 +4457,19 @@ $rawResults
           '${_formatDoubaoFactsCompactForLog(augmented.facts.skip(validated.facts.length).toList())}',
         );
       }
+      final mediaAugmented = _augmentMediaIdentityFactsFromSearchResults(
+        augmented,
+        userText: userText,
+        items: items,
+        provider: '${chatResult.provider}+本地书影音事实补充',
+        factLimit: factLimit,
+      );
+      if (mediaAugmented.facts.length > augmented.facts.length) {
+        _logSearchVerbose(
+          '本地书影音事实补充: '
+          '${_formatDoubaoFactsCompactForLog(mediaAugmented.facts.skip(augmented.facts.length).toList())}',
+        );
+      }
       if (validated.facts.isEmpty &&
           category == 'canon' &&
           _queryAsksMusicInfo(userText)) {
@@ -4509,11 +4480,148 @@ $rawResults
         );
         if (fallback.facts.isNotEmpty) return fallback;
       }
-      return augmented;
+      return mediaAugmented;
     } catch (e) {
       debugPrint('豆包事实提取异常: $e');
       return const _DoubaoFactExtraction.empty();
     }
+  }
+
+  static _DoubaoFactExtraction _augmentMediaIdentityFactsFromSearchResults(
+    _DoubaoFactExtraction extraction, {
+    required String userText,
+    required List<_DoubaoSearchItem> items,
+    required String provider,
+    required int factLimit,
+  }) {
+    if (!_queryAsksMediaOrEntertainment(userText) ||
+        extraction.facts.length >= 3 ||
+        items.isEmpty) {
+      return extraction;
+    }
+
+    final queryTerms = _mediaQueryAnchorTerms(userText);
+    if (queryTerms.isEmpty) return extraction;
+    final merged = [...extraction.facts];
+
+    void addFact(_DoubaoSearchItem item, String fragment) {
+      final cleaned = fragment.replaceAll(RegExp(r'\s+'), ' ').trim();
+      if (cleaned.length < 12) return;
+      if (_isNoisyRawFragment(cleaned)) return;
+      final candidate = _DoubaoGroundedFact(
+        text: cleaned,
+        sourceTitle: item.title,
+        sourceUrl: item.url,
+        sourceExcerpt: cleaned,
+        requirementIndexes: const [0],
+        answerBasis: _answerBasisExplicitFact,
+        directAnswerExcerpt: cleaned,
+        isStrongEvidence: true,
+      );
+      if (_shouldFilterProductionMetaFact(
+        candidate,
+        category: 'general',
+        userText: userText,
+      )) {
+        return;
+      }
+      if (!_mediaFragmentMatchesQuestion(cleaned, queryTerms)) return;
+      _addUniqueDoubaoFacts(merged, [candidate], maxFacts: factLimit);
+    }
+
+    for (final item in items.take(_doubaoFactMaxResults)) {
+      if (merged.length >= 3) break;
+      if (_isUnwantedSearchResultUrl(item.url)) continue;
+      final sourceText = _allSearchResultTextForFact(item)
+          .replaceAll(RegExp(r'\s+'), ' ')
+          .trim();
+      if (sourceText.isEmpty) continue;
+      for (final fragment in _rawContentFragments(sourceText)) {
+        if (merged.length >= 3) break;
+        if (!_looksLikeMediaIdentityFragment(fragment)) continue;
+        addFact(item, fragment);
+      }
+    }
+
+    if (merged.length == extraction.facts.length) return extraction;
+    return _DoubaoFactExtraction(
+      status: merged.length >= 3 ? 'ok' : extraction.status,
+      facts: merged.take(factLimit).toList(growable: false),
+      discardReason: extraction.discardReason,
+      provider: provider,
+      answerBasis: _answerBasisForFacts(
+        merged,
+        fallback: extraction.answerBasis,
+      ),
+    );
+  }
+
+  static List<String> _mediaQueryAnchorTerms(String userText) {
+    const stopWords = {
+      '最近',
+      '喜欢',
+      '很喜欢',
+      '姐姐',
+      '应该',
+      '不太',
+      '了解',
+      '什么',
+      '番剧',
+      '动画',
+      '漫画',
+      '电影',
+      '电视剧',
+      '作品',
+      '歌曲',
+      '乐队',
+    };
+    final terms = <String>[];
+    void addTerm(String value) {
+      var term = value
+          .replaceAll(RegExp(r'^(?:我|最近|很|好|超|特别|挺|也|在)+'), '')
+          .replaceAll(RegExp(r'^(?:喜欢看|喜欢听|喜欢|爱看|爱听|看|追|听)+'), '')
+          .replaceAll(RegExp(r'(?:的)?(?:番|番剧|动画|漫画|电影|电视剧|剧|歌|歌曲|曲子|作品)$'), '')
+          .replaceFirst(RegExp(r'的$'), '')
+          .trim();
+      if (term.length < 2 || stopWords.contains(term)) return;
+      if (!terms.contains(term)) terms.add(term);
+    }
+
+    for (final match in RegExp(
+      r'(?:喜欢看|喜欢听|爱看|爱听|最近在看|最近在听|看|追|听)([A-Za-z0-9!☆★∞_+\-\u4e00-\u9fff]{2,18})(?:的)?(?:番|番剧|动画|漫画|电影|电视剧|剧|歌|歌曲|曲子|作品)?',
+      caseSensitive: false,
+    ).allMatches(userText)) {
+      addTerm(match.group(1) ?? '');
+    }
+    for (final match in RegExp(
+      r'([A-Za-z0-9!☆★∞_+\-\u4e00-\u9fff]{2,18})的(?:番|番剧|动画|漫画|电影|电视剧|剧|歌|歌曲|曲子|作品)',
+      caseSensitive: false,
+    ).allMatches(userText)) {
+      addTerm(match.group(1) ?? '');
+    }
+
+    for (final match in RegExp(r'[A-Za-z0-9!☆★∞_+-]{2,}|[\u4e00-\u9fff]{2,}')
+        .allMatches(userText)) {
+      addTerm(match.group(0) ?? '');
+    }
+    return terms.toSet().toList(growable: false);
+  }
+
+  static bool _looksLikeMediaIdentityFragment(String fragment) {
+    return RegExp(
+      r'TV动画|动画|番剧|漫画|电影|电视剧|剧集|作品|歌曲|乐队|バンド|团体|组合|成员|主角|题材|改编|讲述|围绕|构建',
+      caseSensitive: false,
+    ).hasMatch(fragment);
+  }
+
+  static bool _mediaFragmentMatchesQuestion(
+    String fragment,
+    List<String> queryTerms,
+  ) {
+    final normalized = _looseEvidenceKey(fragment).toLowerCase();
+    return queryTerms.any(
+      (term) => normalized.contains(_looseEvidenceKey(term).toLowerCase()),
+    );
   }
 
   static _DoubaoFactExtraction _augmentPreferenceFactsFromSearchResults(
@@ -4589,6 +4697,7 @@ $rawResults
     _DoubaoFactExtraction extraction, {
     required String userText,
     required List<_DoubaoSearchItem> items,
+    required String category,
     required bool preferEvidenceText,
     required int factLimit,
     required String answerMode,
@@ -4623,6 +4732,10 @@ $rawResults
             ? chronologyScope
             : '',
       );
+      sanitizedFact = _reattachEvidenceExcerptIfPossible(
+        sanitizedFact,
+        items,
+      );
       if (sanitizedFact.answerBasis == _answerBasisExplicitFact &&
           sanitizedFact.directAnswerExcerpt.isNotEmpty) {
         final sourceText = _sourceTextForFact(sanitizedFact, items);
@@ -4643,6 +4756,12 @@ $rawResults
         requireExcerpt: requireEvidence,
       )) {
         droppedEvidenceFacts.add(sourcedFact);
+      } else if (_shouldFilterProductionMetaFact(
+        sanitizedFact,
+        category: category,
+        userText: userText,
+      )) {
+        droppedBloatedProfileFacts.add(sourcedFact);
       } else if (_queryAsksProfileTraits(userText) &&
           _isBloatedProfileBoxFact(sanitizedFact)) {
         droppedBloatedProfileFacts.add(sourcedFact);
@@ -4669,7 +4788,7 @@ $rawResults
     }
     if (droppedBloatedProfileFacts.isNotEmpty) {
       debugPrint(
-        '豆包事实后校验丢弃资料框大杂烩事实: '
+        '豆包事实后校验丢弃资料框大杂烩/制作信息事实: '
         '${_formatDoubaoFactsCompactForLog(droppedBloatedProfileFacts)}',
       );
     }
@@ -4903,9 +5022,20 @@ $rawResults
       final urlMatches = fact.sourceUrl.isNotEmpty &&
           item.url.isNotEmpty &&
           fact.sourceUrl == item.url;
-      if (titleMatches || urlMatches) return item.bestText;
+      if (titleMatches || urlMatches) return _allSearchResultTextForFact(item);
     }
-    return items.map((item) => item.bestText).join(' ');
+    return items.map(_allSearchResultTextForFact).join(' ');
+  }
+
+  static String _allSearchResultTextForFact(_DoubaoSearchItem item) {
+    return [
+      item.title,
+      item.snippet,
+      item.summary,
+      item.content,
+      item.publishTime,
+      item.url,
+    ].where((part) => part.trim().isNotEmpty).join(' ');
   }
 
   static bool _isBloatedProfileBoxFact(_DoubaoGroundedFact fact) {
@@ -4931,6 +5061,125 @@ $rawResults
     final compactText = text.replaceAll(RegExp(r'\s+'), '');
     final aliases = _sourceSubjectAliases(subject);
     return aliases.any((alias) => compactText.contains(alias));
+  }
+
+  static bool _shouldFilterProductionMetaFact(
+    _DoubaoGroundedFact fact, {
+    required String category,
+    required String userText,
+  }) {
+    final text = fact.text.replaceAll(RegExp(r'\s+'), ' ').trim();
+    if (text.isEmpty) return false;
+    if (category != 'canon' && !_queryAsksMediaOrEntertainment(userText)) {
+      return false;
+    }
+    if (_mediaSourceLooksNoisy(fact)) return true;
+
+    // 书影音/番剧问题可以保留“这是哪部作品、主角/成员/题材”这类识别事实；
+    // 但制作团队、职务、厂牌、发行商品等现实制作流水账仍然不进入角色回答边界。
+    final productionStaffOrBusiness = RegExp(
+      r'导演|監督|编剧|脚本|系列构成|制作团队|制作组|制作委员会|制作人员|'
+      r'由[^，。；;]{1,40}制作|动画制作|游戏制作|公司|出版社|唱片|厂牌|'
+      r'声优|聲優|配音|演员|作词|作詞|作曲|编曲|編曲|'
+      r'访谈|訪談|采访|活动|演唱会|特典|商品|周边|销量|榜单|排行|'
+      r'PV|视觉图|片头影像|片尾影像|首播|连播|播出|上映|发售|发行|发布|公开|宣传|'
+      r'\bwritten by\b|\blyricist\b|\bcomposer\b|\barranger\b|\bproducer\b|'
+      r'\blabel\b|\bcredits?\b|\bpersonnel\b|\bcharts?\b',
+      caseSensitive: false,
+    );
+    if (productionStaffOrBusiness.hasMatch(text)) return true;
+
+    if (category == 'canon' && _looksLikeProductionMetaFact(text)) {
+      return true;
+    }
+    return false;
+  }
+
+  static _DoubaoGroundedFact _reattachEvidenceExcerptIfPossible(
+    _DoubaoGroundedFact fact,
+    List<_DoubaoSearchItem> items,
+  ) {
+    if (_sourceExcerptIsSupported(fact, items, requireExcerpt: true)) {
+      return fact;
+    }
+    final fragment = _bestEvidenceFragmentForFact(fact, items);
+    if (fragment == null) return fact;
+    return fact.copyWith(
+      sourceExcerpt: fragment,
+      directAnswerExcerpt:
+          fact.answerBasis == _answerBasisExplicitFact ? fragment : '',
+    );
+  }
+
+  static String? _bestEvidenceFragmentForFact(
+    _DoubaoGroundedFact fact,
+    List<_DoubaoSearchItem> items,
+  ) {
+    final terms = _factEvidenceTerms(fact.text);
+    if (terms.length < 2) return null;
+    String? best;
+    var bestScore = 0;
+    for (final item in items.take(_doubaoFactMaxResults)) {
+      final sourceText = _allSearchResultTextForFact(item)
+          .replaceAll(RegExp(r'\s+'), ' ')
+          .trim();
+      if (sourceText.isEmpty) continue;
+      for (final fragment in _rawContentFragments(sourceText)) {
+        final normalized = _looseEvidenceKey(fragment).toLowerCase();
+        final score = terms.where((term) => normalized.contains(term)).length;
+        if (score > bestScore) {
+          bestScore = score;
+          best = fragment.replaceAll(RegExp(r'\s+'), ' ').trim();
+        }
+      }
+    }
+    return bestScore >= 2 ? best : null;
+  }
+
+  static List<String> _factEvidenceTerms(String text) {
+    const stopWords = {
+      '相关',
+      '内容',
+      '信息',
+      '旗下',
+      '主角',
+      '动画',
+      '番剧',
+      '作品',
+      '企划',
+      '少女',
+      '乐团',
+      '电视',
+    };
+    final terms = <String>[];
+    for (final match in RegExp(r'[A-Za-z0-9!☆★∞_+-]{2,}|[\u4e00-\u9fff]{2,}')
+        .allMatches(text)) {
+      final raw = (match.group(0) ?? '').trim();
+      if (raw.isEmpty) continue;
+      final normalized = _looseEvidenceKey(raw).toLowerCase();
+      if (normalized.length < 2 || stopWords.contains(normalized)) continue;
+      terms.add(normalized);
+    }
+    return terms.toSet().toList(growable: false);
+  }
+
+  static bool _mediaSourceLooksNoisy(_DoubaoGroundedFact fact) {
+    final source = '${fact.sourceTitle} ${fact.sourceUrl}'
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .toLowerCase();
+    return RegExp(
+      r'bilibili\.com|acfun\.cn|douyin\.com|youtube\.com|youtu\.be|'
+      r'wenku\.|csdn\.net|/video/|视频|剪辑|吐槽|杂谈|补番推荐|点个关注|入驻',
+      caseSensitive: false,
+    ).hasMatch(source);
+  }
+
+  static bool _queryAsksMediaOrEntertainment(String userText) {
+    return RegExp(
+      r'书影音|番剧|新番|老番|动画|漫画|电影|电视剧|剧集|剧版|歌曲|曲子|音乐|乐队|作品|角色|剧情|设定|追番|补番|'
+      r'(?:看|追|补|刷)[^，。！？,.!?]{0,12}番',
+      caseSensitive: false,
+    ).hasMatch(userText);
   }
 
   static bool _hasPreferenceSignal(String text) {
@@ -5384,34 +5633,32 @@ $rawResults
     List<Map<String, String>> messages, {
     int? maxTokens,
   }) async {
+    final runState = _activeRunState;
+    if (runState?.factExtractorUnavailable == true) return null;
+
     final arkApiKey = _doubaoTextApiKey;
     final arkEndpoint = _doubaoTextEndpoint;
 
-    if (arkApiKey.isNotEmpty && arkEndpoint.isNotEmpty) {
-      final response = await _postChatCompletions(
-        baseUrl: _arkChatBaseUrl,
-        apiKey: arkApiKey,
-        model: arkEndpoint,
-        messages: messages,
-        providerName: '豆包/火山方舟事实抽取',
-        includeThinkingField: false,
-        maxTokens: maxTokens ?? 1200,
-      );
-      if (response != null) return response;
-      _logSearch('豆包/火山方舟事实抽取不可用，退回现有 DeepSeek 接口');
-    } else {
-      _logSearch('豆包/火山方舟文本模型未配置，退回现有 DeepSeek 接口');
+    if (arkApiKey.isEmpty || arkEndpoint.isEmpty) {
+      if (runState != null) runState.factExtractorUnavailable = true;
+      _logSearch('豆包/火山方舟事实抽取未配置，本轮停止事实抽取，不切换其他模型');
+      return null;
     }
 
-    return _postChatCompletions(
-      baseUrl: _deepSeekBaseUrl,
-      apiKey: _deepSeekApiKey,
-      model: _deepSeekModel,
+    final response = await _postChatCompletions(
+      baseUrl: _arkChatBaseUrl,
+      apiKey: arkApiKey,
+      model: arkEndpoint,
       messages: messages,
-      providerName: 'DeepSeek 事实抽取兜底',
-      includeThinkingField: true,
+      providerName: '豆包/火山方舟事实抽取',
+      includeThinkingField: false,
       maxTokens: maxTokens ?? 1200,
     );
+    if (response != null) return response;
+
+    if (runState != null) runState.factExtractorUnavailable = true;
+    _logSearch('豆包/火山方舟事实抽取不可用，本轮停止事实抽取，不切换其他模型');
+    return null;
   }
 
   static Future<_FactExtractorChatResult?> _postChatCompletions({
@@ -5489,6 +5736,7 @@ $rawResults
     String category, {
     required int factLimit,
     required int minimumFactTarget,
+    required int minimumSourceTarget,
     required String answerMode,
     required List<_AnswerRequirement> answerRequirements,
   }) {
@@ -5507,6 +5755,14 @@ $rawResults
 只有所有候选都与用户问题无关，或只剩三次元制作信息/UI 噪声时，才输出 status="insufficient"。
 '''
         : '';
+    final mediaRule = category != 'canon'
+        ? '''
+如果用户问书影音、番剧、动画、漫画、电影、电视剧、歌曲、乐队或作品感想：
+- 可以抽取作品/条目本身的识别事实，例如正式标题、它属于哪类作品、围绕哪个对象、主要角色/成员、题材或用户理解该话题所需的简短背景。
+- 不要抽取制作人员、制作公司、导演/监督、编剧/系列构成、声优、发行厂牌、特典、活动、榜单、商业运营等现实制作流水账，除非用户明确问这些现实制作信息。
+- 如果同一句原文同时包含“作品是什么”和“制作/播出/发行信息”，优先截取能支持作品识别的最小连续片段；不要把制作人员表一起塞进 source_excerpt。
+'''
+        : '';
     final requirementCount = answerRequirements.length;
     const answerModeRule = '''
 【检索后判级】
@@ -5520,6 +5776,7 @@ $rawResults
 你是搜索结果事实提取器，不是聊天角色。
 只能使用给定搜索结果，不得补充模型记忆。
 $canonRule
+$mediaRule
 $answerModeRule
 本轮共有 $requirementCount 个独立问项。每条 fact 必须通过 requirement_indexes 标明它支持哪些问项。
 当前角色联网范围：
@@ -5572,7 +5829,7 @@ $nameGlossary
 8a. 每条 fact 都必须提供 source_excerpt。source_excerpt 必须是搜索结果中的连续原文片段，直接支持 text 里的动作主体、动作对象、时间顺序和因果关系；不要用“……”拼接不连续原文。如果找不到能直接支持的连续原文片段，就不要输出这条 fact。
 8aa. source_excerpt 和 direct_answer_excerpt 也必须遵守三次元信息过滤。若作品内事实后面紧跟制作、企划、宣传、官方玩梗或现实活动等附加分句，只截取前面能支持 fact 的最小连续作品内原文，不要把后面的三次元分句一并带入证据。
 8b. 改写 text 时不得调换主语和宾语，不得把 A 对 B 做的事改成 B 对 A 做的事，不得把“被动/接受帮助”的角色改成“主动帮助”的角色。关系和经历类事实如果容易误改，优先让 text 贴近 source_excerpt 的原句结构。
-8c. 每条 fact 只写一个清晰动作节点或事实点；如果原文一句话同时包含发现、救助、交给后续人员、击败敌人、救出他人等多个动作，必须拆成多条 facts，不要合并成一条。
+8c. 对剧情经过、任务、战斗、救援、支援、恢复、解决类问题，每条 fact 写一个清晰动作节点或事实点；如果原文一句话同时包含发现、救助、交给后续人员、击败敌人、救出他人等多个动作，可以拆成多条 facts。对时事、新闻、金融、行业趋势等普通现实问题，不要把同一句话或同一个紧密原因链拆成多个碎片 facts，应保留为自然的信息块。
 8d. 对同一事件过程或关系变化中的 facts，必须先通读全部输入，再按真实剧情顺序填写从 1 开始递增的 event_order；相同阶段可以相同。不得按搜索结果顺序、来源分组或重要程度编号。原文无法判断先后的 fact 不得猜测，event_order 填 0 且 event_order_evidence 为空。
 8e. event_order_evidence 只说明原文中的先后依据，例如明确时间词、前后动作衔接或同一叙事段落的位置；不得用模型外部记忆补顺序。
 9. 不要为了凑满 facts 输出旁支趣闻；如果用户只是在问名称、身份、地点、喜好等单点事实，只输出能直接回答这个点的事实和必要补充。
@@ -5593,7 +5850,7 @@ $nameGlossary
 16. 如果用户问题限定了某个时期、形成过程、组成阶段、当初、前后或期间，facts 必须优先围绕这个时间范围；明确属于更晚阶段、另一个篇章、另一次后续事件或回顾性补充的信息不要抽取，除非用户明确追问后续发展。
 17. 用户询问“经过、如何、怎么发生、怎么恢复、怎么解决、怎么支援、战斗过程”等事件经过时，不要用人物性格、身份、外貌等背景资料凑数；优先抽取与问题动作直接相关的触发、关键行动、使用手段、结果和后续反应。
 18. 如果同一条搜索结果围绕同一事件连续写到了起因、关键动作、胜负/成败结果、后续反应或情绪变化，必须尽量拆成多条 facts 覆盖完整链路，而不是只抽第一句。
-19. 本轮最低有效事实目标是 $minimumFactTarget 条。只要同一来源中存在多个相关命题，就必须将复合段落按主体、关系、原因、影响或结果拆成各自可由原文支持的原子 facts，优先接近 factLimit；只有原文确实不足时才能少于最低目标并返回 partial，不得用旁支信息凑数。
+19. 本轮最低有效事实目标是 $minimumFactTarget 条。${minimumSourceTarget > 1 ? '同时尽量覆盖至少 $minimumSourceTarget 个不同网页来源；优先从不同来源各抽取自然信息块，不要在同一来源里把连续一句或同一原因链拆成多个原子 facts。' : '同一来源中存在多个彼此独立的相关命题时，可以拆成多条 facts；如果只是同一句里的紧密补充关系，保留为一个自然信息块。'}只有原文确实不足时才能少于最低目标并返回 partial，不得用旁支信息凑数。
 20. 对战斗、任务、救援、恢复、解决类经过，若原文写到了使用的招式/手段、击败/救助/成败结果、相关人物生还或情绪变化，这些都属于经过本身，必须优先抽取。
 20b. 用户问“如何支援/救援/协助/处理”时，facts 必须围绕这个动作目标：出发/介入、发现对象、使用手段、交给后续人员、解决敌人、救出对象可以拆成独立 facts；不要用后续审判、与被支援一方的旁支冲突、结局补充来凑数量。
 21. 每条 fact 的 people 字段必须列出 text 中出现的具体人物；不要列团体、学校、乐队、组织或地点。
@@ -5607,21 +5864,72 @@ $nameGlossary
   }
 
   static const int _complexCanonFactTarget = 6;
+  static const int _ordinaryFactTarget = 3;
+  static const int _currentAffairsFactTarget = 5;
+  static const int _ordinarySourceTarget = 1;
+  static const int _currentAffairsSourceTarget = 3;
+
+  static int _minimumDoubaoFactTarget({
+    required String category,
+    required _WebProfile profile,
+    required String userText,
+    required bool needsBroadFactCoverage,
+    required bool eventProcessSearch,
+  }) {
+    if (needsBroadFactCoverage || eventProcessSearch) {
+      return _complexCanonFactTarget;
+    }
+    if (_needsCurrentAffairsFactCoverage(category, profile, userText)) {
+      return _currentAffairsFactTarget;
+    }
+    return _ordinaryFactTarget;
+  }
+
+  static int _minimumDoubaoSourceTarget({
+    required String category,
+    required _WebProfile profile,
+    required String userText,
+  }) {
+    if (_needsCurrentAffairsFactCoverage(category, profile, userText)) {
+      return _currentAffairsSourceTarget;
+    }
+    return _ordinarySourceTarget;
+  }
+
+  static bool _needsCurrentAffairsFactCoverage(
+    String category,
+    _WebProfile profile,
+    String userText,
+  ) {
+    if (category == 'economy' || category == 'current') return true;
+    if (category != 'general') return false;
+    if (!_requiresAuthoritativeDoubaoSearch(category, profile)) return false;
+    if (_queryAsksMediaOrEntertainment(userText)) return false;
+    return _textLooksLikeCurrentAffairsQuestion(userText);
+  }
+
+  static bool _textLooksLikeCurrentAffairsQuestion(String userText) {
+    if (_queryAsksMediaOrEntertainment(userText)) return false;
+    return RegExp(
+      r'新闻|时事|热点|政策|金融|财经|经济|市场|行业|趋势|前景|展望|元年|'
+      r'今年|当前|近期|最近|怎么看|如何看待',
+    ).hasMatch(userText);
+  }
 
   static bool _hasEnoughDoubaoFactsForSearchStop(
     List<_DoubaoGroundedFact> facts, {
     required int factLimit,
-    required bool needsBroadFactCoverage,
-    required bool eventProcessSearch,
+    required int minimumFactTarget,
+    required int minimumSourceTarget,
     required String extractionStatus,
     required List<_AnswerRequirement> answerRequirements,
   }) {
     if (facts.isEmpty) return false;
-    final usableFacts = facts.take(factLimit).toList(growable: false);
-    final minimumFacts = needsBroadFactCoverage || eventProcessSearch
-        ? _complexCanonFactTarget
-        : 2;
-    if (usableFacts.length < minimumFacts) return false;
+    final usableFacts = _selectDoubaoFactsForOutput(facts, factLimit);
+    if (usableFacts.length < minimumFactTarget) return false;
+    if (_uniqueDoubaoFactSourceCount(usableFacts) < minimumSourceTarget) {
+      return false;
+    }
 
     if (answerRequirements.isEmpty) {
       return extractionStatus == 'ok';
@@ -5674,7 +5982,69 @@ $nameGlossary
     final text = userText.replaceAll(RegExp(r'\s+'), '');
     if (text.isEmpty) return false;
     if (_needsBroadCanonFactCoverage(text)) return false;
+    if (_queryAsksMusicInfo(text)) return false;
     return RegExp(r'经过|过程|如何|怎么|怎样|支援|救援|恢复|解决|战斗|出任务|处理').hasMatch(text);
+  }
+
+  @visibleForTesting
+  static bool isEventProcessCanonQuestionForTest(String userText) =>
+      _isEventProcessCanonQuestion(userText);
+
+  @visibleForTesting
+  static bool isDoubaoSearchBudgetAvailableForTest(int completedCalls) =>
+      completedCalls < _maxDoubaoSearchApiCallsPerTurn;
+
+  @visibleForTesting
+  static bool textLooksLikeCurrentAffairsQuestionForTest(String userText) =>
+      _textLooksLikeCurrentAffairsQuestion(userText);
+
+  @visibleForTesting
+  static bool doubaoFactsMeetStopConditionForTest({
+    required List<Map<String, String>> facts,
+    required int factLimit,
+    required int minimumFactTarget,
+    required int minimumSourceTarget,
+    String extractionStatus = 'ok',
+  }) {
+    return _hasEnoughDoubaoFactsForSearchStop(
+      [
+        for (final fact in facts)
+          _DoubaoGroundedFact(
+            text: fact['text'] ?? '',
+            sourceTitle: fact['sourceTitle'] ?? '',
+            sourceUrl: fact['sourceUrl'] ?? '',
+            sourceExcerpt: fact['sourceExcerpt'] ?? '',
+          ),
+      ],
+      factLimit: factLimit,
+      minimumFactTarget: minimumFactTarget,
+      minimumSourceTarget: minimumSourceTarget,
+      extractionStatus: extractionStatus,
+      answerRequirements: const [],
+    );
+  }
+
+  @visibleForTesting
+  static List<String> doubaoCanonAttemptQueriesForTest({
+    required String userText,
+    required String characterId,
+    required String characterName,
+    required List<String> searchTargets,
+  }) {
+    final profile = _WebProfile.forCharacter(
+      characterId: characterId,
+      characterName: characterName,
+    );
+    return _doubaoSearchAttempts(
+      searchTargets.first,
+      originalQuery: searchTargets.join(' '),
+      userText: userText,
+      category: 'canon',
+      profile: profile,
+      searchTargets: searchTargets,
+    )
+        .map((attempt) => '${attempt.priority}:${attempt.query}')
+        .toList(growable: false);
   }
 
   static String _formatDoubaoRawResultsForModel(
@@ -5744,6 +6114,7 @@ URL：${item.url}
       0 => '最高优先级来源',
       1 => '补充来源',
       2 => '全网兜底',
+      3 => '开放搜索',
       _ => '搜索层',
     };
     final source = switch (label) {
@@ -5751,6 +6122,7 @@ URL：${item.url}
       'Global主站点' => '萌娘百科/主站点',
       'Custom次级站点补充' => '百度百科/维基/官方/资料站',
       'Global全网兜底' => '开放全网',
+      '开放全网' => '开放全网',
       '本地百度/维基补充' => '百度百科/维基直达解析',
       _ => label,
     };
@@ -5776,11 +6148,34 @@ URL：${item.url}
     List<_DoubaoGroundedFact> facts,
     int displayLimit,
   ) {
+    final effectiveFacts = _dedupeDoubaoFacts(facts);
     final safeDisplayLimit = displayLimit < 0 ? 0 : displayLimit;
-    final displayed =
-        facts.length < safeDisplayLimit ? facts.length : safeDisplayLimit;
-    if (facts.length <= displayed) return '抽取事实=${facts.length}';
-    return '抽取事实=${facts.length}，下方摘要展示最多=$displayed条/组';
+    final displayed = effectiveFacts.length < safeDisplayLimit
+        ? effectiveFacts.length
+        : safeDisplayLimit;
+    final sourceCount = _uniqueDoubaoFactSourceCount(effectiveFacts);
+    final sourceText = sourceCount > 0 ? '，来源页=$sourceCount' : '';
+    final rawText =
+        effectiveFacts.length == facts.length ? '' : '，原始=${facts.length}';
+    if (effectiveFacts.length <= displayed) {
+      return '有效事实=${effectiveFacts.length}$rawText$sourceText';
+    }
+    return '有效事实=${effectiveFacts.length}$rawText$sourceText，下方摘要展示最多=$displayed条/组';
+  }
+
+  static int _uniqueDoubaoFactSourceCount(List<_DoubaoGroundedFact> facts) {
+    final sources = <String>{};
+    for (final fact in facts) {
+      final key = _doubaoFactSourceKey(fact);
+      if (key.isNotEmpty) sources.add(key);
+    }
+    return sources.length;
+  }
+
+  static String _doubaoFactSourceKey(_DoubaoGroundedFact fact) {
+    final url = fact.sourceUrl.trim().toLowerCase();
+    if (url.isNotEmpty) return url;
+    return fact.sourceTitle.trim().toLowerCase();
   }
 
   static String _formatRequirementCoverageForLog(
@@ -5818,52 +6213,101 @@ URL：${item.url}
   static void _addUniqueDoubaoFacts(
       List<_DoubaoGroundedFact> target, List<_DoubaoGroundedFact> source,
       {required int maxFacts}) {
-    final indexesByText = <String, int>{};
+    final indexesByIdentity = <String, int>{};
+    final indexesByTextAndSource = <String, int>{};
     for (var i = 0; i < target.length; i++) {
-      final key = target[i].text.replaceAll(RegExp(r'\s+'), '').trim();
-      if (key.isNotEmpty) indexesByText[key] = i;
+      final identityKey = _doubaoFactIdentityKey(target[i]);
+      if (identityKey.isNotEmpty) indexesByIdentity[identityKey] = i;
+      final textAndSourceKey = _doubaoFactTextAndSourceKey(target[i]);
+      if (textAndSourceKey.isNotEmpty) {
+        indexesByTextAndSource[textAndSourceKey] = i;
+      }
     }
     for (final fact in source) {
       for (final expandedFact in _expandCompoundDoubaoFact(fact)) {
-        final key = expandedFact.text.replaceAll(RegExp(r'\s+'), '').trim();
-        if (key.isEmpty) continue;
-        final existingIndex = indexesByText[key];
+        final identityKey = _doubaoFactIdentityKey(expandedFact);
+        final textAndSourceKey = _doubaoFactTextAndSourceKey(expandedFact);
+        if (identityKey.isEmpty && textAndSourceKey.isEmpty) continue;
+        final existingIndex = indexesByIdentity[identityKey] ??
+            indexesByTextAndSource[textAndSourceKey];
         if (existingIndex != null) {
-          final existing = target[existingIndex];
-          final mergedIndexes = <int>{
-            ...existing.requirementIndexes,
-            ...expandedFact.requirementIndexes,
-          }.toList()
-            ..sort();
-          target[existingIndex] = existing.copyWith(
-            requirementIndexes: mergedIndexes,
-            answerBasis: existing.answerBasis == _answerBasisExplicitFact ||
-                    expandedFact.answerBasis == _answerBasisExplicitFact
-                ? _answerBasisExplicitFact
-                : existing.answerBasis == _answerBasisBoundedCandidates ||
-                        expandedFact.answerBasis ==
-                            _answerBasisBoundedCandidates
-                    ? _answerBasisBoundedCandidates
-                    : _answerBasisInsufficient,
-            isStrongEvidence:
-                existing.isStrongEvidence || expandedFact.isStrongEvidence,
-            eventOrder: existing.eventOrder > 0
-                ? existing.eventOrder
-                : expandedFact.eventOrder,
-            eventOrderEvidence: existing.eventOrderEvidence.isNotEmpty
-                ? existing.eventOrderEvidence
-                : expandedFact.eventOrderEvidence,
-            chronologyScope: existing.chronologyScope.isNotEmpty
-                ? existing.chronologyScope
-                : expandedFact.chronologyScope,
+          target[existingIndex] = _mergeDoubaoDuplicateFact(
+            target[existingIndex],
+            expandedFact,
           );
+          if (identityKey.isNotEmpty) {
+            indexesByIdentity[identityKey] = existingIndex;
+          }
+          if (textAndSourceKey.isNotEmpty) {
+            indexesByTextAndSource[textAndSourceKey] = existingIndex;
+          }
           continue;
         }
         target.add(expandedFact);
-        indexesByText[key] = target.length - 1;
+        if (identityKey.isNotEmpty) {
+          indexesByIdentity[identityKey] = target.length - 1;
+        }
+        if (textAndSourceKey.isNotEmpty) {
+          indexesByTextAndSource[textAndSourceKey] = target.length - 1;
+        }
         if (target.length >= maxFacts) return;
       }
     }
+  }
+
+  static List<_DoubaoGroundedFact> _dedupeDoubaoFacts(
+    List<_DoubaoGroundedFact> facts,
+  ) {
+    final result = <_DoubaoGroundedFact>[];
+    _addUniqueDoubaoFacts(result, facts, maxFacts: facts.length);
+    return result;
+  }
+
+  static String _doubaoFactIdentityKey(_DoubaoGroundedFact fact) {
+    final textKey = _normalizeForDedupe(fact.text);
+    final evidence =
+        fact.sourceExcerpt.trim().isNotEmpty ? fact.sourceExcerpt : fact.text;
+    final evidenceKey = _normalizeForDedupe(evidence);
+    if (textKey.isEmpty || evidenceKey.isEmpty) return '';
+    final sourceKey = _normalizeForDedupe(_doubaoFactSourceKey(fact));
+    return '$sourceKey::$textKey::$evidenceKey';
+  }
+
+  static String _doubaoFactTextAndSourceKey(_DoubaoGroundedFact fact) {
+    final textKey = _normalizeForDedupe(fact.text);
+    if (textKey.isEmpty) return '';
+    final sourceKey = _normalizeForDedupe(_doubaoFactSourceKey(fact));
+    return '$sourceKey::$textKey';
+  }
+
+  static _DoubaoGroundedFact _mergeDoubaoDuplicateFact(
+    _DoubaoGroundedFact existing,
+    _DoubaoGroundedFact duplicate,
+  ) {
+    final mergedIndexes = <int>{
+      ...existing.requirementIndexes,
+      ...duplicate.requirementIndexes,
+    }.toList()
+      ..sort();
+    return existing.copyWith(
+      requirementIndexes: mergedIndexes,
+      answerBasis: existing.answerBasis == _answerBasisExplicitFact ||
+              duplicate.answerBasis == _answerBasisExplicitFact
+          ? _answerBasisExplicitFact
+          : existing.answerBasis == _answerBasisBoundedCandidates ||
+                  duplicate.answerBasis == _answerBasisBoundedCandidates
+              ? _answerBasisBoundedCandidates
+              : _answerBasisInsufficient,
+      isStrongEvidence: existing.isStrongEvidence || duplicate.isStrongEvidence,
+      eventOrder:
+          existing.eventOrder > 0 ? existing.eventOrder : duplicate.eventOrder,
+      eventOrderEvidence: existing.eventOrderEvidence.isNotEmpty
+          ? existing.eventOrderEvidence
+          : duplicate.eventOrderEvidence,
+      chronologyScope: existing.chronologyScope.isNotEmpty
+          ? existing.chronologyScope
+          : duplicate.chronologyScope,
+    );
   }
 
   static List<_DoubaoGroundedFact> _expandCompoundDoubaoFact(
@@ -5983,13 +6427,13 @@ URL：${item.url}
     final factLines = <String>[];
     for (var i = 0; i < facts.length; i++) {
       final excerpt = facts[i].sourceExcerpt.trim();
+      final authoritativeText = excerpt.isNotEmpty ? excerpt : facts[i].text;
       final chronologyHint = facts[i].eventOrder > 0
           ? '\n   本批剧情顺序：${facts[i].eventOrder}'
               '（依据：${facts[i].eventOrderEvidence}）'
           : '';
       factLines.add(
-        '${i + 1}. ${facts[i].text}'
-        '${excerpt.isEmpty ? '' : '\n   原文证据：$excerpt'}'
+        '${i + 1}. $authoritativeText'
         '$chronologyHint',
       );
     }
@@ -5999,9 +6443,9 @@ URL：${item.url}
         'role': 'system',
         'content': '''
 你是事实时间线整理器，不是聊天角色。
-只能使用给定 facts，不能补充外部记忆。
+只能使用给定的网页原文证据，不能补充外部记忆。上游模型生成的事实概括没有提供给你，也不得自行猜测概括中可能存在的内容。
 任务是帮后续角色回复模型避免把不连续事件直接拼接、避免调换主客体、避免省略关键地点或台词。
-注意：facts 的输入顺序是搜索/抽取顺序，不一定是剧情时间顺序；必须根据 facts 内部的时间词、因果词、地点、人物动作和原文证据重新排列。
+注意：原文证据的输入顺序是搜索/抽取顺序，不一定是剧情时间顺序；必须根据原文内部的时间词、因果词、地点和人物动作重新排列。
 如果 fact 带有“本批剧情顺序”，同一批资料内必须严格按该编号从小到大排列；不得自行颠倒。不同批资料的编号不能直接互相比较，只能结合各自原文判断。
 $timelineFocusInstruction
 请输出 JSON 对象，不要 markdown，不要解释。
@@ -6058,88 +6502,294 @@ ${factLines.join('\n')}
       final decoded = jsonDecode(utf8.decode(response.response.bodyBytes));
       final content = decoded['choices']?[0]?['message']?['content'] as String?;
       if (content == null || content.trim().isEmpty) return null;
-      final jsonText = _extractJsonObject(content);
-      if (jsonText == null) return null;
-      final data = jsonDecode(jsonText);
-      if (data is! Map) return null;
-
-      final timeline = <_DoubaoTimelineNode>[];
-      final seenTimelineText = <String>{};
-      final rawTimeline = data['timeline'];
-      if (rawTimeline is List) {
-        for (final rawEntry in rawTimeline) {
-          if (rawEntry is! Map) continue;
-          final text = ApiService.normalizeKnownNamesForChineseText(
-            _dynamicMapString(rawEntry, 'text'),
-          ).trim();
-          final factIndexes = _jsonIntList(
-            rawEntry['fact_indexes'],
-            maxExclusive: facts.length + 1,
-          ).where((index) => index > 0).toList(growable: false);
-          if (text.isEmpty || factIndexes.isEmpty) continue;
-          if (!_timelineNodeIsGrounded(
-            text,
-            factIndexes: factIndexes,
-            facts: facts,
-          )) {
-            debugPrint(
-              '豆包时间线节点未通过事实引用校验，已丢弃: '
-              '${_shortenRunes(text, 90)}',
-            );
-            continue;
-          }
-          final key = _looseEvidenceKey(text);
-          if (key.isEmpty || !seenTimelineText.add(key)) continue;
-          timeline.add(_DoubaoTimelineNode(
-            text: text,
-            factIndexes: factIndexes,
-          ));
-          if (timeline.length >= 8) break;
-        }
-      }
-      final constraints = _dynamicStringList(data['constraints'])
-          .map(ApiService.normalizeKnownNamesForChineseText)
-          .where((line) => line.trim().isNotEmpty)
-          .take(3)
-          .toList();
-      if (timeline.isEmpty) return null;
-      if (!_timelineOrderIsValid(timeline, facts)) {
-        debugPrint('豆包时间线未通过剧情顺序校验，拒绝采用整条时间线');
-        return null;
-      }
-      final result = _DoubaoTimeline(
-        nodes: timeline,
-        constraints: constraints,
-      );
-      debugPrint(
-        '豆包时间线整理结果: '
-        'timeline=${timeline.length}, constraints=${constraints.length}; '
-        '${timeline.isEmpty ? '' : _shortenRunes(timeline.first.text, 90)}',
-      );
-      return result;
+      final timeline = _parseDoubaoTimelineContent(content, facts: facts);
+      if (timeline == null) return null;
+      return timeline;
     } catch (e) {
       debugPrint('豆包时间线整理解析失败: $e');
       return null;
     }
   }
 
+  static _DoubaoTimeline? _parseDoubaoTimelineContent(
+    String content, {
+    required List<_DoubaoGroundedFact> facts,
+  }) {
+    final jsonText = _extractJsonObject(content);
+    if (jsonText != null) {
+      try {
+        final decoded = jsonDecode(jsonText);
+        if (decoded is Map<String, dynamic>) {
+          final strictTimeline = _parseDoubaoTimelineFromDecodedJson(
+            decoded,
+            facts: facts,
+          );
+          if (strictTimeline != null) return strictTimeline;
+        }
+      } catch (_) {
+        final lenientTimeline = _parseDoubaoTimelineLenient(
+          content,
+          facts: facts,
+        );
+        if (lenientTimeline != null) {
+          debugPrint(
+            '豆包时间线 JSON 不完整，已宽松恢复: '
+            'timeline=${lenientTimeline.nodes.length}',
+          );
+        }
+        return lenientTimeline;
+      }
+    }
+    return _parseDoubaoTimelineLenient(content, facts: facts);
+  }
+
+  static _DoubaoTimeline? _parseDoubaoTimelineFromDecodedJson(
+    Map<String, dynamic> decoded, {
+    required List<_DoubaoGroundedFact> facts,
+  }) {
+    final timeline = <_DoubaoTimelineNode>[];
+    final seenTimelineText = <String>{};
+    final rawTimeline = decoded['timeline'];
+    if (rawTimeline is List) {
+      for (final rawEntry in rawTimeline) {
+        if (rawEntry is! Map) continue;
+        final text = ApiService.normalizeKnownNamesForChineseText(
+          _dynamicMapString(rawEntry, 'text'),
+        ).trim();
+        final factIndexes = _jsonIntList(
+          rawEntry['fact_indexes'],
+          maxExclusive: facts.length + 1,
+        ).where((index) => index > 0).toList(growable: false);
+        if (text.isEmpty || factIndexes.isEmpty) continue;
+        final groundingFailure = _timelineNodeGroundingFailure(
+          text,
+          factIndexes: factIndexes,
+          facts: facts,
+        );
+        if (groundingFailure != null) {
+          debugPrint(
+            '豆包时间线节点未通过事实引用校验，已丢弃: '
+            'reason=$groundingFailure，'
+            'factIndexes=${factIndexes.join(',')}，'
+            'text=${_shortenRunes(text, 90)}',
+          );
+          continue;
+        }
+        final key = _looseEvidenceKey(text);
+        if (key.isEmpty || !seenTimelineText.add(key)) continue;
+        timeline.add(_DoubaoTimelineNode(
+          text: text,
+          factIndexes: factIndexes,
+        ));
+        if (timeline.length >= 8) break;
+      }
+    }
+
+    final constraints = _dynamicStringList(decoded['constraints'])
+        .map(ApiService.normalizeKnownNamesForChineseText)
+        .where((line) => line.trim().isNotEmpty)
+        .take(3)
+        .toList();
+    if (timeline.isEmpty) return null;
+    if (!_timelineOrderIsValid(timeline, facts)) {
+      debugPrint('豆包时间线未通过剧情顺序校验，拒绝采用整条时间线');
+      return null;
+    }
+    final result = _DoubaoTimeline(
+      nodes: timeline,
+      constraints: constraints,
+    );
+    debugPrint(
+      '豆包时间线整理结果: '
+      'timeline=${timeline.length}, constraints=${constraints.length}; '
+      '${timeline.isEmpty ? '' : _shortenRunes(timeline.first.text, 90)}',
+    );
+    return result;
+  }
+
+  static _DoubaoTimeline? _parseDoubaoTimelineLenient(
+    String content, {
+    required List<_DoubaoGroundedFact> facts,
+  }) {
+    final timeline = <_DoubaoTimelineNode>[];
+    final seenTimelineText = <String>{};
+    final constraints = <String>[];
+    String pendingText = '';
+    List<int> pendingFactIndexes = const [];
+    var inConstraints = false;
+
+    void flushTimelineNode() {
+      final text = ApiService.normalizeKnownNamesForChineseText(
+        pendingText.trim(),
+      ).trim();
+      final factIndexes = pendingFactIndexes
+          .where((index) => index > 0 && index <= facts.length)
+          .toList(growable: false);
+      if (text.isEmpty || factIndexes.isEmpty) {
+        pendingText = '';
+        pendingFactIndexes = const [];
+        return;
+      }
+      final groundingFailure = _timelineNodeGroundingFailure(
+        text,
+        factIndexes: factIndexes,
+        facts: facts,
+      );
+      if (groundingFailure != null) {
+        debugPrint(
+          '豆包时间线节点未通过事实引用校验，已丢弃: '
+          'reason=$groundingFailure，'
+          'factIndexes=${factIndexes.join(',')}，'
+          'text=${_shortenRunes(text, 90)}',
+        );
+        pendingText = '';
+        pendingFactIndexes = const [];
+        return;
+      }
+      final key = _looseEvidenceKey(text);
+      if (key.isNotEmpty && seenTimelineText.add(key)) {
+        timeline.add(_DoubaoTimelineNode(
+          text: text,
+          factIndexes: factIndexes,
+        ));
+      }
+      pendingText = '';
+      pendingFactIndexes = const [];
+    }
+
+    for (final rawLine in content.split('\n')) {
+      final line = rawLine.trim();
+      if (line.isEmpty) continue;
+
+      if (RegExp(r'"text"\s*:').hasMatch(line)) {
+        flushTimelineNode();
+        pendingText = _readJsonishLineValue(line);
+        continue;
+      }
+      if (RegExp(r'"fact_indexes"\s*:').hasMatch(line)) {
+        pendingFactIndexes = _extractJsonishIntListFromLine(
+          line,
+          maxExclusive: facts.length + 1,
+        );
+        flushTimelineNode();
+        continue;
+      }
+      if (RegExp(r'"constraints"\s*:').hasMatch(line)) {
+        inConstraints = true;
+        constraints.addAll(_extractJsonishStringListFromLine(line));
+        continue;
+      }
+      if (inConstraints) {
+        if (line.startsWith(']')) {
+          inConstraints = false;
+          continue;
+        }
+        constraints.addAll(_extractJsonishStringListFromLine(line));
+      }
+    }
+    flushTimelineNode();
+
+    final normalizedConstraints = constraints
+        .map(ApiService.normalizeKnownNamesForChineseText)
+        .where((line) => line.trim().isNotEmpty)
+        .take(3)
+        .toList();
+    if (timeline.isEmpty) return null;
+    if (!_timelineOrderIsValid(timeline, facts)) {
+      debugPrint('豆包时间线未通过剧情顺序校验，拒绝采用整条时间线');
+      return null;
+    }
+    final result = _DoubaoTimeline(
+      nodes: timeline,
+      constraints: normalizedConstraints,
+    );
+    debugPrint(
+      '豆包时间线整理结果: '
+      'timeline=${timeline.length}, constraints=${normalizedConstraints.length}; '
+      '${timeline.isEmpty ? '' : _shortenRunes(timeline.first.text, 90)}',
+    );
+    return result;
+  }
+
+  static String _readJsonishLineValue(String line) {
+    final colon = line.indexOf(':');
+    if (colon < 0) return '';
+    var value = line.substring(colon + 1).trim();
+    if (value.endsWith(',')) value = value.substring(0, value.length - 1);
+    value = value.trim();
+    if (value.startsWith('"') && value.endsWith('"') && value.length >= 2) {
+      value = value.substring(1, value.length - 1);
+    }
+    return value
+        .replaceAll(r'\"', '"')
+        .replaceAll(r'\n', ' ')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+  }
+
+  static List<int> _extractJsonishIntListFromLine(
+    String line, {
+    required int maxExclusive,
+  }) {
+    final start = line.indexOf('[');
+    final end = line.lastIndexOf(']');
+    final segment =
+        start >= 0 && end > start ? line.substring(start + 1, end) : line;
+    return RegExp(r'-?\d+')
+        .allMatches(segment)
+        .map((match) => int.tryParse(match.group(0) ?? ''))
+        .whereType<int>()
+        .where((index) => index >= 0 && index < maxExclusive)
+        .toSet()
+        .toList(growable: false);
+  }
+
+  static List<String> _extractJsonishStringListFromLine(String line) {
+    final start = line.indexOf('[');
+    final end = line.lastIndexOf(']');
+    final segment =
+        start >= 0 && end > start ? line.substring(start + 1, end) : line;
+    return RegExp(r'"([^"]+)"')
+        .allMatches(segment)
+        .map((match) => (match.group(1) ?? '').trim())
+        .where((value) => value.isNotEmpty)
+        .toList(growable: false);
+  }
+
   static bool _timelineNodeIsGrounded(
     String text, {
     required List<int> factIndexes,
     required List<_DoubaoGroundedFact> facts,
+  }) =>
+      _timelineNodeGroundingFailure(
+        text,
+        factIndexes: factIndexes,
+        facts: facts,
+      ) ==
+      null;
+
+  static String? _timelineNodeGroundingFailure(
+    String text, {
+    required List<int> factIndexes,
+    required List<_DoubaoGroundedFact> facts,
   }) {
-    if (text.trim().isEmpty || factIndexes.isEmpty) return false;
+    if (text.trim().isEmpty) return '节点文本为空';
+    if (factIndexes.isEmpty) return '没有事实引用编号';
     final referencedFacts = factIndexes
         .where((index) => index > 0 && index <= facts.length)
         .map((index) => facts[index - 1])
         .toList(growable: false);
-    if (referencedFacts.length != factIndexes.length) return false;
+    if (referencedFacts.length != factIndexes.length) {
+      return '存在越界的事实引用编号';
+    }
 
     final evidenceText = referencedFacts
-        .expand((fact) => [fact.text, fact.sourceExcerpt])
+        .map((fact) => fact.sourceExcerpt.trim().isNotEmpty
+            ? fact.sourceExcerpt
+            : fact.text)
         .where((value) => value.trim().isNotEmpty)
         .join(' ');
-    if (evidenceText.trim().isEmpty) return false;
+    if (evidenceText.trim().isEmpty) return '引用原文为空';
 
     final knownNames = <String>{
       ...ApiService.canonicalChineseNamesForSearch(),
@@ -6149,7 +6799,7 @@ ${factLines.join('\n')}
     for (final name in knownNames) {
       if (_containsLooseText(text, name) &&
           !_containsLooseText(evidenceText, name)) {
-        return false;
+        return '人物“$name”未出现在引用原文';
       }
     }
 
@@ -6158,9 +6808,11 @@ ${factLines.join('\n')}
         .map((match) => match.group(1) ?? '')
         .where((value) => value.isNotEmpty);
     for (final quote in quotedText) {
-      if (!_containsLooseText(evidenceText, quote)) return false;
+      if (!_containsLooseText(evidenceText, quote)) {
+        return '引语“$quote”未出现在引用原文';
+      }
     }
-    return !_looksLikeProductionMetaFact(text);
+    return null;
   }
 
   static bool _timelineOrderIsValid(
@@ -6188,6 +6840,29 @@ ${factLines.join('\n')}
       facts: factSnapshots,
       timeline: timelineSnapshots,
     ).isEmpty;
+  }
+
+  @visibleForTesting
+  static String? parseDoubaoTimelineTextForTest({
+    required String content,
+    required List<String> factTexts,
+    required List<String> sourceExcerpts,
+  }) {
+    if (factTexts.length != sourceExcerpts.length) {
+      throw ArgumentError('factTexts and sourceExcerpts must have same length');
+    }
+    final facts = <_DoubaoGroundedFact>[
+      for (var i = 0; i < factTexts.length; i++)
+        _DoubaoGroundedFact(
+          text: factTexts[i],
+          sourceTitle: '测试来源',
+          sourceUrl: 'https://example.test/source',
+          sourceExcerpt: sourceExcerpts[i],
+          eventOrder: i + 1,
+          chronologyScope: 'test',
+        ),
+    ];
+    return _parseDoubaoTimelineContent(content, facts: facts)?.toPromptText();
   }
 
   static List<String> _dynamicStringList(dynamic value) {
@@ -6240,11 +6915,23 @@ ${factLines.join('\n')}
     final text = fact.text.trim();
     final excerpt = fact.sourceExcerpt.trim();
     if (excerpt.isEmpty) return text;
-    if (_looseEvidenceKey(excerpt).startsWith(_looseEvidenceKey(text)) ||
-        _looseEvidenceKey(text).startsWith(_looseEvidenceKey(excerpt))) {
-      return text;
+    final genderMetadata = _factGenderMetadata(text);
+    return '原文证据：${_shortenRunes(excerpt, 800)}'
+        '${genderMetadata.isEmpty ? '' : '（人物性别参考：$genderMetadata）'}';
+  }
+
+  static String _factGenderMetadata(String factText) {
+    final people = <String>[];
+    final names = ApiService.canonicalChineseNamesForSearch().toList()
+      ..sort((a, b) => b.length.compareTo(a.length));
+    for (final name in names) {
+      final match = RegExp(
+        '${RegExp.escape(name)}[（(]([男女])[）)]',
+      ).firstMatch(factText);
+      if (match == null) continue;
+      people.add('$name=${match.group(1)}');
     }
-    return '$text（原文证据：${_shortenRunes(excerpt, 160)}）';
+    return people.join('、');
   }
 
   static String _shortenRunes(String text, int maxRunes) {
@@ -6257,11 +6944,12 @@ ${factLines.join('\n')}
     List<_DoubaoGroundedFact> facts,
     int maxFacts,
   ) {
-    if (facts.length <= maxFacts) return facts;
+    final uniqueFacts = _dedupeDoubaoFacts(facts);
+    if (uniqueFacts.length <= maxFacts) return uniqueFacts;
 
     final grouped = <String, List<_DoubaoGroundedFact>>{};
     final sourceOrder = <String>[];
-    for (final fact in facts) {
+    for (final fact in uniqueFacts) {
       final key = fact.sourceUrl.isNotEmpty
           ? fact.sourceUrl
           : (fact.sourceTitle.isNotEmpty ? fact.sourceTitle : '豆包搜索结果');
@@ -6334,6 +7022,56 @@ ${factLines.join('\n')}
     return _spreadSampleIndexes(total, count);
   }
 
+  @visibleForTesting
+  static String factContextTextForTest({
+    required String factText,
+    required String sourceExcerpt,
+  }) =>
+      _factContextText(_DoubaoGroundedFact(
+        text: factText,
+        sourceTitle: '测试来源',
+        sourceUrl: 'https://example.test/source',
+        sourceExcerpt: sourceExcerpt,
+      ));
+
+  @visibleForTesting
+  static bool timelineNodeGroundedForTest({
+    required String timelineText,
+    required String factText,
+    required String sourceExcerpt,
+  }) =>
+      _timelineNodeIsGrounded(
+        timelineText,
+        factIndexes: const [1],
+        facts: [
+          _DoubaoGroundedFact(
+            text: factText,
+            sourceTitle: '测试来源',
+            sourceUrl: 'https://example.test/source',
+            sourceExcerpt: sourceExcerpt,
+          ),
+        ],
+      );
+
+  @visibleForTesting
+  static String? timelineNodeGroundingFailureForTest({
+    required String timelineText,
+    required String factText,
+    required String sourceExcerpt,
+  }) =>
+      _timelineNodeGroundingFailure(
+        timelineText,
+        factIndexes: const [1],
+        facts: [
+          _DoubaoGroundedFact(
+            text: factText,
+            sourceTitle: '测试来源',
+            sourceUrl: 'https://example.test/source',
+            sourceExcerpt: sourceExcerpt,
+          ),
+        ],
+      );
+
   static bool _looksLikeProductionMetaFact(String text) {
     return RegExp(
       r'导演|監督|编剧|脚本|制作|企划|企畫|公司|武士道|Bushiroad|声优|聲優|配音|采访|访谈|訪談|播出|上映|剧场版|劇場版|动画制作|ゲーム制作|演唱会|LIVE|活动|商业|运营|'
@@ -6342,512 +7080,6 @@ ${factLines.join('\n')}
       r'\bwritten by\b|\blyricist\b|\bcomposer\b|\barranger\b|\bproducer\b|\bcharts?\b|\baccolades?\b|\bcredits?\b|\bpersonnel\b',
       caseSensitive: false,
     ).hasMatch(text);
-  }
-
-  // ========================================
-  // 网页搜索
-  // ========================================
-  // 普通联网搜索的统一入口。
-  //
-  // 优先级：
-  // 1. Tavily：正规搜索 API，返回结构化 JSON，适合 AI/RAG 使用。
-  // 2. DuckDuckGo HTML：无需 key 的兜底方案，稳定性略差。
-  //
-  // 这样你只要在 ApiKeys.tavilyApiKey 填 key，就会自动升级搜索质量；
-  // 不填 key 时，旧功能仍然能跑。
-  static Future<List<String>> _searchWeb(
-    String query, {
-    String category = 'general',
-    bool preferMoegirl = false,
-    String relatedCanonTerm = '',
-    List<String> directTitleHints = const [],
-    _WebProfile? profile,
-  }) async {
-    final trimmed = query.trim();
-    if (trimmed.isEmpty) return [];
-    final normalizedRelatedCanonTerm = category == 'canon'
-        ? relatedCanonTerm.replaceAll(RegExp(r'\s+'), ' ').trim()
-        : '';
-
-    final cacheKey = _searchCacheKey(
-      [
-        trimmed,
-        if (normalizedRelatedCanonTerm.isNotEmpty) normalizedRelatedCanonTerm,
-        if (directTitleHints.isNotEmpty) directTitleHints.join('|'),
-      ].join('::'),
-      category,
-      preferMoegirl: category == 'canon' && preferMoegirl,
-    );
-    final cached = _readSearchCache(cacheKey, category);
-    if (cached != null) {
-      debugPrint(
-        '网页搜索缓存命中: source=${cached.source}, '
-        'category=$category, query=$trimmed, results=${cached.results.length}',
-      );
-      return cached.results;
-    }
-
-    List<String> results = [];
-    String source = 'DuckDuckGo';
-    var resultQuery = trimmed;
-    var triedBaiduBaike = false;
-    final explicitTitleHints =
-        directTitleHints.where(_isExplicitCanonTitleTerm).toList();
-    bool matchesExplicitTitle(List<String> candidates) {
-      if (category != 'canon' ||
-          explicitTitleHints.isEmpty ||
-          candidates.isEmpty) {
-        return true;
-      }
-      return candidates.any((candidate) => explicitTitleHints
-          .any((title) => _canonTextContainsTerm(candidate, title)));
-    }
-
-    bool canAcceptExplicitTarget(String sourceName, List<String> candidates) {
-      if (matchesExplicitTitle(candidates)) return true;
-      debugPrint(
-        '$sourceName 结果未命中明确专名，继续其他搜索: '
-        '${explicitTitleHints.join(', ')}',
-      );
-      return false;
-    }
-
-    List<String> filterForRelatedCanon(List<String> candidates) {
-      if (category != 'canon' ||
-          normalizedRelatedCanonTerm.isEmpty ||
-          candidates.isEmpty) {
-        return candidates;
-      }
-      return _filterRelatedCanonResults(
-        candidates,
-        focusTerm: _primaryCanonFocusTerm(trimmed),
-        relatedTerm: normalizedRelatedCanonTerm,
-      );
-    }
-
-    if (results.isEmpty && category == 'canon' && preferMoegirl) {
-      final moegirlSearch = await _searchMoegirlSequence(
-        trimmed,
-        relatedCanonTerm: normalizedRelatedCanonTerm,
-        directTitleHints: directTitleHints,
-      );
-      if (moegirlSearch.results.isNotEmpty) {
-        final usableMoegirlResults = _postProcessSearchResults(
-          moegirlSearch.results,
-          category,
-          query: moegirlSearch.query,
-        );
-        if (usableMoegirlResults.isNotEmpty &&
-            canAcceptExplicitTarget('萌娘百科', usableMoegirlResults)) {
-          results = moegirlSearch.results;
-          source = 'MoegirlBrowser';
-          resultQuery = moegirlSearch.query;
-        }
-      }
-    }
-
-    if (results.isEmpty &&
-        category == 'canon' &&
-        profile != null &&
-        explicitTitleHints.isNotEmpty) {
-      final domainText = [
-        _officialCanonSitesForProfile(profile),
-        _supplementalCanonSitesForProfile(profile),
-      ].where((value) => value.trim().isNotEmpty).join('|');
-      final domains = domainText
-          .split('|')
-          .map((domain) => domain.trim())
-          .where((domain) => domain.isNotEmpty)
-          .toList(growable: false);
-      for (final title in explicitTitleHints) {
-        for (final domain in domains) {
-          final officialResults = await _searchDuckDuckGoDomain(
-            title,
-            domain: domain,
-            category: category,
-          );
-          if (officialResults.isEmpty) continue;
-          if (!canAcceptExplicitTarget('官方站点 $domain', officialResults)) {
-            continue;
-          }
-          results = officialResults;
-          source = 'OfficialBrowser';
-          resultQuery = title;
-          debugPrint('官方站点明确专名搜索成功: $domain $title');
-          break;
-        }
-        if (results.isNotEmpty) break;
-      }
-    }
-
-    if (results.isEmpty &&
-        category == 'canon' &&
-        explicitTitleHints.isNotEmpty) {
-      triedBaiduBaike = true;
-      results = filterForRelatedCanon(await _searchBaiduBaikeSequence(
-        trimmed,
-        relatedCanonTerm: normalizedRelatedCanonTerm,
-        directTitleHints: directTitleHints,
-      ));
-      if (results.isNotEmpty && canAcceptExplicitTarget('百度百科', results)) {
-        source = 'BaiduBaike';
-        resultQuery = trimmed;
-      } else {
-        results = [];
-      }
-    }
-
-    if (_tavilyApiKey.trim().isNotEmpty) {
-      if (results.isEmpty) {
-        final tavilyResults = filterForRelatedCanon(await _searchTavily(
-          trimmed,
-          category: category,
-          preferMoegirl: preferMoegirl,
-        ));
-        if (tavilyResults.isNotEmpty &&
-            canAcceptExplicitTarget('Tavily', tavilyResults)) {
-          results = tavilyResults;
-          source = 'Tavily';
-          resultQuery = trimmed;
-        } else if (category == 'canon') {
-          final focusedQuery = _focusedCanonSearchQuery(trimmed);
-          if (focusedQuery.isNotEmpty && focusedQuery != trimmed) {
-            debugPrint('Tavily 原查询无可用结果，改用聚焦查询: $focusedQuery');
-            final focusedResults = filterForRelatedCanon(await _searchTavily(
-              focusedQuery,
-              category: category,
-              preferMoegirl: preferMoegirl,
-            ));
-            if (focusedResults.isNotEmpty &&
-                canAcceptExplicitTarget('Tavily 聚焦', focusedResults)) {
-              results = focusedResults;
-              source = 'Tavily';
-              resultQuery = focusedQuery;
-            }
-          }
-          if (results.isEmpty) {
-            final primaryQuery = _primaryCanonFocusTerm(trimmed);
-            if (primaryQuery.isNotEmpty &&
-                primaryQuery != trimmed &&
-                primaryQuery != focusedQuery) {
-              debugPrint('Tavily 聚焦查询无可用结果，改用主对象查询: $primaryQuery');
-              final primaryResults = filterForRelatedCanon(await _searchTavily(
-                primaryQuery,
-                category: category,
-                preferMoegirl: preferMoegirl,
-              ));
-              if (primaryResults.isNotEmpty &&
-                  canAcceptExplicitTarget('Tavily 主对象', primaryResults)) {
-                results = primaryResults;
-                source = 'Tavily';
-                resultQuery = primaryQuery;
-              }
-            }
-          }
-        }
-      }
-    }
-
-    if (results.isEmpty && category == 'canon' && !triedBaiduBaike) {
-      results = filterForRelatedCanon(await _searchBaiduBaikeSequence(
-        trimmed,
-        relatedCanonTerm: normalizedRelatedCanonTerm,
-        directTitleHints: directTitleHints,
-      ));
-      if (results.isNotEmpty && canAcceptExplicitTarget('百度百科', results)) {
-        source = 'BaiduBaike';
-        resultQuery = trimmed;
-      } else {
-        results = [];
-      }
-    }
-
-    if (results.isEmpty && category == 'canon') {
-      final wikipediaSearch = await _searchWikipediaSequence(
-        trimmed,
-        relatedCanonTerm: normalizedRelatedCanonTerm,
-        directTitleHints: directTitleHints,
-      );
-      if (wikipediaSearch.results.isNotEmpty &&
-          canAcceptExplicitTarget('维基百科', wikipediaSearch.results)) {
-        results = wikipediaSearch.results;
-        source = 'WikipediaBrowser';
-        resultQuery = wikipediaSearch.query;
-      }
-    }
-
-    if (results.isEmpty &&
-        category == 'canon' &&
-        _tavilyApiKey.trim().isNotEmpty &&
-        normalizedRelatedCanonTerm.isNotEmpty) {
-      final relatedQuery = _relatedCanonSearchQuery(
-        trimmed,
-        normalizedRelatedCanonTerm,
-      );
-      if (relatedQuery.isNotEmpty && relatedQuery != trimmed) {
-        debugPrint('百度百科无可用结果，改用 Tavily 关联查询: $relatedQuery');
-        final relatedResults = await _searchTavily(
-          relatedQuery,
-          category: category,
-          preferMoegirl: preferMoegirl,
-        );
-        final filteredRelatedResults = _filterRelatedCanonResults(
-          relatedResults,
-          focusTerm: _primaryCanonFocusTerm(trimmed),
-          relatedTerm: normalizedRelatedCanonTerm,
-        );
-        if (filteredRelatedResults.isNotEmpty &&
-            canAcceptExplicitTarget('Tavily 关联', filteredRelatedResults)) {
-          results = filteredRelatedResults;
-          source = 'Tavily';
-          resultQuery = relatedQuery;
-        }
-      }
-    }
-
-    if (results.isEmpty) {
-      results = await _searchDuckDuckGo(
-        trimmed,
-        category: category,
-        preferMoegirl: preferMoegirl,
-      );
-      if (!canAcceptExplicitTarget('DuckDuckGo', results)) {
-        results = [];
-      }
-      source = 'DuckDuckGo';
-      resultQuery = trimmed;
-      if (results.isEmpty && category == 'canon') {
-        final focusedQuery = _focusedCanonSearchQuery(trimmed);
-        if (focusedQuery.isNotEmpty && focusedQuery != trimmed) {
-          debugPrint('DuckDuckGo 原查询无可用结果，改用聚焦查询: $focusedQuery');
-          results = await _searchDuckDuckGo(
-            focusedQuery,
-            category: category,
-            preferMoegirl: preferMoegirl,
-          );
-          if (results.isNotEmpty &&
-              canAcceptExplicitTarget('DuckDuckGo 聚焦', results)) {
-            resultQuery = focusedQuery;
-          } else {
-            results = [];
-          }
-        }
-
-        final primaryQuery = _primaryCanonFocusTerm(trimmed);
-        if (results.isEmpty &&
-            primaryQuery.isNotEmpty &&
-            primaryQuery != trimmed &&
-            primaryQuery != focusedQuery) {
-          debugPrint('DuckDuckGo 聚焦查询无可用结果，改用主对象查询: $primaryQuery');
-          results = await _searchDuckDuckGo(
-            primaryQuery,
-            category: category,
-            preferMoegirl: preferMoegirl,
-          );
-          if (results.isNotEmpty &&
-              canAcceptExplicitTarget('DuckDuckGo 主对象', results)) {
-            resultQuery = primaryQuery;
-          } else {
-            results = [];
-          }
-        }
-
-        if (results.isEmpty && normalizedRelatedCanonTerm.isNotEmpty) {
-          final relatedQuery = _relatedCanonSearchQuery(
-            trimmed,
-            normalizedRelatedCanonTerm,
-          );
-          if (relatedQuery.isNotEmpty &&
-              relatedQuery != trimmed &&
-              relatedQuery != focusedQuery) {
-            debugPrint('DuckDuckGo 主对象查询无可用结果，改用关联查询: $relatedQuery');
-            results = await _searchDuckDuckGo(
-              relatedQuery,
-              category: category,
-              preferMoegirl: preferMoegirl,
-            );
-            if (results.isNotEmpty) {
-              results = _filterRelatedCanonResults(
-                results,
-                focusTerm: _primaryCanonFocusTerm(trimmed),
-                relatedTerm: normalizedRelatedCanonTerm,
-              );
-              if (results.isNotEmpty &&
-                  canAcceptExplicitTarget('DuckDuckGo 关联', results)) {
-                resultQuery = relatedQuery;
-              } else {
-                results = [];
-              }
-            }
-          }
-        }
-      }
-    }
-
-    final cleaned = _postProcessSearchResults(
-      results,
-      category,
-      query: resultQuery,
-    );
-    if (cleaned.isNotEmpty && canAcceptExplicitTarget('网页搜索最终结果', cleaned)) {
-      _writeSearchCache(cacheKey, cleaned, source);
-      debugPrint(
-        '网页搜索结果: source=$source, category=$category, '
-        'query=$trimmed, results=${cleaned.length}',
-      );
-    } else {
-      debugPrint('网页搜索无可用结果: category=$category, query=$trimmed');
-    }
-    return cleaned;
-  }
-
-  // Tavily Search API。
-  //
-  // 为什么比 DuckDuckGo HTML 抓取更好：
-  // - 返回 JSON，不依赖网页 class 名，不容易因为页面改版失效。
-  // - 面向 AI agent/RAG 场景，摘要通常比普通搜索页 snippet 更适合塞进 prompt。
-  // - 可以拿到 URL，方便模型知道信息来源，但回复时仍不主动列链接。
-  static Future<List<String>> _searchTavily(
-    String query, {
-    String category = 'general',
-    bool preferMoegirl = false,
-  }) async {
-    try {
-      if (category == 'canon' && preferMoegirl) {
-        final moegirlResults = await _searchTavilyWithDomains(
-          query,
-          category,
-          const ['zh.moegirl.org.cn', 'moegirl.org.cn'],
-        );
-        if (moegirlResults.isNotEmpty) {
-          debugPrint('Tavily 萌娘百科优先搜索成功: $query');
-          return moegirlResults;
-        }
-      }
-
-      final requestBody = _buildTavilyRequestBody(
-        query,
-        category: category,
-        preferTrustedSources: true,
-      );
-      final response = await http
-          .post(
-            Uri.parse('https://api.tavily.com/search'),
-            headers: {
-              'Authorization': 'Bearer $_tavilyApiKey',
-              'Content-Type': 'application/json',
-            },
-            body: jsonEncode(requestBody),
-          )
-          .timeout(_searchTimeout);
-
-      if (response.statusCode != 200) {
-        debugPrint('Tavily 搜索失败: ${response.statusCode} ${response.body}');
-        return [];
-      }
-
-      final data = jsonDecode(utf8.decode(response.bodyBytes));
-      if (data is! Map<String, dynamic>) return [];
-
-      final results = await _parseAndEnrichTavilyResults(
-        data,
-        category: category,
-        query: query,
-      );
-
-      // 经济类第一轮会优先限定可信来源。
-      // 如果限定域名后没有结果，再放宽搜一次，避免完全搜不到。
-      // 原作资料不做全网放宽，否则很容易把博客、评论页当成 canon。
-      if (results.isEmpty &&
-          category == 'economy' &&
-          requestBody.containsKey('include_domains')) {
-        final retryResults =
-            await _searchTavilyWithoutDomainLimit(query, category);
-        if (retryResults.isNotEmpty) return retryResults;
-      }
-
-      if (results.isNotEmpty) {
-        debugPrint('Tavily 搜索成功: $query');
-      }
-      return results;
-    } catch (e) {
-      debugPrint('Tavily 搜索异常，退回 DuckDuckGo: $e');
-      return [];
-    }
-  }
-
-  static Future<List<String>> _searchTavilyWithoutDomainLimit(
-    String query,
-    String category,
-  ) async {
-    try {
-      final response = await http
-          .post(
-            Uri.parse('https://api.tavily.com/search'),
-            headers: {
-              'Authorization': 'Bearer $_tavilyApiKey',
-              'Content-Type': 'application/json',
-            },
-            body: jsonEncode(_buildTavilyRequestBody(
-              query,
-              category: category,
-              preferTrustedSources: false,
-            )),
-          )
-          .timeout(_searchTimeout);
-
-      if (response.statusCode != 200) {
-        debugPrint('Tavily 放宽搜索失败: ${response.statusCode} ${response.body}');
-        return [];
-      }
-
-      final data = jsonDecode(utf8.decode(response.bodyBytes));
-      if (data is! Map<String, dynamic>) return [];
-
-      final results = await _parseAndEnrichTavilyResults(
-        data,
-        category: category,
-        query: query,
-      );
-      if (results.isNotEmpty) {
-        debugPrint('Tavily 放宽搜索成功: $query');
-      }
-      return results;
-    } catch (e) {
-      debugPrint('Tavily 放宽搜索异常: $e');
-      return [];
-    }
-  }
-
-  static Future<_SiteSearchResult> _searchMoegirlSequence(
-    String query, {
-    String relatedCanonTerm = '',
-    List<String> directTitleHints = const [],
-  }) async {
-    final directResult = await _searchDirectMoegirl(
-      query,
-      relatedCanonTerm: relatedCanonTerm,
-      directTitleHints: directTitleHints,
-    );
-    if (directResult.results.isNotEmpty) return directResult;
-
-    for (final searchQuery in _canonSearchQueryVariants(
-      query,
-      relatedCanonTerm: relatedCanonTerm,
-      directTitleHints: directTitleHints,
-    )) {
-      final results = await _searchDuckDuckGoDomain(
-        searchQuery,
-        domain: 'zh.moegirl.org.cn',
-        category: 'canon',
-      );
-      if (results.isNotEmpty) {
-        debugPrint('萌娘百科专用搜索成功: $searchQuery');
-        return _SiteSearchResult(results: results, query: searchQuery);
-      }
-    }
-
-    return const _SiteSearchResult.empty();
   }
 
   static Future<_SiteSearchResult> _searchWikipediaSequence(
@@ -7200,71 +7432,15 @@ ${factLines.join('\n')}
         url: uri.toString(),
         score: 0,
       );
-      var enriched = await _enrichDuckDuckGoCanonCandidate(candidate, query);
+      var enriched = await _fetchReadableCanonCandidate(candidate, query);
       if (!enriched.content.startsWith('相关正文：')) {
-        enriched = await _enrichDuckDuckGoCanonCandidate(candidate, title);
+        enriched = await _fetchReadableCanonCandidate(candidate, title);
       }
       if (!enriched.content.startsWith('相关正文：')) return [];
       debugPrint('$sourceName成功: $title');
       return _formatSearchCandidates([enriched], 'canon');
     } catch (e) {
       debugPrint('$sourceName失败: $title $e');
-      return [];
-    }
-  }
-
-  static Future<List<String>> _searchDuckDuckGoDomain(
-    String query, {
-    required String domain,
-    required String category,
-  }) async {
-    try {
-      final uri = Uri.https('duckduckgo.com', '/html/', {
-        'q': 'site:$domain $query',
-      });
-      final response = await http.get(
-        uri,
-        headers: const {
-          'User-Agent':
-              'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        },
-      ).timeout(_searchTimeout);
-      if (response.statusCode != 200) return [];
-
-      final html = utf8.decode(response.bodyBytes, allowMalformed: true);
-      final resultPattern = RegExp(
-        r'<a[^>]*class="result__a"[^>]*href="([^"]+)"[^>]*>(.*?)</a>.*?<a[^>]*class="result__snippet"[^>]*>(.*?)</a>',
-        dotAll: true,
-        caseSensitive: false,
-      );
-      final matches = resultPattern.allMatches(html).take(8);
-      final candidates = <_SearchResultCandidate>[];
-      final terms = _snippetSearchTerms(query);
-
-      for (final match in matches) {
-        final resultUrl = _decodeDuckDuckGoResultUrl(match.group(1) ?? '');
-        final resultDomain = _domainFromUrl(resultUrl);
-        if (resultDomain.isEmpty ||
-            !(resultDomain == domain || resultDomain.endsWith('.$domain'))) {
-          continue;
-        }
-        if (_isUnwantedSearchResultUrl(resultUrl)) continue;
-
-        final title = _cleanHtml(match.group(2) ?? '');
-        final snippet = _cleanHtml(match.group(3) ?? '');
-        if (title.isEmpty && snippet.isEmpty) continue;
-        candidates.add(_SearchResultCandidate(
-          title: title,
-          content: snippet,
-          url: resultUrl,
-          score: _searchResultScore(title, snippet, terms),
-        ));
-      }
-
-      if (candidates.isEmpty) return [];
-      return _enrichDuckDuckGoCanonResults(candidates, query);
-    } catch (e) {
-      debugPrint('DuckDuckGo 站内搜索失败: site:$domain $e');
       return [];
     }
   }
@@ -7828,221 +8004,6 @@ ${factLines.join('\n')}
         .trim();
   }
 
-  static Future<List<String>> _searchTavilyWithDomains(
-    String query,
-    String category,
-    List<String> domains,
-  ) async {
-    try {
-      final requestBody = _buildTavilyRequestBody(
-        query,
-        category: category,
-        preferTrustedSources: false,
-      );
-      requestBody['include_domains'] = domains;
-
-      final response = await http
-          .post(
-            Uri.parse('https://api.tavily.com/search'),
-            headers: {
-              'Authorization': 'Bearer $_tavilyApiKey',
-              'Content-Type': 'application/json',
-            },
-            body: jsonEncode(requestBody),
-          )
-          .timeout(_searchTimeout);
-
-      if (response.statusCode != 200) {
-        debugPrint('Tavily 指定域名搜索失败: ${response.statusCode} ${response.body}');
-        return [];
-      }
-
-      final data = jsonDecode(utf8.decode(response.bodyBytes));
-      if (data is! Map<String, dynamic>) return [];
-
-      return _parseAndEnrichTavilyResults(
-        data,
-        category: category,
-        query: query,
-      );
-    } catch (e) {
-      debugPrint('Tavily 指定域名搜索异常: $e');
-      return [];
-    }
-  }
-
-  static Map<String, dynamic> _buildTavilyRequestBody(
-    String query, {
-    required String category,
-    required bool preferTrustedSources,
-  }) {
-    final body = <String, dynamic>{
-      'query': query,
-      'search_depth':
-          (category == 'economy' || category == 'canon') ? 'advanced' : 'basic',
-      'max_results': category == 'economy' ? 6 : 5,
-      'include_answer': false,
-      'include_raw_content': category == 'canon',
-      'include_images': false,
-    };
-
-    if (category == 'economy') {
-      body['topic'] = 'finance';
-      body['time_range'] = 'year';
-      if (preferTrustedSources) {
-        body['include_domains'] = _trustedEconomyDomains;
-      }
-    } else if (category == 'canon') {
-      body['topic'] = 'general';
-      if (preferTrustedSources) {
-        body['include_domains'] = _trustedCanonDomains;
-      }
-    } else if (category == 'current' || category == 'slang') {
-      body['topic'] = 'news';
-      body['time_range'] = 'month';
-    } else {
-      body['topic'] = 'general';
-    }
-
-    return body;
-  }
-
-  static Future<List<String>> _parseAndEnrichTavilyResults(
-    Map<String, dynamic> data, {
-    String category = 'general',
-    String query = '',
-  }) async {
-    final parsed = _parseTavilyResults(data, category: category, query: query);
-    if (category != 'canon' || parsed.isEmpty) return parsed;
-
-    final enriched = await _enrichFormattedCanonResults(parsed, query);
-    if (enriched.isNotEmpty) return enriched;
-
-    // 萌娘百科结果如果正文抓取/板块抽取失败，不能退回 Tavily 的网页开头摘要。
-    // 那类摘要经常是欢迎语、基本资料、导航残片，会把 prompt 带偏。
-    final nonMoegirlParsed = parsed.where((result) {
-      final url = _extractUrl(result);
-      return url.isEmpty || !_isMoegirlUrl(url);
-    }).toList();
-    return nonMoegirlParsed.length == parsed.length ? parsed : nonMoegirlParsed;
-  }
-
-  static List<String> _parseTavilyResults(
-    Map<String, dynamic> data, {
-    String category = 'general',
-    String query = '',
-  }) {
-    final rawResults = data['results'];
-    if (rawResults is! List) return [];
-
-    final terms = _snippetSearchTerms(query);
-    final candidates = <_SearchResultCandidate>[];
-    for (final item in rawResults.take(6)) {
-      if (item is! Map<String, dynamic>) continue;
-      final title = _mapString(item, 'title');
-      final url = _mapString(item, 'url');
-      if (_isUnwantedSearchResultUrl(url)) continue;
-      final content = _bestTavilyContent(item, category, query, title, url);
-      if (category == 'canon' && content.isEmpty) continue;
-      if (title.isEmpty && content.isEmpty) continue;
-      if (category == 'canon' &&
-          !_canonResultMatchesQueryFocus(title, content, query)) {
-        continue;
-      }
-      final score =
-          category == 'canon' ? _searchResultScore(title, content, terms) : 0;
-      if (category == 'canon' && score < _minimumCanonResultScore(terms)) {
-        continue;
-      }
-
-      candidates.add(_SearchResultCandidate(
-        title: title,
-        content: content,
-        url: url,
-        score: score,
-      ));
-    }
-
-    if (category == 'canon') {
-      candidates.sort((a, b) => b.score.compareTo(a.score));
-    }
-
-    final results = <String>[];
-    for (final candidate in candidates) {
-      final snippet = _truncateSearchSnippet(
-        candidate.content,
-        // 原作细节题需要更多上下文，但这里已经是“短句筛选后的相关片段”，
-        // 不是网页开头或整页正文。
-        maxLength: category == 'canon' ? 900 : 220,
-      );
-      final source = candidate.url.isEmpty ? '' : '（来源：${candidate.url}）';
-      results.add('${results.length + 1}. ${candidate.title}：$snippet$source');
-    }
-
-    return results;
-  }
-
-  static String _bestTavilyContent(
-    Map<String, dynamic> item,
-    String category,
-    String query,
-    String title,
-    String url,
-  ) {
-    final content = _mapString(item, 'content');
-    final rawContent = _mapString(item, 'raw_content');
-
-    if (category != 'canon') {
-      return content;
-    }
-
-    final targetAnchors = _canonTargetAnchorTerms(query, title);
-    if (rawContent.isEmpty) {
-      if (_isNoisyRawFragment(content)) return '';
-      if (targetAnchors.isNotEmpty &&
-          !targetAnchors.any((term) => _canonTextContainsTerm(content, term))) {
-        return '';
-      }
-      return _contentIsRelevantEnough(content, query, title) ? content : '';
-    }
-
-    // Tavily 的 content 通常是相关摘要，raw_content 是更长正文。
-    // 原作细节题更怕摘要漏掉关键情节，所以 canon 搜索会从正文中找 query 命中的片段。
-    final isMoegirl = _isMoegirlUrl(url);
-    final preferredText =
-        isMoegirl ? _preferredMoegirlSectionText(rawContent) : '';
-    if (isMoegirl && preferredText.isEmpty) return '';
-
-    final cleanedRaw = preferredText.isNotEmpty
-        ? preferredText
-        : _cleanExternalCanonRawText(rawContent, url);
-    if (cleanedRaw.isEmpty) return '';
-
-    final rawSnippet = _relevantRawSnippet(
-      cleanedRaw,
-      query,
-      title,
-      maxLength: isMoegirl ? 1200 : 650,
-      maxFragments: isMoegirl ? 6 : 3,
-      includeLeadingFacts: isMoegirl,
-      minLength: isMoegirl ? 800 : 0,
-      anchorTerms: isMoegirl ? const [] : targetAnchors,
-    );
-    if (rawSnippet.isNotEmpty) return '相关正文：$rawSnippet';
-    if (!isMoegirl && targetAnchors.isNotEmpty) {
-      final relaxedSnippet = _relevantRawSnippet(
-        cleanedRaw,
-        query,
-        title,
-        maxLength: 650,
-        maxFragments: 3,
-      );
-      if (relaxedSnippet.isNotEmpty) return '相关正文：$relaxedSnippet';
-    }
-    if (!isMoegirl && targetAnchors.isNotEmpty) return '';
-    return _contentIsRelevantEnough(content, query, title) ? content : '';
-  }
-
   static String _relevantRawSnippet(
     String rawContent,
     String query,
@@ -8222,24 +8183,6 @@ ${factLines.join('\n')}
     return _dedupeSearchQueryTerms(
       '$focus $related ${contextTerms.join(' ')}',
     );
-  }
-
-  static List<String> _filterRelatedCanonResults(
-    List<String> results, {
-    required String focusTerm,
-    required String relatedTerm,
-  }) {
-    if (results.isEmpty) return results;
-    return results.where((result) {
-      final title = _stripSearchIndex(result).split('：').first.trim();
-      final content = result.contains('：')
-          ? result.substring(result.indexOf('：') + 1)
-          : result;
-      return _canonTitleMatchesFocus(title, focusTerm) ||
-          _canonTitleMatchesFocus(title, relatedTerm) ||
-          (_canonTextContainsTerm(content, focusTerm) &&
-              _canonTextContainsTerm(content, relatedTerm));
-    }).toList();
   }
 
   static bool _canonResultMatchesQueryFocus(
@@ -8506,26 +8449,9 @@ ${factLines.join('\n')}
     return terms.any((term) => _canonTextContainsTerm(combined, term));
   }
 
-  static int _minimumCanonResultScore(List<String> terms) {
-    if (terms.length <= 1) return 2;
-    return 5;
-  }
-
   static int _minimumCanonFragmentScore(List<String> terms) {
     if (terms.length <= 1) return 2;
     return 4;
-  }
-
-  static bool _contentIsRelevantEnough(
-    String content,
-    String query,
-    String title,
-  ) {
-    final terms = _snippetSearchTerms(query);
-    if (terms.isEmpty) return false;
-    if (!_canonFragmentHasRequiredEvidence(content, title, terms)) return false;
-    final score = _snippetScore(content, terms) + _snippetScore(title, terms);
-    return score >= _minimumCanonResultScore(terms);
   }
 
   static int _snippetScore(String text, List<String> terms) {
@@ -8552,31 +8478,6 @@ ${factLines.join('\n')}
     return score;
   }
 
-  static String _mapString(Map<String, dynamic> item, String key) {
-    final value = item[key];
-    return value is String ? value.trim() : '';
-  }
-
-  static const List<String> _trustedEconomyDomains = [
-    // 官方/半官方宏观数据和政策来源
-    'stats.gov.cn',
-    'pbc.gov.cn',
-    'gov.cn',
-    'www.gov.cn',
-    // 主流媒体和财经媒体
-    'xinhuanet.com',
-    'news.cn',
-    'people.com.cn',
-    'cctv.com',
-    'caixin.com',
-    'yicai.com',
-    'stcn.com',
-    'cs.com.cn',
-    '21jingji.com',
-    'reuters.com',
-    'bloomberg.com',
-  ];
-
   static const List<String> _trustedCanonDomains = [
     // 官方站
     'bang-dream.com',
@@ -8596,113 +8497,6 @@ ${factLines.join('\n')}
     'wapbaike.baidu.com',
   ];
 
-  static String _searchCacheKey(
-    String query,
-    String category, {
-    bool preferMoegirl = false,
-  }) {
-    final preference = preferMoegirl ? 'moegirl-first' : 'normal';
-    return '$_searchCacheVersion::$preference::$category::${query.toLowerCase().replaceAll(RegExp(r'\s+'), ' ').trim()}';
-  }
-
-  static _CachedSearchResult? _readSearchCache(
-      String cacheKey, String category) {
-    final cached = _searchCache[cacheKey];
-    if (cached == null) return null;
-
-    final age = DateTime.now().difference(cached.createdAt);
-    if (age > _searchCacheTtl(category)) {
-      _searchCache.remove(cacheKey);
-      return null;
-    }
-
-    return cached;
-  }
-
-  static void _writeSearchCache(
-    String cacheKey,
-    List<String> results,
-    String source,
-  ) {
-    if (_searchCache.length >= _maxSearchCacheEntries) {
-      final oldestKey = _searchCache.entries
-          .reduce(
-              (a, b) => a.value.createdAt.isBefore(b.value.createdAt) ? a : b)
-          .key;
-      _searchCache.remove(oldestKey);
-    }
-
-    _searchCache[cacheKey] = _CachedSearchResult(
-      results: results,
-      source: source,
-      createdAt: DateTime.now(),
-    );
-  }
-
-  static Duration _searchCacheTtl(String category) {
-    if (category == 'economy' || category == 'current' || category == 'slang') {
-      return const Duration(minutes: 20);
-    }
-    if (category == 'festival' || category == 'phenology') {
-      return const Duration(hours: 6);
-    }
-    if (category == 'canon') {
-      return const Duration(hours: 12);
-    }
-    return const Duration(hours: 1);
-  }
-
-  // 搜索结果降噪：
-  // - 去掉空摘要、纯导航文字、明显太短的结果
-  // - 同一域名 + 相似标题只保留一个
-  // - 重新编号，避免过滤后出现 1、3、4 这种跳号
-  static List<String> _postProcessSearchResults(
-    List<String> results,
-    String category, {
-    String query = '',
-  }) {
-    final cleaned = <String>[];
-    final seen = <String>{};
-    final seenCanonSourceFamilies = <String>{};
-
-    for (final raw in results) {
-      final item = _stripSearchIndex(raw).trim();
-      if (item.isEmpty || _isNoisySearchResult(item)) continue;
-
-      final rawUrl = _extractUrl(item);
-      if (_isUnwantedSearchResultUrl(rawUrl)) continue;
-      final rawDomain = _extractDomain(item);
-      if (_isUnwantedSearchMirrorDomain(rawDomain)) continue;
-      final domain = _canonicalSearchDomain(rawDomain);
-      final title = item.split('：').first.trim();
-      final content = _extractSearchContent(item);
-
-      if (category == 'canon' && !_isTrustedCanonResultDomain(rawDomain)) {
-        continue;
-      }
-
-      if (category == 'canon' &&
-          !_canonResultMatchesQueryFocus(title, content, query)) {
-        continue;
-      }
-
-      if (category == 'canon' && domain.isNotEmpty) {
-        if (seenCanonSourceFamilies.contains(domain)) continue;
-        seenCanonSourceFamilies.add(domain);
-      }
-
-      final dedupeKey =
-          '${domain.isEmpty ? 'unknown' : domain}|${_normalizeForDedupe(title)}';
-      if (seen.contains(dedupeKey)) continue;
-      seen.add(dedupeKey);
-
-      cleaned.add('${cleaned.length + 1}. $item');
-      if (cleaned.length >= _maxResultsForCategory(category)) break;
-    }
-
-    return cleaned;
-  }
-
   static int _maxResultsForCategory(String category) {
     if (category == 'economy') return 5;
     if (category == 'canon') return 4;
@@ -8711,50 +8505,6 @@ ${factLines.join('\n')}
 
   static String _stripSearchIndex(String text) {
     return text.replaceFirst(RegExp(r'^\s*\d+\.\s*'), '');
-  }
-
-  static bool _isNoisySearchResult(String text) {
-    final normalized = text.replaceAll(RegExp(r'\s+'), ' ').trim();
-    if (normalized.length < 18) return true;
-    if (_isRealWorldProductionFragment(normalized)) return true;
-    return RegExp(
-      r'登录|注册|客户端下载|隐私政策|cookie|403|404|Access Denied|Just a moment|'
-      r'下载为PDF|可打印版|机械翻译|版权协议|讨论页|编辑摘要|请扩充此条目|'
-      r'action=edit|redlink=1|oldformat=true',
-      caseSensitive: false,
-    ).hasMatch(normalized);
-  }
-
-  static String _extractDomain(String text) {
-    final sourceHint = RegExp(r'【([^】/\s]+\.[^】/\s]+)】').firstMatch(text);
-    if (sourceHint != null) {
-      return sourceHint
-          .group(1)!
-          .replaceFirst(RegExp(r'^www\.'), '')
-          .toLowerCase();
-    }
-
-    final match = RegExp(r'https?://([^/\s）)]+)').firstMatch(text);
-    if (match == null) return '';
-    return match.group(1)!.replaceFirst(RegExp(r'^www\.'), '').toLowerCase();
-  }
-
-  static String _extractUrl(String text) {
-    final match = RegExp(r'https?://[^\s）)]+').firstMatch(text);
-    return match?.group(0) ?? '';
-  }
-
-  static String _canonicalSearchDomain(String domain) {
-    if (domain.endsWith('moegirl.org.cn') || domain.endsWith('moegirl.tw')) {
-      return 'moegirl';
-    }
-    if (domain.endsWith('wikipedia.org')) {
-      return 'wikipedia';
-    }
-    if (domain.endsWith('fandom.com')) {
-      return 'fandom';
-    }
-    return domain;
   }
 
   static bool _isTrustedCanonResultDomain(String domain) {
@@ -8778,6 +8528,7 @@ ${factLines.join('\n')}
     final host = uri.host.replaceFirst(RegExp(r'^www\.'), '').toLowerCase();
     if (host == 'tw' || host.endsWith('.tw')) return true;
     if (_isUnwantedSearchMirrorDomain(host)) return true;
+    if (host.startsWith('wenku.') || host == 'wenku.csdn.net') return true;
     final path = uri.path.toLowerCase();
     final query = uri.query.toLowerCase();
     if (RegExp(r'/(zh-tw|zh-hant|zh-hk)(/|$)').hasMatch(path) ||
@@ -8807,123 +8558,7 @@ ${factLines.join('\n')}
         .trim();
   }
 
-  // 这里用 DuckDuckGo 的 HTML 搜索页做“无需 API key”的简易兜底搜索。
-  // 优点：不用注册搜索服务。
-  // 缺点：网页结构可能变化，稳定性不如 Tavily / Brave Search / SerpAPI。
-  //
-  // 现在它只作为 Tavily 不可用时的备用方案。
-  static Future<List<String>> _searchDuckDuckGo(
-    String query, {
-    String category = 'general',
-    bool preferMoegirl = false,
-  }) async {
-    try {
-      final searchQuery = category == 'canon' && preferMoegirl
-          ? 'site:zh.moegirl.org.cn $query'
-          : query;
-      final uri = Uri.https('duckduckgo.com', '/html/', {'q': searchQuery});
-      final response = await http.get(
-        uri,
-        headers: const {
-          'User-Agent':
-              'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        },
-      ).timeout(_searchTimeout);
-      if (response.statusCode != 200) return [];
-
-      final html = utf8.decode(response.bodyBytes);
-
-      // 从 HTML 里粗略提取标题和摘要。
-      // 这是“轻量版实现”，不是完整浏览器解析。
-      final resultPattern = RegExp(
-        r'<a[^>]*class="result__a"[^>]*href="([^"]+)"[^>]*>(.*?)</a>.*?<a[^>]*class="result__snippet"[^>]*>(.*?)</a>',
-        dotAll: true,
-        caseSensitive: false,
-      );
-      final matches = resultPattern.allMatches(html).take(8).toList();
-      final candidates = <_SearchResultCandidate>[];
-      final terms = _snippetSearchTerms(query);
-
-      for (final match in matches) {
-        final href = match.group(1) ?? '';
-        final resultUrl = _decodeDuckDuckGoResultUrl(href);
-        if (_isUnwantedSearchResultUrl(resultUrl)) continue;
-        final domain = _domainFromUrl(resultUrl);
-        if (_isUnwantedSearchMirrorDomain(domain)) continue;
-
-        final title = _cleanHtml(match.group(2) ?? '');
-        final snippet = _cleanHtml(match.group(3) ?? '');
-        if (title.isEmpty && snippet.isEmpty) continue;
-
-        final score =
-            category == 'canon' ? _searchResultScore(title, snippet, terms) : 0;
-        if (category == 'canon' && score < _minimumCanonResultScore(terms)) {
-          continue;
-        }
-
-        candidates.add(_SearchResultCandidate(
-          title: title,
-          content: snippet,
-          url: resultUrl,
-          score: score,
-        ));
-      }
-
-      if (candidates.isEmpty && category == 'canon' && preferMoegirl) {
-        return _searchDuckDuckGo(query, category: category);
-      }
-
-      if (category == 'canon') {
-        final enriched = await _enrichDuckDuckGoCanonResults(candidates, query);
-        if (enriched.isEmpty && preferMoegirl) {
-          debugPrint('DuckDuckGo 萌娘站内结果无可用正文，继续普通搜索: $query');
-          return _searchDuckDuckGo(query, category: category);
-        }
-        return enriched;
-      }
-
-      return _formatSearchCandidates(candidates, category);
-    } catch (e) {
-      debugPrint('网页搜索失败: $e');
-      return [];
-    }
-  }
-
-  static Future<List<String>> _enrichDuckDuckGoCanonResults(
-    List<_SearchResultCandidate> candidates,
-    String query,
-  ) async {
-    if (candidates.isEmpty) return [];
-
-    final sorted = [...candidates]..sort((a, b) => b.score.compareTo(a.score));
-    final toFetch =
-        sorted.where((candidate) => candidate.url.isNotEmpty).take(3);
-    final enriched = await Future.wait(
-      toFetch.map((candidate) => _enrichDuckDuckGoCanonCandidate(
-            candidate,
-            query,
-          )),
-    );
-
-    final byUrl = <String, _SearchResultCandidate>{
-      for (final candidate in enriched) candidate.url: candidate,
-    };
-
-    final merged = sorted.map((candidate) {
-      return byUrl[candidate.url] ?? candidate;
-    }).toList();
-
-    final useful = merged.where((candidate) {
-      return candidate.content.startsWith('相关正文：') ||
-          (!_isNoisyRawFragment(candidate.content) &&
-              _canonFactScore(candidate.content) > 0);
-    }).toList();
-
-    if (useful.isEmpty) return [];
-    return _formatSearchCandidates(useful, 'canon');
-  }
-
-  static Future<_SearchResultCandidate> _enrichDuckDuckGoCanonCandidate(
+  static Future<_SearchResultCandidate> _fetchReadableCanonCandidate(
     _SearchResultCandidate candidate,
     String query,
   ) async {
@@ -9008,60 +8643,9 @@ ${factLines.join('\n')}
         ),
       );
     } catch (e) {
-      debugPrint('DuckDuckGo 结果正文抓取失败: ${candidate.url} $e');
+      debugPrint('直达结果正文抓取失败: ${candidate.url} $e');
       return candidate;
     }
-  }
-
-  static Future<List<String>> _enrichFormattedCanonResults(
-    List<String> results,
-    String query,
-  ) async {
-    final candidates = <_SearchResultCandidate>[];
-    for (final raw in results) {
-      final item = _stripSearchIndex(raw).trim();
-      final url = _extractUrl(item);
-      if (url.isEmpty || _isUnwantedSearchResultUrl(url)) continue;
-
-      final title = item.split('：').first.trim();
-      final content = _extractSearchContent(item);
-      candidates.add(_SearchResultCandidate(
-        title: title,
-        content: content,
-        url: url,
-        score: _searchResultScore(title, content, _snippetSearchTerms(query)),
-      ));
-    }
-
-    if (candidates.isEmpty) return [];
-
-    final enriched = await Future.wait(
-      candidates.take(3).map(
-            (candidate) => _enrichDuckDuckGoCanonCandidate(candidate, query),
-          ),
-    );
-
-    final useful = enriched.where((candidate) {
-      if (candidate.content.isEmpty) return false;
-      if (_isNoisyRawFragment(candidate.content)) return false;
-      return candidate.content.startsWith('相关正文：') ||
-          _canonFactScore(candidate.content) > 0;
-    }).toList();
-
-    if (useful.isEmpty) return [];
-    return _formatSearchCandidates(useful, 'canon');
-  }
-
-  static String _extractSearchContent(String item) {
-    final divider = item.indexOf('：');
-    if (divider < 0) return item;
-
-    var content = item.substring(divider + 1);
-    final sourceIndex = content.indexOf('（来源：');
-    if (sourceIndex >= 0) {
-      content = content.substring(0, sourceIndex);
-    }
-    return content.trim();
   }
 
   static List<String> _formatSearchCandidates(
@@ -9085,16 +8669,6 @@ ${factLines.join('\n')}
     }
 
     return results;
-  }
-
-  static String _decodeDuckDuckGoResultUrl(String href) {
-    final decodedHref = _decodeHtml(href);
-    final uri = Uri.tryParse(decodedHref);
-    final uddg = uri?.queryParameters['uddg'];
-    if (uddg != null && uddg.isNotEmpty) {
-      return Uri.decodeComponent(uddg);
-    }
-    return decodedHref;
   }
 
   static String _domainFromUrl(String url) {
@@ -9848,7 +9422,7 @@ class _WebProfile {
       return '【角色联网范围】使用东京天气、现代日本非政治节日/行事、国际节日、网络流行语、书影音和 BanG Dream/Ave Mujica 相关资料。';
     }
     if (seriesName == '欢乐颂') {
-      return '【角色联网范围】使用上海天气、中国节日、国际节日、经济金融、书影音、网络热点和《欢乐颂》相关资料。';
+      return '【角色联网范围】使用上海天气、中国节日、国际节日、经济金融、书影音、网络热点和《欢乐颂》相关资料。角色表达偏理性克制，对年轻人娱乐和二次元流行语不要默认她非常熟，但也不要把她写成完全不懂。';
     }
     return '【角色联网范围】只使用与当前对话直接相关的现实信息，不要主动扩展到经济金融或无关新闻。';
   }
@@ -9953,6 +9527,7 @@ class _WebProfile {
       // - 允许用户问其他城市天气
       // - 中国节日 + 国际节日
       // - 允许经济、金融、新闻、书影音、原剧资料等完整搜索
+      // - 角色口味偏高知和理性，不把自己写成很懂年轻人娱乐圈/二次元圈的“懂王”
       return _WebProfile(
         characterId: characterId,
         seriesName: seriesName,
@@ -10043,8 +9618,8 @@ class _SnippetWindow {
   });
 }
 
-// Tavily 返回的网页结果会先按 query 命中程度排序。
-// 原作资料尤其需要把“用户提到的对象”排到前面，而不是完全信搜索引擎原始顺序。
+// 网页候选会先按 query 命中程度排序。
+// 原作资料尤其需要把“用户提到的对象”排到前面，而不是完全信搜索结果原始顺序。
 class _SearchResultCandidate {
   final String title;
   final String content;
@@ -10073,18 +9648,9 @@ class _SiteSearchResult {
         query = '';
 }
 
-// 普通网页搜索缓存项。
-// 只存在于本次 app 运行内，重启后自动清空。
-class _CachedSearchResult {
-  final List<String> results;
-  final String source;
-  final DateTime createdAt;
-
-  const _CachedSearchResult({
-    required this.results,
-    required this.source,
-    required this.createdAt,
-  });
+class _WebContextRunState {
+  bool factExtractorUnavailable = false;
+  bool factExtractorStopLogged = false;
 }
 
 class _DoubaoSearchAttempt {

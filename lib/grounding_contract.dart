@@ -152,10 +152,27 @@ class GroundingSnapshot {
     GroundingAcceptancePolicy policy,
   ) {
     final issues = <GroundingValidationIssue>[];
-    if (facts.length < policy.minimumFacts) {
+    final effectiveFacts = _dedupeFacts(facts);
+    if (effectiveFacts.length < policy.minimumFacts) {
       issues.add(GroundingValidationIssue(
         code: 'facts_too_few',
-        message: 'facts 只有 ${facts.length} 条，要求至少 ${policy.minimumFacts} 条',
+        message:
+            '有效 facts 只有 ${effectiveFacts.length} 条，要求至少 ${policy.minimumFacts} 条',
+      ));
+    }
+    if (policy.maximumFacts != null &&
+        effectiveFacts.length > policy.maximumFacts!) {
+      issues.add(GroundingValidationIssue(
+        code: 'facts_too_many',
+        message:
+            '有效 facts 有 ${effectiveFacts.length} 条，超过上限 ${policy.maximumFacts} 条',
+      ));
+    }
+    final sourceCount = _uniqueFactSourceCount(effectiveFacts);
+    if (sourceCount < policy.minimumSources) {
+      issues.add(GroundingValidationIssue(
+        code: 'sources_too_few',
+        message: '网页来源只有 $sourceCount 个，要求至少 ${policy.minimumSources} 个',
       ));
     }
     if (policy.requireTimeline && timeline.isEmpty) {
@@ -182,7 +199,7 @@ class GroundingSnapshot {
       }
     }
 
-    final factText = facts.map((fact) => fact.text).join('\n');
+    final factText = effectiveFacts.map((fact) => fact.text).join('\n');
     for (final requiredText in policy.requiredFactText) {
       if (!_containsLoose(factText, requiredText)) {
         issues.add(GroundingValidationIssue(
@@ -296,7 +313,15 @@ class GroundingSnapshot {
         final evidenceStart = part.indexOf('（原文证据：');
         var text = part;
         var excerpt = '';
-        if (evidenceStart >= 0 && part.endsWith('）')) {
+        if (part.startsWith('原文证据：')) {
+          var evidenceBody = part.substring('原文证据：'.length).trim();
+          final genderStart = evidenceBody.lastIndexOf('（人物性别参考：');
+          if (genderStart >= 0 && evidenceBody.endsWith('）')) {
+            evidenceBody = evidenceBody.substring(0, genderStart).trim();
+          }
+          text = evidenceBody;
+          excerpt = evidenceBody;
+        } else if (evidenceStart >= 0 && part.endsWith('）')) {
           text = part.substring(0, evidenceStart).trim();
           excerpt = part
               .substring(evidenceStart + '（原文证据：'.length, part.length - 1)
@@ -348,6 +373,45 @@ class GroundingSnapshot {
       ));
     }
     return result;
+  }
+
+  static int _uniqueFactSourceCount(List<GroundingFactSnapshot> facts) {
+    final sources = <String>{};
+    for (final fact in facts) {
+      final url = fact.sourceUrl.trim().toLowerCase();
+      if (url.isNotEmpty) {
+        sources.add(url);
+        continue;
+      }
+      final title = fact.sourceTitle.trim().toLowerCase();
+      if (title.isNotEmpty) sources.add(title);
+    }
+    return sources.length;
+  }
+
+  static List<GroundingFactSnapshot> _dedupeFacts(
+    List<GroundingFactSnapshot> facts,
+  ) {
+    final result = <GroundingFactSnapshot>[];
+    final seen = <String>{};
+    for (final fact in facts) {
+      final key = _factIdentityKey(fact);
+      if (key.isEmpty || !seen.add(key)) continue;
+      result.add(fact);
+    }
+    return result;
+  }
+
+  static String _factIdentityKey(GroundingFactSnapshot fact) {
+    final source = fact.sourceUrl.trim().toLowerCase().isNotEmpty
+        ? fact.sourceUrl.trim().toLowerCase()
+        : fact.sourceTitle.trim().toLowerCase();
+    final evidence =
+        fact.sourceExcerpt.trim().isNotEmpty ? fact.sourceExcerpt : fact.text;
+    final textKey = _matchKey(fact.text);
+    final evidenceKey = _matchKey(evidence);
+    if (textKey.isEmpty || evidenceKey.isEmpty) return '';
+    return '$source::$textKey::$evidenceKey';
   }
 }
 
@@ -423,6 +487,8 @@ class GroundingTimelineSnapshot {
 
 class GroundingAcceptancePolicy {
   final int minimumFacts;
+  final int? maximumFacts;
+  final int minimumSources;
   final bool requireTimeline;
   final int maximumSearchApiCalls;
   final List<String> requiredSearchObjects;
@@ -432,6 +498,8 @@ class GroundingAcceptancePolicy {
 
   const GroundingAcceptancePolicy({
     this.minimumFacts = 1,
+    this.maximumFacts,
+    this.minimumSources = 0,
     this.requireTimeline = false,
     this.maximumSearchApiCalls = 3,
     this.requiredSearchObjects = const [],

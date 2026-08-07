@@ -348,8 +348,6 @@ bool _isSearchLog(String line) {
     '候选',
     '正文',
     '截取',
-    'Tavily',
-    'DuckDuckGo',
     '萌娘',
     '维基',
     '百度',

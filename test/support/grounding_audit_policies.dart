@@ -1,6 +1,23 @@
 import 'package:anime_chat_app/grounding_contract.dart';
 
 GroundingAcceptancePolicy groundingAuditPolicyFor(int index) {
+  const ordinaryQuestionPolicy = GroundingAcceptancePolicy(
+    minimumFacts: 3,
+    maximumFacts: 10,
+    maximumSearchApiCalls: 6,
+  );
+  const currentAffairsQuestionPolicy = GroundingAcceptancePolicy(
+    minimumFacts: 5,
+    maximumFacts: 10,
+    minimumSources: 3,
+    maximumSearchApiCalls: 6,
+  );
+  const noExternalInfoPolicy = GroundingAcceptancePolicy(
+    minimumFacts: 0,
+    maximumFacts: 0,
+    maximumSearchApiCalls: 0,
+  );
+
   return switch (index) {
     1 => const GroundingAcceptancePolicy(
         minimumFacts: 3,
@@ -57,21 +74,12 @@ GroundingAcceptancePolicy groundingAuditPolicyFor(int index) {
       ),
     10 => const GroundingAcceptancePolicy(
         minimumFacts: 1,
-        maximumSearchApiCalls: 3,
+        maximumSearchApiCalls: 6,
         requiredSearchObjects: ['KiLLKiSS'],
       ),
-    11 => const GroundingAcceptancePolicy(
-        minimumFacts: 1,
-        maximumSearchApiCalls: 2,
-      ),
-    12 => const GroundingAcceptancePolicy(
-        minimumFacts: 0,
-        maximumSearchApiCalls: 0,
-      ),
-    13 => const GroundingAcceptancePolicy(
-        minimumFacts: 1,
-        maximumSearchApiCalls: 2,
-      ),
+    11 => ordinaryQuestionPolicy,
+    12 => noExternalInfoPolicy,
+    13 => currentAffairsQuestionPolicy,
     _ => const GroundingAcceptancePolicy(),
   };
 }

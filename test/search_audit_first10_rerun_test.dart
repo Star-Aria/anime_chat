@@ -557,6 +557,7 @@ String _normalizeAuditLogLine(
       RegExp(r'^当前搜索层未满足，进入下一层:\s*([^，]+)，(.*)$').firstMatch(line);
   if (nextLayer != null) {
     final layer = _auditLayerLabel(nextLayer.group(1) ?? '');
+    if (!lastMethodByLayer.containsKey(layer)) return '';
     return '层级判断[$layer]: 未满足，进入下一层；${nextLayer.group(2)}';
   }
 
@@ -693,15 +694,28 @@ class _AuditRecord {
 
   List<String> get issues {
     final result = <String>[];
+    final isChineseCharacter =
+        CharacterConfig.getCharacterById(item.characterId).language == 'zh';
+    final policy = groundingAuditPolicyFor(item.index);
+    final expectsWebContext = policy.minimumFacts > 0 ||
+        policy.requireTimeline ||
+        policy.requiredSearchObjects.isNotEmpty ||
+        policy.requiredFactText.isNotEmpty ||
+        policy.orderedTimelineAnchors.isNotEmpty;
     if (error != null) result.add('运行异常');
-    if (webContext.trim().isEmpty) result.add('联网上下文为空');
+    if (webContext.trim().isEmpty && expectsWebContext) {
+      result.add('联网上下文为空');
+    }
     if (webContext.contains('【网页搜索失败】')) result.add('网页搜索失败');
-    if (japaneseAnswer.trim().isEmpty) result.add('日语回答为空');
+    if (!isChineseCharacter && japaneseAnswer.trim().isEmpty) {
+      result.add('日语回答为空');
+    }
     if (chineseAnswer.trim().isEmpty) result.add('中文回答为空');
-    if (_containsObviousChinese(japaneseAnswer)) {
+    if (!isChineseCharacter && _containsObviousChinese(japaneseAnswer)) {
       result.add('日语回答疑似残留中文');
     }
-    if (japaneseAnswer.trim().isNotEmpty &&
+    if (!isChineseCharacter &&
+        japaneseAnswer.trim().isNotEmpty &&
         !ApiService.isJapaneseStyleCompatible(
           japaneseAnswer,
           item.characterId,
@@ -728,7 +742,7 @@ class _AuditRecord {
         chineseAnswer: parsed.chineseAnswer,
       );
       for (final issue in snapshot.validate(
-        groundingAuditPolicyFor(item.index),
+        policy,
       )) {
         result.add(issue.message);
       }

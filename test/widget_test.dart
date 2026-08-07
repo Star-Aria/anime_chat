@@ -148,6 +148,41 @@ void main() {
 3. 后来在天台重新谈清楚（依据事实：#3）
 ''';
 
+    test('recovers malformed jsonish timeline output', () {
+      final promptText = WebContextService.parseDoubaoTimelineTextForTest(
+        content: '''
+{
+  "timeline": [
+    {
+      "text": "爱音在水族馆谈心",
+      "fact_indexes": [1]
+    },
+    {
+      "text": "灯在全班面前请求爱音回到乐队，追到天台上以"让我们一起迷失吧"说服爱音",
+      "fact_indexes": [2]
+    }
+  ],
+  "constraints": [
+    "不要把不连续事件直接拼接"
+  ]
+}
+''',
+        factTexts: const [
+          '在水族馆，爱音交代了留学失败的经历并自嘲又在逃避与失败，而灯则跑去拿了一张访客问卷在上面涂鸦，肯定了爱音的鼓励与坚持并鼓励爱音在迷茫中也要前进。',
+          '因此，次日灯在全班面前请求爱音回到乐队大声表白我需要爱音，追到天台上后以一句“让我们一起迷失吧”成功说服爱音。',
+        ],
+        sourceExcerpts: const [
+          '在水族馆，爱音交代了留学失败的经历并自嘲又在逃避与失败，而灯则跑去拿了一张访客问卷在上面涂鸦，肯定了爱音的鼓励与坚持并鼓励爱音在迷茫中也要前进。',
+          '因此，次日灯在全班面前请求爱音回到乐队大声表白我需要爱音，追到天台上后以一句“让我们一起迷失吧”成功说服爱音。',
+        ],
+      );
+
+      expect(promptText, isNotNull);
+      expect(promptText, contains('爱音在水族馆谈心'));
+      expect(promptText, contains('让我们一起迷失吧'));
+      expect(promptText, contains('不要把不连续事件直接拼接'));
+    });
+
     test('keeps natural text when references move forward', () {
       final parsed = ApiService.parseTimelineAnswerForTest(
         webContext: webContext,
@@ -275,6 +310,193 @@ void main() {
       );
 
       expect(parsed, '__JP_NAME_0__は拒否されました。');
+    });
+  });
+
+  group('Canon secondary search objects', () {
+    test('keeps a planned Latin work or group title needed by another ask', () {
+      final targets = WebContextService.canonSearchTargetsForTest(
+        userText: 'KILLKISS这首歌怎么样，你比较喜欢mujica的哪些歌？',
+        query: 'BanG Dream Ave Mujica KILLKiSS 丰川祥子看法',
+        characterId: 'sakiko',
+        characterName: '丰川祥子',
+        primaryObjects: const ['丰川祥子', 'KILLKiSS'],
+        secondaryObjects: const ['AveMujica'],
+      );
+
+      expect(targets, containsAll(['KILLKISS', '丰川祥子', 'AveMujica']));
+    });
+
+    test('still avoids treating an ordinary preference object as its page', () {
+      final targets = WebContextService.canonSearchTargetsForTest(
+        userText: '灯喜欢什么动物？',
+        query: 'BanG Dream 高松灯 喜欢的动物',
+        characterId: 'sakiko',
+        characterName: '丰川祥子',
+        primaryObjects: const ['高松灯'],
+        secondaryObjects: const ['企鹅'],
+      );
+
+      expect(targets, contains('高松灯'));
+      expect(targets, isNot(contains('企鹅')));
+    });
+
+    test('does not classify a song opinion as an event process', () {
+      expect(
+        WebContextService.isEventProcessCanonQuestionForTest(
+          '你觉得这首歌怎么样？',
+        ),
+        isFalse,
+      );
+      expect(
+        WebContextService.isEventProcessCanonQuestionForTest(
+          '你当时是如何支援他们的？',
+        ),
+        isTrue,
+      );
+    });
+
+    test('keeps P1 searches as separate clean objects', () {
+      final attempts = WebContextService.doubaoCanonAttemptQueriesForTest(
+        userText: 'KILLKISS怎么样，你比较喜欢mujica的哪些歌？',
+        characterId: 'sakiko',
+        characterName: '丰川祥子',
+        searchTargets: const ['KILLKISS', '丰川祥子', 'AveMujica'],
+      );
+      final p1Queries = attempts
+          .where((attempt) => attempt.startsWith('1:'))
+          .map((attempt) => attempt.substring(2))
+          .toList();
+
+      expect(p1Queries, ['KILLKISS', 'AveMujica']);
+      expect(p1Queries.any((query) => query.contains('KILLKISS Ave')), isFalse);
+    });
+
+    test('closes the Doubao search budget after six calls', () {
+      expect(
+        WebContextService.isDoubaoSearchBudgetAvailableForTest(5),
+        isTrue,
+      );
+      expect(
+        WebContextService.isDoubaoSearchBudgetAvailableForTest(6),
+        isFalse,
+      );
+    });
+
+    test('requires three source pages for current affairs stop condition', () {
+      expect(
+        WebContextService.textLooksLikeCurrentAffairsQuestionForTest(
+          '听说今年被称为“Agent元年”，姐姐怎么看',
+        ),
+        isTrue,
+      );
+      expect(
+        WebContextService.textLooksLikeCurrentAffairsQuestionForTest(
+          '我最近很喜欢看梦限大的番',
+        ),
+        isFalse,
+      );
+
+      final oneSourceFacts = [
+        for (var i = 1; i <= 5; i++)
+          {
+            'text': '事实$i',
+            'sourceTitle': '页面A',
+            'sourceUrl': 'https://example.com/a',
+            'sourceExcerpt': '事实$i',
+          },
+      ];
+      expect(
+        WebContextService.doubaoFactsMeetStopConditionForTest(
+          facts: oneSourceFacts,
+          factLimit: 10,
+          minimumFactTarget: 5,
+          minimumSourceTarget: 3,
+        ),
+        isFalse,
+      );
+
+      final threeSourceFacts = [
+        for (var i = 1; i <= 5; i++)
+          {
+            'text': '事实$i',
+            'sourceTitle': '页面${(i % 3) + 1}',
+            'sourceUrl': 'https://example.com/${(i % 3) + 1}',
+            'sourceExcerpt': '事实$i',
+          },
+      ];
+      expect(
+        WebContextService.doubaoFactsMeetStopConditionForTest(
+          facts: threeSourceFacts,
+          factLimit: 10,
+          minimumFactTarget: 5,
+          minimumSourceTarget: 3,
+        ),
+        isTrue,
+      );
+
+      final duplicateFacts = [
+        ...threeSourceFacts.take(4),
+        {
+          'text': '事实1',
+          'sourceTitle': '页面2',
+          'sourceUrl': 'https://example.com/2',
+          'sourceExcerpt': '事实1',
+        },
+      ];
+      expect(
+        WebContextService.doubaoFactsMeetStopConditionForTest(
+          facts: duplicateFacts,
+          factLimit: 10,
+          minimumFactTarget: 5,
+          minimumSourceTarget: 3,
+        ),
+        isFalse,
+      );
+    });
+  });
+
+  group('Raw source evidence handoff', () {
+    test('sends source text instead of the model summary', () {
+      final context = WebContextService.factContextTextForTest(
+        factText: '爱音带灯去了水族馆',
+        sourceExcerpt: '追上来的灯一把把爱音拉走。在水族馆，爱音交代了留学失败的经历。',
+      );
+
+      expect(context, startsWith('原文证据：追上来的灯一把把爱音拉走'));
+      expect(context, isNot(contains('爱音带灯去了水族馆')));
+    });
+
+    test('does not let a wrong summary ground a timeline node', () {
+      final grounded = WebContextService.timelineNodeGroundedForTest(
+        timelineText: '千早爱音去了水族馆。',
+        factText: '千早爱音去了水族馆。',
+        sourceExcerpt: '高松灯去了水族馆。',
+      );
+
+      expect(grounded, isFalse);
+    });
+
+    test('keeps an in-story Live event grounded by the source excerpt', () {
+      const evidence = '在水族馆，爱音交代了留学失败的经历，灯在访客问卷上涂鸦鼓励爱音，二人牵着手下定决心继续开Live。';
+      final grounded = WebContextService.timelineNodeGroundedForTest(
+        timelineText: evidence,
+        factText: '上游概括不参与校验',
+        sourceExcerpt: evidence,
+      );
+
+      expect(grounded, isTrue);
+    });
+
+    test('reports the exact reason for an unsupported timeline person', () {
+      final reason = WebContextService.timelineNodeGroundingFailureForTest(
+        timelineText: '千早爱音去了水族馆。',
+        factText: '千早爱音去了水族馆。',
+        sourceExcerpt: '高松灯去了水族馆。',
+      );
+
+      expect(reason, contains('千早爱音'));
+      expect(reason, contains('未出现在引用原文'));
     });
   });
 }

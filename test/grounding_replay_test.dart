@@ -62,6 +62,76 @@ void main() {
       expect(snapshot.timeline.first.factIndexes, [1]);
     });
 
+    test('parses a raw-evidence-only fact entry', () {
+      const context = '''
+【网页搜索摘要】
+搜索词：测试
+1. 页面：相关事实：原文证据：高松灯把千早爱音拉到水族馆。（人物性别参考：高松灯=女、千早爱音=女）（来源：https://example.com/a）
+''';
+      final snapshot = GroundingSnapshot.fromAudit(
+        logs: const [],
+        webContext: context,
+      );
+
+      expect(snapshot.facts, hasLength(1));
+      expect(snapshot.facts.single.text, '高松灯把千早爱音拉到水族馆。');
+      expect(snapshot.facts.single.sourceExcerpt, '高松灯把千早爱音拉到水族馆。');
+    });
+
+    test('current affairs policy requires three source pages', () {
+      const oneSourceContext = '''
+【网页搜索摘要】
+搜索词：测试
+1. 页面A：相关事实：原文证据：事实一。 / 原文证据：事实二。 / 原文证据：事实三。 / 原文证据：事实四。 / 原文证据：事实五。（来源：https://example.com/a）
+''';
+      final oneSourceSnapshot = GroundingSnapshot.fromAudit(
+        logs: const [],
+        webContext: oneSourceContext,
+      );
+      final oneSourceIssues = oneSourceSnapshot
+          .validate(groundingAuditPolicyFor(13))
+          .map((issue) => issue.code);
+
+      expect(oneSourceSnapshot.facts, hasLength(5));
+      expect(oneSourceIssues, contains('sources_too_few'));
+
+      const duplicateContext = '''
+【网页搜索摘要】
+搜索词：测试
+1. 页面A：相关事实：原文证据：事实一。 / 原文证据：事实二。（来源：https://example.com/a）
+2. 页面B：相关事实：原文证据：事实三。 / 原文证据：事实四。（来源：https://example.com/b）
+3. 页面C：相关事实：原文证据：事实一。（来源：https://example.com/a）
+''';
+      final duplicateSnapshot = GroundingSnapshot.fromAudit(
+        logs: const [],
+        webContext: duplicateContext,
+      );
+      final duplicateIssues = duplicateSnapshot
+          .validate(groundingAuditPolicyFor(13))
+          .map((issue) => issue.code);
+
+      expect(duplicateSnapshot.facts, hasLength(5));
+      expect(duplicateIssues, contains('facts_too_few'));
+
+      const threeSourceContext = '''
+【网页搜索摘要】
+搜索词：测试
+1. 页面A：相关事实：原文证据：事实一。 / 原文证据：事实二。（来源：https://example.com/a）
+2. 页面B：相关事实：原文证据：事实三。 / 原文证据：事实四。（来源：https://example.com/b）
+3. 页面C：相关事实：原文证据：事实五。（来源：https://example.com/c）
+''';
+      final threeSourceSnapshot = GroundingSnapshot.fromAudit(
+        logs: const [],
+        webContext: threeSourceContext,
+      );
+      final threeSourceIssues = threeSourceSnapshot
+          .validate(groundingAuditPolicyFor(13))
+          .map((issue) => issue.code);
+
+      expect(threeSourceSnapshot.facts, hasLength(5));
+      expect(threeSourceIssues, isNot(contains('sources_too_few')));
+    });
+
     test('rejects chronology regression inside the same extraction batch', () {
       const facts = [
         GroundingFactSnapshot(
