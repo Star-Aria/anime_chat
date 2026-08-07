@@ -31,7 +31,7 @@ class WebContextService {
   static const Duration _searchTimeout = Duration(seconds: 18);
   static const Duration _factExtractionTimeout = Duration(seconds: 90);
 
-  // 用 DeepSeek 做“是否需要联网”的智能判断。
+  // 用豆包做“是否需要联网”的智能判断。
   // 注意：这里不是正式聊天回复，只是让模型输出一小段 JSON 搜索计划。
   static const String _deepSeekApiKey = ApiKeys.deepseekApiKey;
   static const String _deepSeekModel = 'deepseek-v4-flash';
@@ -173,7 +173,7 @@ class WebContextService {
       characterName: characterName,
     );
 
-    // 先让 DeepSeek 判断这句话需不需要现实/原作资料。
+    // 先让搜索计划模型判断这句话需不需要现实/原作资料。
     // 这样可以覆盖很多关键词法抓不到的情况：
     // - “她后来怎么样了？” -> 可能需要原作剧情
     // - “你那边外面怎么样？” -> 可能需要天气
@@ -226,7 +226,7 @@ class WebContextService {
     }
 
     // 天气信息：
-    // 只有 DeepSeek 搜索计划认为这句话需要天气背景时才查。
+    // 只有搜索计划认为这句话需要天气背景时才查。
     // 比如“你那边外面怎么样？”没有“天气”二字，也可以触发。
     // 具体查询城市由 profile 控制：
     // - 鬼灭角色：用东京作为日本现实天气参考，但不会把东京暴露给角色回复
@@ -272,11 +272,14 @@ class WebContextService {
         debugPrint('原作搜索对象: ${canonSearchTargets.join(' -> ')}');
       }
       final executionSearchQuery = canonSearchTargets.isNotEmpty
+          ? canonSearchTargets.join(' / ')
+          : webSearchQuery;
+      final localProfileQuery = canonSearchTargets.isNotEmpty
           ? canonSearchTargets.first
           : webSearchQuery;
       final localProfileResults = plan.category == 'canon'
           ? _searchLocalCharacterProfile(
-              executionSearchQuery,
+              localProfileQuery,
               profile,
               userIntent: text,
             )
@@ -341,16 +344,17 @@ class WebContextService {
                 !result.startsWith(_doubaoTimelineResultPrefix) &&
                 !result.startsWith(_doubaoAnswerBasisResultPrefix))
             .toList();
+        final includeLocalProfileInWebSummary =
+            localProfileResults.isNotEmpty &&
+                plan.category == 'canon' &&
+                _queryAsksProfileTraits(text) &&
+                !_queryAsksMusicInfo(text);
         final mergedSummaryResults = <String>[
-          if (localProfileResults.isNotEmpty &&
-              plan.category == 'canon' &&
-              _queryAsksProfileTraits(text))
+          if (includeLocalProfileInWebSummary)
             ..._localProfileResultsAsSearchFacts(localProfileResults),
           ...searchResults,
         ];
-        if (localProfileResults.isNotEmpty &&
-            plan.category == 'canon' &&
-            _queryAsksProfileTraits(text)) {
+        if (includeLocalProfileInWebSummary) {
           sections.add('【角色设定资料】\n${localProfileResults.join('\n')}');
         }
         if (mergedSummaryResults.isNotEmpty) {
@@ -427,7 +431,7 @@ ${resolvedAnswerBasis == _answerBasisExplicitFact ? '''
   }
 
   // ========================================
-  // 智能搜索计划：先让 DeepSeek 判断“要不要查”
+  // 智能搜索计划：先让豆包判断“要不要查”
   // ========================================
   // 这是比关键词触发更自然的一层。
   //
@@ -438,7 +442,7 @@ ${resolvedAnswerBasis == _answerBasisExplicitFact ? '''
   // - “你那边外面怎么样？”
   // 这些句子没有明显关键词，但确实需要原作资料或现实天气。
   //
-  // 所以这里先调用一次 DeepSeek，让它输出一个 JSON 搜索计划。
+  // 所以这里先调用一次搜索计划模型，让它输出一个 JSON 搜索计划。
   // 然后本程序再按角色权限执行搜索。
   static Future<_SearchPlan> _buildSearchPlan(
     String text,
@@ -449,20 +453,27 @@ ${resolvedAnswerBasis == _answerBasisExplicitFact ? '''
         await _buildSearchPlanWithDoubao(text, profile, conversationHistory);
     if (llmPlan != null) {
       return await _applySemanticCanonGuard(
-        _applyProfileRules(llmPlan, text, profile),
+        _applyProfileRules(
+          llmPlan,
+          text,
+          profile,
+          allowImplicitCurrentAffairsSearch: false,
+        ),
         text,
         profile,
         conversationHistory,
+        allowLocalCanonRecovery: false,
       );
     }
 
-    // 如果豆包计划失败，比如网络错误、JSON 解析失败，就回退到旧的关键词规则。
+    // 如果豆包计划失败，比如网络错误、JSON 解析失败，就回退到本地关键词规则。
     // 这样最差也只是“没那么聪明”，不会让聊天直接坏掉。
     return await _applySemanticCanonGuard(
       _applyProfileRules(_keywordSearchPlan(text, profile), text, profile),
       text,
       profile,
       conversationHistory,
+      allowLocalCanonRecovery: true,
     );
   }
 
@@ -580,6 +591,7 @@ JSON 格式：
 }
 
 判断原则：
+0. 判定优先级：角色不应知道的现实世界信息优先于搜索需求。若问题需要现实运营、商业日程或现实活动资料才能回答，则不要搜索；这类信息不能因为包含作品内人物、乐队或组织名而改判成 canon。
 1. 如果用户问“你那边外面怎么样、冷不冷、下雨了吗、热吗”等，即使没说天气，也应该 weather=true。
 2. 如果用户问今天、最近、假期、节日、生日氛围等，festival=true。
 3. 如果用户问外面景色、季节感、花、树、发芽、落叶、红叶、樱花、紫藤、桂花、银杏等，phenology=true。单纯问“今天天气如何/冷不冷/热不热/下雨吗”时，weather=true 但 phenology=false。
@@ -589,19 +601,21 @@ JSON 格式：
 7. 如果当前角色范围不允许某类搜索，也仍然按“用户意图”填写 category；程序之后会二次过滤。
 8. query 要写成适合搜索引擎的中文关键词，不要太长；原作搜索时 query 只是兜底描述，真正搜索对象必须写进 primary_objects / secondary_objects。
 9. 经济、新闻、政策类问题如果用户没有指定年份，query 必须包含当前年份 ${now.year} 和“最新/近期”等词。
-10. 只要当前消息或最近对话涉及作品内事实，宁可 web_search=true、category="canon"，不要让聊天模型凭记忆回答。作品内事实包括人物、人物关系、乐队/组织/学校/店铺/地点、事件、台词、口头禅、喜好、食物、身份、职位、集数、剧情和设定。
-11. 如果用户是在问番剧、动画、漫画、电影、电视剧、书影音、角色、剧情、设定、歌曲、乐队、作品感想或“我最近在看什么”，不要判成 slang；这类优先 general 或 canon。
-12. 如果用户是在辨认一句短的、口语化的、像网络热词/流行说法的表达，即使没有明确写“什么意思”，也可以判 slang。
-13. 如果当前消息出现新对象，query 必须围绕新对象，不要沿用最近对话里的旧对象。
-14. 原作 query 必须包含用户真正询问的对象；不要因为当前聊天角色是 ${profile.characterName} 就把 ${profile.characterName} 放进 query，除非用户确实在问 ${profile.characterName} 本人。
-15. 如果问题围绕当前角色与另一个人物、地点或事件的作品内联系，query 优先写“被问到的具体对象 + 关系/事件 + 作品名”；当前角色名只能作为辅助词，不能重复出现。
-16. 原作搜索对象拆分规则：先解析用户真正询问的主要对象，再解析需要补充的次要对象；每个数组元素只能是一个干净对象名，不要把问题整句、作品名、感想、关系词或多个对象拼成一项。例如问“KiLLKiSS这首歌怎么样”时，主要对象是“KiLLKiSS”；问“灯喜欢什么动物”时，主要对象是“高松灯”；问“你当初在那田蜘蛛山如何支援”且当前角色就是被问者时，主要对象是当前角色。
-17. answer_requirements 只拆分用户实际需要回答的独立信息需求，不得在搜索前判断它是明确设定还是主观表达，也不要把寒暄、称呼或感想单独列成问项。
-18. direct_evidence_cues 只描述原文直接回答该问项时必须明确表达的关系或限定语，不得填写人物、招式、地点等答案，不得判断网页中是否存在答案。它用于读取网页后的命题核验；没有特殊限定时可以为空数组。
+10. 如果用户只是以当前角色视角问近况、心情、日常趣事、身边有没有好玩的事、想闲聊或撒娇，没有要求核实具体剧情、现实日期、新闻或政策，web_search=false，category="none"。
+11. 对二次元角色，现实中的三次元企划、商业运营或现实活动安排属于角色不应知道的信息，web_search=false，category="none"。如果用户明确问作品剧情中的事件经过，再按原作资料处理。不要把这类现实时间变动问题改写为“当前年份 + 近期 + 作品名”的搜索问项。
+12. 只要当前消息或最近对话涉及需要核实的作品内事实，宁可 web_search=true、category="canon"，不要让聊天模型凭记忆回答。作品内事实包括人物、人物关系、乐队/组织/学校/店铺/地点、事件、台词、口头禅、喜好、食物、身份、职位、集数、剧情和设定。
+13. 如果用户是在问番剧、动画、漫画、电影、电视剧、书影音、角色、剧情、设定、歌曲、乐队、作品感想或“我最近在看什么”，不要判成 slang；这类优先 general 或 canon。
+14. 如果用户是在辨认一句短的、口语化的、像网络热词/流行说法的表达，即使没有明确写“什么意思”，也可以判 slang。
+15. 如果当前消息出现新对象，query 必须围绕新对象，不要沿用最近对话里的旧对象。
+16. 原作 query 必须包含用户真正询问的对象；不要因为当前聊天角色是 ${profile.characterName} 就把 ${profile.characterName} 放进 query，除非用户确实在问 ${profile.characterName} 本人。
+17. 如果问题围绕当前角色与另一个人物、地点或事件的作品内联系，query 优先写“被问到的具体对象 + 关系/事件 + 作品名”；当前角色名只能作为辅助词，不能重复出现。
+18. 原作搜索对象拆分规则：先解析用户真正询问的主要对象，再解析需要补充的次要对象；每个数组元素只能是一个干净对象名，不要把问题整句、作品名、感想、关系词或多个对象拼成一项。例如问“KiLLKiSS这首歌怎么样”时，主要对象是“KiLLKiSS”；问“灯喜欢什么动物”时，主要对象是“高松灯”；问“你当初在那田蜘蛛山如何支援”且当前角色就是被问者时，主要对象是当前角色。
+19. answer_requirements 只拆分用户实际需要回答的独立信息需求，不得在搜索前判断它是明确设定还是主观表达，也不要把寒暄、称呼或感想单独列成问项。
+20. direct_evidence_cues 只描述原文直接回答该问项时必须明确表达的关系或限定语，不得填写人物、招式、地点等答案，不得判断网页中是否存在答案。它用于读取网页后的命题核验；没有特殊限定时可以为空数组。
 ''';
   }
 
-  // DeepSeek 有时会用 ```json 包起来。
+  // 搜索计划模型有时会用 ```json 包起来。
   // 这里从返回文本中抠出第一个 JSON 对象。
   static String? _extractJsonObject(String text) {
     final start = text.indexOf('{');
@@ -689,7 +703,7 @@ JSON 格式：
     }).join('\n');
   }
 
-  // 旧关键词方案：作为 DeepSeek 搜索计划失败时的兜底。
+  // 本地关键词方案：作为豆包搜索计划失败时的兜底。
   static _SearchPlan _keywordSearchPlan(String text, _WebProfile profile) {
     return _SearchPlan(
       includeWeather: _asksWeather(text),
@@ -707,17 +721,15 @@ JSON 格式：
     );
   }
 
-  // 二次过滤：无论 DeepSeek 怎么判断，最终都必须服从角色权限。
+  // 二次过滤：无论搜索计划模型怎么判断，最终都必须服从角色权限。
   // 这能避免“祥子去查股市”或“鬼灭角色去查现代热点”。
   static _SearchPlan _applyProfileRules(
-    _SearchPlan plan,
-    String text,
-    _WebProfile profile,
-  ) {
+      _SearchPlan plan, String text, _WebProfile profile,
+      {bool allowImplicitCurrentAffairsSearch = true}) {
     // 天气问题用“大模型判断 + 本地关键词”双保险。
     //
     // 原因：
-    // DeepSeek planner 偶尔会把“今天天气如何”这种很短的日常问句
+    // 搜索计划模型偶尔会把“今天天气如何”这种很短的日常问句
     // 当成普通寒暄，返回 weather=false。那样后面就完全不会查天气，
     // 角色只能按人设和想象发挥，很容易说出“雷雨/下雨”。
     //
@@ -759,6 +771,7 @@ JSON 格式：
     }
     if ((category == 'none' || category == 'general') &&
         searchQuery == null &&
+        allowImplicitCurrentAffairsSearch &&
         _textLooksLikeCurrentAffairsQuestion(text) &&
         _requiresAuthoritativeDoubaoSearch('general', profile)) {
       category = 'general';
@@ -860,7 +873,7 @@ JSON 格式：
     return filtered;
   }
 
-  // 把 DeepSeek 给出的搜索词再整理一下：
+  // 把搜索计划模型给出的搜索词再整理一下：
   // - 原作搜索一定加作品前缀，但不强塞当前聊天角色名
   // - 经济/新闻类加地区提示
   // - 如果模型没给 query，就用旧规则生成一个
@@ -903,7 +916,7 @@ JSON 格式：
 
     if (category == 'economy' || category == 'current') {
       // “最近/现在/今年”这类问题必须按运行时当前年份理解。
-      // DeepSeek planner 有时会受训练语料影响，把最近经济形势写成 2025。
+      // 搜索计划模型有时会受训练语料影响，把最近经济形势写成 2025。
       // 如果用户原话没有明确指定年份，就把搜索词里的旧年份替换成当前年份。
       if (!_userExplicitlyMentionedYear(text)) {
         trimmed = trimmed.replaceAll(RegExp(r'20\d{2}年?'), '').trim();
@@ -1254,15 +1267,14 @@ JSON 格式：
   //
   // 先用少量本地结构规则兜住明显的原作对象，再让 DeepSeek 做一次语义判断。
   // 这样第二轮追问或新提到的角色/地点/设定不必依赖手写角色名单。
-  static Future<_SearchPlan> _applySemanticCanonGuard(
-    _SearchPlan plan,
-    String text,
-    _WebProfile profile,
-    List<Message> conversationHistory,
-  ) async {
-    final localPlan =
-        _applyFollowUpRules(plan, text, profile, conversationHistory);
+  static Future<_SearchPlan> _applySemanticCanonGuard(_SearchPlan plan,
+      String text, _WebProfile profile, List<Message> conversationHistory,
+      {required bool allowLocalCanonRecovery}) async {
+    final localPlan = allowLocalCanonRecovery
+        ? _applyFollowUpRules(plan, text, profile, conversationHistory)
+        : plan;
     if (localPlan.hasAnyTask) return localPlan;
+    if (!allowLocalCanonRecovery) return localPlan;
 
     final guardPlan = await _buildCanonGuardPlanWithDeepSeek(
       text,
@@ -1382,12 +1394,13 @@ ${_recentHistoryForPlanner(conversationHistory)}
 }
 
 必须 canon_search=true 的情况：
-- 用户提到或追问作品内的人物、人物关系、乐队/组织/学校/店铺/地点、事件、台词、口头禅、喜好、食物、道具、身份、职位、集数、剧情和设定。
+- 用户提到或追问作品内已经发生的剧情、稳定设定或角色可合理知道的作品内事实，例如人物、人物关系、乐队/组织/学校/店铺/地点、事件、台词、口头禅、喜好、食物、道具、身份、职位、集数、剧情和设定。
 - 用户没有明确说作品名，但最近对话正在聊作品设定，而当前消息用“她/他/这个/那个/同学/那家店/那句话”等继续追问。
 - 当前问题只要回答错会造成角色、关系、归属、喜好、地点或剧情事实错误，就应该搜索。
 
 必须 canon_search=false 的情况：
 - 纯问候、闲聊感受、情绪陪伴、现实天气/节日/经济等非原作内容。
+- 用户询问现实运营、商业日程或现实活动安排时，即使问题里出现作品内角色、乐队或组织名，也不是原作事实；二次元角色不应通过联网知道这些三次元信息。
 
 query 规则：
 - 用当前作品名 + 当前消息里最核心的人物/地点/物品/事件 + 设定类型。
@@ -1454,7 +1467,8 @@ query 规则：
   ) {
     final seriesPrefix = _canonSeriesSearchPrefix(profile);
     final subject = _compactCanonSearchTerms(topic);
-    final focus = _canonFollowUpFocus(text, topic);
+    final currentTerms = _compactCanonSearchTerms(text);
+    final focus = currentTerms == text ? '原作 设定 剧情' : '$currentTerms 原作 设定 剧情';
     return '$seriesPrefix $subject $focus'
         .replaceAll(RegExp(r'\s+'), ' ')
         .trim();
@@ -1467,28 +1481,6 @@ query 规则：
     return profile.seriesName == '未分类'
         ? profile.characterName
         : profile.seriesName;
-  }
-
-  static String _canonFollowUpFocus(String text, String topic) {
-    if (RegExp(r'喜欢|爱吃|常吃|食物|面包|甜点|点心|零食|料理|饮料').hasMatch(text)) {
-      return '喜欢的食物 角色设定';
-    }
-    if (RegExp(r'地点|地方|店|学校|学园|商店街|家|住宅|面包房|烘焙坊|ライブハウス|场所').hasMatch(text)) {
-      return '地点 角色设定 剧情';
-    }
-    if (RegExp(r'独特|气质|雰囲気|氛围').hasMatch(text)) {
-      return '性格 气质 说话方式';
-    }
-    if (RegExp(r'什么意思|指什么|怎么理解').hasMatch(text)) {
-      return '台词 含义 角色性格';
-    }
-    if (RegExp(r'关系|羁绊|仲間|伙伴').hasMatch(text)) {
-      return '人物关系 伙伴 羁绊';
-    }
-    if (RegExp(r'为什么|原因').hasMatch(text)) {
-      return '原因 角色性格 剧情';
-    }
-    return '角色设定 性格';
   }
 
   static bool _looksLikeFollowUpQuestion(String text) {
@@ -1616,7 +1608,7 @@ query 规则：
   // 下面这些 _asksXXX 方法：判断用户这句话想问什么
   // ========================================
   // 这里是模型判定失败时的本地兜底。
-  // 主路径仍然由 DeepSeek planner / 原作事实守门员做语义判断。
+  // 主路径仍然由搜索计划模型 / 原作事实守门员做语义判断。
 
   // 判断是否和日期/节日有关。
   static bool _shouldMentionDateOrFestival(String text) {
@@ -3245,6 +3237,7 @@ ${location.name}：数据源 Open-Meteo；天气数据时间 $currentTime；当�
   static bool _isCleanCanonObjectQuery(String query) {
     final trimmed = query.trim();
     if (trimmed.isEmpty) return false;
+    if (_isExplicitCanonTitleTerm(trimmed)) return true;
     if (_isQuestionIntentTerm(trimmed)) return false;
     if (_canonQueryContextTerms.contains(trimmed.toLowerCase())) return false;
     if (RegExp(r'[？?。！!；;]').hasMatch(trimmed)) return false;
@@ -3438,27 +3431,46 @@ ${location.name}：数据源 Open-Meteo；天气数据时间 $currentTime；当�
   ) {
     final targets = <String>[];
     final asksCurrentCharacter = _asksAboutCurrentCharacterInCanon(userText);
+    final matchedNames = _matchedCanonNamesForSearch(
+      userText,
+      query,
+      profile,
+    );
+    final prioritizeKnownCharacters = _queryAsksProfileTraits(userText) &&
+        !asksCurrentCharacter &&
+        matchedNames.isNotEmpty;
 
-    void addTarget(String value) {
+    void addTarget(String value, {bool allowContextQualifier = true}) {
       final target = _normalizeCanonSearchObject(value, userText, profile);
       if (target.isEmpty) return;
+      if (!allowContextQualifier &&
+          _isContextOnlyCanonQualifierForProfileQuestion(target, profile)) {
+        return;
+      }
       final key = target.toLowerCase();
       if (targets.any((existing) => existing.toLowerCase() == key)) return;
       targets.add(target);
     }
 
+    if (prioritizeKnownCharacters) {
+      for (final name in matchedNames) {
+        addTarget(name);
+      }
+    }
     for (final title in _explicitCanonTitleTerms(userText, query)) {
-      addTarget(title);
+      addTarget(title, allowContextQualifier: !prioritizeKnownCharacters);
     }
     for (final object in plan.primarySearchObjects) {
-      addTarget(object);
+      addTarget(object, allowContextQualifier: !prioritizeKnownCharacters);
     }
-    for (final name in _matchedCanonNamesForSearch(userText, query, profile)) {
-      if (!asksCurrentCharacter &&
-          name.trim() == profile.characterName.trim()) {
-        continue;
+    if (!prioritizeKnownCharacters) {
+      for (final name in matchedNames) {
+        if (!asksCurrentCharacter &&
+            name.trim() == profile.characterName.trim()) {
+          continue;
+        }
+        addTarget(name);
       }
-      addTarget(name);
     }
     if (asksCurrentCharacter) {
       addTarget(profile.characterName);
@@ -3469,10 +3481,22 @@ ${location.name}：数据源 Open-Meteo；天气数据时间 $currentTime；当�
           !_isExplicitCanonTitleTerm(object)) {
         continue;
       }
-      addTarget(object);
+      addTarget(object, allowContextQualifier: !prioritizeKnownCharacters);
     }
 
     return targets.take(6).toList(growable: false);
+  }
+
+  static bool _isContextOnlyCanonQualifierForProfileQuestion(
+    String value,
+    _WebProfile profile,
+  ) {
+    if (_isKnownCanonCharacterSearchObject(value, profile)) return false;
+    final normalized = value.trim().toLowerCase();
+    if (normalized.isEmpty) return false;
+    if (_canonQueryContextTerms.contains(normalized)) return true;
+    if (_isExplicitCanonTitleTerm(value)) return true;
+    return RegExp(r'(?:乐队|学校|学园|学院|社团|组织)$').hasMatch(value);
   }
 
   @visibleForTesting
@@ -3505,6 +3529,73 @@ ${location.name}：数据源 Open-Meteo；天气数据时间 $currentTime；当�
     );
   }
 
+  @visibleForTesting
+  static Map<String, Object?> localSearchPlanSnapshotForTest({
+    required String userText,
+    required String characterId,
+    required String characterName,
+    List<Message> conversationHistory = const [],
+  }) {
+    final profile = _WebProfile.forCharacter(
+      characterId: characterId,
+      characterName: characterName,
+    );
+    final keywordPlan = _applyProfileRules(
+      _keywordSearchPlan(userText, profile),
+      userText,
+      profile,
+    );
+    final plan = _applyFollowUpRules(
+      keywordPlan,
+      userText,
+      profile,
+      conversationHistory,
+    );
+
+    return {
+      'hasAnyTask': plan.hasAnyTask,
+      'includeWeather': plan.includeWeather,
+      'includeFestivals': plan.includeFestivals,
+      'includePhenology': plan.includePhenology,
+      'searchQuery': plan.searchQuery ?? '',
+      'category': plan.category,
+    };
+  }
+
+  @visibleForTesting
+  static Map<String, Object?> simulatedPlannerNoSearchSnapshotForTest({
+    required String userText,
+    required String characterId,
+    required String characterName,
+  }) {
+    final profile = _WebProfile.forCharacter(
+      characterId: characterId,
+      characterName: characterName,
+    );
+    final plan = _applyProfileRules(
+      const _SearchPlan(
+        includeWeather: false,
+        weatherCity: null,
+        includeFestivals: false,
+        includePhenology: false,
+        searchQuery: null,
+        category: 'none',
+      ),
+      userText,
+      profile,
+      allowImplicitCurrentAffairsSearch: false,
+    );
+
+    return {
+      'hasAnyTask': plan.hasAnyTask,
+      'includeWeather': plan.includeWeather,
+      'includeFestivals': plan.includeFestivals,
+      'includePhenology': plan.includePhenology,
+      'searchQuery': plan.searchQuery ?? '',
+      'category': plan.category,
+    };
+  }
+
   static bool _isKnownCanonCharacterSearchObject(
     String value,
     _WebProfile profile,
@@ -3515,8 +3606,15 @@ ${location.name}：数据源 Open-Meteo；天气数据时间 $currentTime；当�
       return true;
     }
     return ApiService.canonicalChineseNamesForSearch(
-      characterId: profile.characterId,
-    ).any((name) => name.replaceAll(RegExp(r'\s+'), '') == target);
+          characterId: profile.characterId,
+        ).any((name) => name.replaceAll(RegExp(r'\s+'), '') == target) ||
+        ApiService.characterSearchAliasesForSearch(
+          characterId: profile.characterId,
+        ).entries.any(
+              (entry) =>
+                  entry.key.replaceAll(RegExp(r'\s+'), '') == target ||
+                  entry.value.replaceAll(RegExp(r'\s+'), '') == target,
+            );
   }
 
   static String _normalizeCanonSearchObject(
@@ -3588,6 +3686,16 @@ ${location.name}：数据源 Open-Meteo；天气数据时间 $currentTime；当�
     final pronunciationAliases = _uniquePronunciationCharacterAliases();
     final normalizedCorpus = ApiService.nameSearchMatchKey(corpus);
     for (final entry in pronunciationAliases.entries) {
+      final aliasKey = ApiService.nameSearchMatchKey(entry.key);
+      if (aliasKey.isNotEmpty && normalizedCorpus.contains(aliasKey)) {
+        add(entry.value);
+      }
+    }
+
+    final characterSearchAliases = ApiService.characterSearchAliasesForSearch(
+      characterId: profile.characterId,
+    );
+    for (final entry in characterSearchAliases.entries) {
       final aliasKey = ApiService.nameSearchMatchKey(entry.key);
       if (aliasKey.isNotEmpty && normalizedCorpus.contains(aliasKey)) {
         add(entry.value);
@@ -4872,6 +4980,14 @@ $rawResults
           .replaceAll(RegExp(r'_百度百科$'), '')
           .trim();
 
+      final knownTitles = _extractKnownMusicTitles(source);
+      if (knownTitles.isNotEmpty) {
+        final excerpt = knownTitles.map((match) => match.sourceText).join(' ');
+        final factText = '资料页面列出的曲目候选：'
+            '${knownTitles.map((match) => match.chineseTitle).join('、')}';
+        addFact(item, factText, excerpt);
+      }
+
       final introMatch = RegExp(
         r'([^。！？.!?]{0,80}(?:歌曲|乐队|樂隊|演唱|曲名|成员|Members|debuted with the song|热门歌曲)[^。！？.!?]{0,160})',
         caseSensitive: false,
@@ -4906,6 +5022,52 @@ $rawResults
       discardReason: facts.isEmpty ? '未能从搜索结果中提取曲目信息' : '',
       provider: provider,
     );
+  }
+
+  static List<_MusicTitleMatch> _extractKnownMusicTitles(String text) {
+    if (text.trim().isEmpty) return const [];
+    final matches = <_MusicTitleMatch>[];
+
+    for (final entry in termNamePronunciations) {
+      final variants = <String>{
+        entry.chinese,
+        entry.japanese,
+        entry.compactJapanese,
+        entry.reading,
+        ...entry.aliases.keys,
+      }.where((value) => value.trim().isNotEmpty).toList()
+        ..sort((a, b) => b.length.compareTo(a.length));
+
+      for (final variant in variants) {
+        var start = 0;
+        while (true) {
+          final index = text.indexOf(variant, start);
+          if (index < 0) break;
+          matches.add(_MusicTitleMatch(
+            chineseTitle: entry.chinese,
+            sourceText: variant,
+            index: index,
+            length: variant.length,
+          ));
+          start = index + variant.length;
+        }
+      }
+    }
+
+    if (matches.isEmpty) return const [];
+    matches.sort((a, b) {
+      final indexCompare = a.index.compareTo(b.index);
+      if (indexCompare != 0) return indexCompare;
+      return b.length.compareTo(a.length);
+    });
+
+    final seen = <String>{};
+    final ordered = <_MusicTitleMatch>[];
+    for (final match in matches) {
+      if (!seen.add(match.chineseTitle)) continue;
+      ordered.add(match);
+    }
+    return ordered;
   }
 
   static _DoubaoGroundedFact _attachFallbackSourceIfUnambiguous(
@@ -6224,34 +6386,32 @@ URL：${item.url}
       }
     }
     for (final fact in source) {
-      for (final expandedFact in _expandCompoundDoubaoFact(fact)) {
-        final identityKey = _doubaoFactIdentityKey(expandedFact);
-        final textAndSourceKey = _doubaoFactTextAndSourceKey(expandedFact);
-        if (identityKey.isEmpty && textAndSourceKey.isEmpty) continue;
-        final existingIndex = indexesByIdentity[identityKey] ??
-            indexesByTextAndSource[textAndSourceKey];
-        if (existingIndex != null) {
-          target[existingIndex] = _mergeDoubaoDuplicateFact(
-            target[existingIndex],
-            expandedFact,
-          );
-          if (identityKey.isNotEmpty) {
-            indexesByIdentity[identityKey] = existingIndex;
-          }
-          if (textAndSourceKey.isNotEmpty) {
-            indexesByTextAndSource[textAndSourceKey] = existingIndex;
-          }
-          continue;
-        }
-        target.add(expandedFact);
+      final identityKey = _doubaoFactIdentityKey(fact);
+      final textAndSourceKey = _doubaoFactTextAndSourceKey(fact);
+      if (identityKey.isEmpty && textAndSourceKey.isEmpty) continue;
+      final existingIndex = indexesByIdentity[identityKey] ??
+          indexesByTextAndSource[textAndSourceKey];
+      if (existingIndex != null) {
+        target[existingIndex] = _mergeDoubaoDuplicateFact(
+          target[existingIndex],
+          fact,
+        );
         if (identityKey.isNotEmpty) {
-          indexesByIdentity[identityKey] = target.length - 1;
+          indexesByIdentity[identityKey] = existingIndex;
         }
         if (textAndSourceKey.isNotEmpty) {
-          indexesByTextAndSource[textAndSourceKey] = target.length - 1;
+          indexesByTextAndSource[textAndSourceKey] = existingIndex;
         }
-        if (target.length >= maxFacts) return;
+        continue;
       }
+      target.add(fact);
+      if (identityKey.isNotEmpty) {
+        indexesByIdentity[identityKey] = target.length - 1;
+      }
+      if (textAndSourceKey.isNotEmpty) {
+        indexesByTextAndSource[textAndSourceKey] = target.length - 1;
+      }
+      if (target.length >= maxFacts) return;
     }
   }
 
@@ -6308,59 +6468,6 @@ URL：${item.url}
           ? existing.chronologyScope
           : duplicate.chronologyScope,
     );
-  }
-
-  static List<_DoubaoGroundedFact> _expandCompoundDoubaoFact(
-    _DoubaoGroundedFact fact,
-  ) {
-    final text = fact.text.replaceAll(RegExp(r'\s+'), ' ').trim();
-    if (text.runes.length < 24) return [fact];
-    if (!RegExp(r'[，；;]|并|随后|接着').hasMatch(text)) return [fact];
-
-    final rawParts = text
-        .split(RegExp(r'\s*(?:[，；;]|并|随后|接着)\s*'))
-        .map((part) => part.trim())
-        .where((part) => part.runes.length >= 4)
-        .toList(growable: false);
-    if (rawParts.length < 2) return [fact];
-
-    final subject = _leadingFactSubject(text);
-    final expanded = <_DoubaoGroundedFact>[];
-    for (final rawPart in rawParts) {
-      var part = rawPart;
-      if (subject.isNotEmpty && !_factPartStartsWithSubject(part)) {
-        part = '$subject$part';
-      }
-      part = _normalizeExtractedFactText(part);
-      if (part.runes.length < 4 || !_looksLikeActionFactPart(part)) continue;
-      expanded.add(fact.copyWith(text: part));
-    }
-
-    if (expanded.length < 2) return [fact];
-    return expanded;
-  }
-
-  static String _leadingFactSubject(String text) {
-    final match = RegExp(
-      r'^([^，。；;]{1,24}?)(?:受|跟随|在|用|利用|指挥|偶遇|识破|救出|前往|将|收到|返回|意图|发现|打倒|击败|救下)',
-    ).firstMatch(text);
-    final subject = match?.group(1)?.trim() ?? '';
-    if (subject.isEmpty || subject.contains('：') || subject.contains('事实')) {
-      return '';
-    }
-    return subject;
-  }
-
-  static bool _factPartStartsWithSubject(String text) {
-    return RegExp(
-            r'^(?:[一-龥ぁ-ゖァ-ヺA-Za-z0-9·・]{1,16})(?:受|跟随|在|用|利用|指挥|偶遇|识破|救出|前往|将|收到|返回|意图|发现|打倒|击败|救下)')
-        .hasMatch(text);
-  }
-
-  static bool _looksLikeActionFactPart(String text) {
-    return RegExp(
-            r'受|跟随|在.+(?:遇|发现)|用|利用|指挥|偶遇|识破|救出|前往|将|收到|返回|意图|发现|打倒|击败|救下')
-        .hasMatch(text);
   }
 
   static Future<List<String>> _formatDoubaoFactsWithTimeline(
@@ -9419,7 +9526,7 @@ class _WebProfile {
       return '【角色联网范围】只使用日本天气、大正时期已存在的日本民俗/季节行事和《鬼灭之刃》原作/剧情资料。天气查询地点只是现实数据参考，不代表原作角色所在地。';
     }
     if (seriesName == 'BanG Dream') {
-      return '【角色联网范围】使用东京天气、现代日本非政治节日/行事、国际节日、网络流行语、书影音和 BanG Dream/Ave Mujica 相关资料。';
+      return '【角色联网范围】使用东京天气、现代日本非政治节日/行事、国际节日、网络流行语、书影音和 BanG Dream/Ave Mujica 的作品内资料。不得使用现实企划、商业运营、现实活动安排或官方运营日程等三次元信息。';
     }
     if (seriesName == '欢乐颂') {
       return '【角色联网范围】使用上海天气、中国节日、国际节日、经济金融、书影音、网络热点和《欢乐颂》相关资料。角色表达偏理性克制，对年轻人娱乐和二次元流行语不要默认她非常熟，但也不要把她写成完全不懂。';
@@ -9615,6 +9722,20 @@ class _SnippetWindow {
     required this.text,
     required this.score,
     required this.index,
+  });
+}
+
+class _MusicTitleMatch {
+  final String chineseTitle;
+  final String sourceText;
+  final int index;
+  final int length;
+
+  const _MusicTitleMatch({
+    required this.chineseTitle,
+    required this.sourceText,
+    required this.index,
+    required this.length,
   });
 }
 

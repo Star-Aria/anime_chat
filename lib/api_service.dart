@@ -36,85 +36,123 @@ class ApiService {
   //   存在的意义是：宁可让 AI 随便说一句日语兜底，也绝不能把中文塞给 TTS（GPT-SoVITS）
   //   导致语音乱掉、字幕也是中文。如果想换文案，改这里即可，但必须是纯日语。
   static const int _maxTranslationRetries = 2;
-  static const List<_NameEntry> _nameEntries = [
-    _NameEntry(japanese: 'お館様', chinese: '主公大人'),
-    _NameEntry(japanese: '蝶屋敷', chinese: '蝶屋'),
-    _NameEntry(japanese: '刀鍛冶の里', chinese: '锻刀村'),
-    _NameEntry(japanese: 'あのちゃん', chinese: '爱音酱'),
-    _NameEntry(japanese: '祥ちゃん', chinese: '小祥'),
-    _NameEntry(japanese: '睦ちゃん', chinese: '小睦'),
-    _NameEntry(japanese: 'そよりん', chinese: '爽世世'),
-    _NameEntry(japanese: 'ともりん', chinese: '灯灯'),
-    _NameEntry(japanese: 'にゃむち', chinese: '喵梦亲'),
-    _NameEntry(japanese: 'ミッシェル', chinese: '米歇尔'),
-  ];
 
-  static const Map<String, Map<String, String>> _fixedCharacterCallNameMap = {
-    'sakiko': {
-      '高松灯': '燈',
-      '长崎爽世': 'そよ',
-      '若叶睦': '睦',
-      '三角初音': '初音',
-      '八幡海铃': '海鈴',
-      '祐天寺若麦': 'にゃむ',
-      '千早爱音': '愛音さん',
-      '椎名立希': '立希',
-      '要乐奈': '楽奈さん',
-      '纯田真奈': 'まなさん',
-    },
-    'tomori': {
-      '丰川祥子': '祥ちゃん',
-      '长崎爽世': 'そよちゃん',
-      '千早爱音': 'あのちゃん',
-      '椎名立希': '立希ちゃん',
-      '要乐奈': '楽奈ちゃん',
-      '若叶睦': '睦ちゃん',
-      '三角初华': '初華ちゃん',
-      '三角初音': '初華ちゃん',
-    },
-    'shinobu': {
-      '栗花落香奈乎': 'カナヲ',
-      '灶门炭治郎': '炭治郎くん',
-      '灶门祢豆子': '禰豆子さん',
-      '我妻善逸': '善逸くん',
-      '嘴平伊之助': '伊之助くん',
-      '富冈义勇': '冨岡さん',
-      '悲鸣屿行冥': '悲鳴嶼さん',
-      '不死川实弥': '不死川さん',
-      '伊黑小芭内': '伊黒さん',
-      '甘露寺蜜璃': '甘露寺さん',
-      '宇髄天元': '宇髄さん',
-      '炼狱杏寿郎': '煉獄さん',
-      '时透无一郎': '時透さん',
-    },
-    'muichirou': {
-      '灶门炭治郎': '炭治郎',
-      '灶门祢豆子': '禰豆子',
-      '我妻善逸': '善逸',
-      '嘴平伊之助': '伊之助',
-      '富冈义勇': '冨岡さん',
-      '蝴蝶忍': '胡蝶さん',
-      '悲鸣屿行冥': '悲鳴嶼さん',
-      '不死川实弥': '不死川さん',
-      '伊黑小芭内': '伊黒さん',
-      '甘露寺蜜璃': '甘露寺さん',
-      '宇髄天元': '宇髄さん',
-      '炼狱杏寿郎': '煉獄さん',
-    },
-    'giyu': {
-      '灶门炭治郎': '炭治郎',
-      '灶门祢豆子': '禰豆子',
-      '我妻善逸': '善逸',
-      '嘴平伊之助': '伊之助',
-      '蝴蝶忍': '胡蝶',
-      '悲鸣屿行冥': '悲鳴嶼',
-      '不死川实弥': '不死川',
-      '伊黑小芭内': '伊黒',
-      '甘露寺蜜璃': '甘露寺',
-      '宇髄天元': '宇髄',
-      '炼狱杏寿郎': '煉獄',
-      '时透无一郎': '時透',
-    },
+  static const Map<String, List<_CharacterCallName>>
+      _fixedCharacterCallNameEntries = {
+    'sakiko': [
+      _CharacterCallName('高松灯', '灯', '燈'),
+      _CharacterCallName('长崎爽世', '爽世', 'そよ'),
+      _CharacterCallName('若叶睦', '睦', '睦'),
+      _CharacterCallName('三角初音', '初音', '初音'),
+      _CharacterCallName('八幡海铃', '海铃', '海鈴'),
+      _CharacterCallName('祐天寺若麦', '若麦', 'にゃむ'),
+      _CharacterCallName('千早爱音', '爱音同学', '愛音さん'),
+      _CharacterCallName('椎名立希', '立希', '立希'),
+      _CharacterCallName('要乐奈', '乐奈同学', '楽奈さん'),
+      _CharacterCallName('纯田真奈', '真奈同学', 'まなさん'),
+    ],
+    'tomori': [
+      _CharacterCallName('丰川祥子', '小祥', '祥ちゃん'),
+      _CharacterCallName('长崎爽世', '爽世酱', 'そよちゃん'),
+      _CharacterCallName('千早爱音', '小爱', 'あのちゃん'),
+      _CharacterCallName('椎名立希', '立希酱', '立希ちゃん'),
+      _CharacterCallName('要乐奈', '乐奈酱', '楽奈ちゃん'),
+      _CharacterCallName('若叶睦', '小睦', '睦ちゃん'),
+      _CharacterCallName('三角初华', '初华酱', '初華ちゃん'),
+      _CharacterCallName('三角初音', '初华酱', '初華ちゃん'),
+    ],
+    'shinobu': [
+      _CharacterCallName('栗花落香奈乎', '香奈乎', 'カナヲ'),
+      _CharacterCallName('灶门炭治郎', '炭治郎君', '炭治郎くん'),
+      _CharacterCallName('灶门祢豆子', '祢豆子小姐', '禰豆子さん'),
+      _CharacterCallName('我妻善逸', '善逸君', '善逸くん'),
+      _CharacterCallName('嘴平伊之助', '伊之助君', '伊之助くん'),
+      _CharacterCallName('富冈义勇', '富冈先生', '冨岡さん'),
+      _CharacterCallName('悲鸣屿行冥', '悲鸣屿先生', '悲鳴嶼さん'),
+      _CharacterCallName('不死川实弥', '不死川先生', '不死川さん'),
+      _CharacterCallName('伊黑小芭内', '伊黑先生', '伊黒さん'),
+      _CharacterCallName('甘露寺蜜璃', '甘露寺小姐', '甘露寺さん'),
+      _CharacterCallName('宇髄天元', '宇髄先生', '宇髄さん'),
+      _CharacterCallName('炼狱杏寿郎', '炼狱先生', '煉獄さん'),
+      _CharacterCallName('时透无一郎', '时透君', '時透くん'),
+      _CharacterCallName('产屋敷耀哉', '主公大人', 'お館様'),
+    ],
+    'muichirou': [
+      _CharacterCallName('灶门炭治郎', '炭治郎', '炭治郎'),
+      _CharacterCallName('灶门祢豆子', '祢豆子', '禰豆子'),
+      _CharacterCallName('我妻善逸', '善逸', '善逸'),
+      _CharacterCallName('嘴平伊之助', '伊之助', '伊之助'),
+      _CharacterCallName('富冈义勇', '富冈先生', '冨岡さん'),
+      _CharacterCallName('蝴蝶忍', '蝴蝶小姐', '胡蝶さん'),
+      _CharacterCallName('悲鸣屿行冥', '悲鸣屿先生', '悲鳴嶼さん'),
+      _CharacterCallName('不死川实弥', '不死川先生', '不死川さん'),
+      _CharacterCallName('伊黑小芭内', '伊黑先生', '伊黒さん'),
+      _CharacterCallName('甘露寺蜜璃', '甘露寺小姐', '甘露寺さん'),
+      _CharacterCallName('宇髄天元', '宇髄先生', '宇髄さん'),
+      _CharacterCallName('炼狱杏寿郎', '炼狱先生', '煉獄さん'),
+      _CharacterCallName('产屋敷耀哉', '主公大人', 'お館様'),
+    ],
+    'giyu': [
+      _CharacterCallName('灶门炭治郎', '炭治郎', '炭治郎'),
+      _CharacterCallName('灶门祢豆子', '祢豆子', '禰豆子'),
+      _CharacterCallName('我妻善逸', '善逸', '善逸'),
+      _CharacterCallName('嘴平伊之助', '伊之助', '伊之助'),
+      _CharacterCallName('蝴蝶忍', '蝴蝶', '胡蝶'),
+      _CharacterCallName('悲鸣屿行冥', '悲鸣屿', '悲鳴嶼'),
+      _CharacterCallName('不死川实弥', '不死川', '不死川'),
+      _CharacterCallName('伊黑小芭内', '伊黑', '伊黒'),
+      _CharacterCallName('甘露寺蜜璃', '甘露寺', '甘露寺'),
+      _CharacterCallName('宇髄天元', '宇髄', '宇髄'),
+      _CharacterCallName('炼狱杏寿郎', '炼狱', '煉獄'),
+      _CharacterCallName('时透无一郎', '时透', '時透'),
+      _CharacterCallName('产屋敷耀哉', '主公大人', 'お館様'),
+    ],
+  };
+
+  static Map<String, Map<String, String>> get _fixedCharacterCallNameMap => {
+        for (final entry in _fixedCharacterCallNameEntries.entries)
+          entry.key: {
+            for (final callName in entry.value)
+              callName.fullName: callName.japaneseCallName,
+          },
+      };
+
+  static Map<String, Map<String, String>>
+      get _fixedCharacterChineseCallNameMap => {
+            for (final entry in _fixedCharacterCallNameEntries.entries)
+              entry.key: {
+                for (final callName in entry.value)
+                  callName.fullName: callName.chineseCallName,
+              },
+          };
+
+  static const Map<String, _CharacterSpeechNameProfile>
+      _characterSpeechNameProfiles = {
+    'shinobu': _CharacterSpeechNameProfile(
+      chineseSelfPronoun: '我',
+      japaneseSelfPronoun: '私',
+      forbiddenJapaneseSelfPronouns: ['俺', 'オレ', 'おれ', '僕', 'ぼく'],
+    ),
+    'muichirou': _CharacterSpeechNameProfile(
+      chineseSelfPronoun: '我',
+      japaneseSelfPronoun: '僕',
+      forbiddenJapaneseSelfPronouns: ['俺', 'オレ', 'おれ', '私', 'わたし'],
+    ),
+    'giyu': _CharacterSpeechNameProfile(
+      chineseSelfPronoun: '我',
+      japaneseSelfPronoun: '俺',
+      forbiddenJapaneseSelfPronouns: ['僕', 'ぼく', '私', 'わたし'],
+    ),
+    'sakiko': _CharacterSpeechNameProfile(
+      chineseSelfPronoun: '我',
+      japaneseSelfPronoun: '私',
+      forbiddenJapaneseSelfPronouns: ['俺', 'オレ', 'おれ', '僕', 'ぼく'],
+    ),
+    'tomori': _CharacterSpeechNameProfile(
+      chineseSelfPronoun: '我',
+      japaneseSelfPronoun: '私',
+      forbiddenJapaneseSelfPronouns: ['俺', 'オレ', 'おれ', '僕', 'ぼく'],
+    ),
   };
 
   static List<String> canonicalChineseNamesForSearch({String? characterId}) {
@@ -137,11 +175,30 @@ class ApiService {
         add(alias);
       }
     }
-    for (final entry in _nameEntries) {
-      add(entry.chinese);
+    for (final name in canonTermNamesForSearch) {
+      add(name);
     }
 
     return names;
+  }
+
+  static Map<String, String> characterSearchAliasesForSearch({
+    String? characterId,
+  }) {
+    final aliases = <String, String>{};
+    void add(String alias, String target) {
+      final source = alias.trim();
+      final compactTarget = target.replaceAll(RegExp(r'[\s　]+'), '').trim();
+      if (source.length < 2 || compactTarget.length < 2) return;
+      aliases.putIfAbsent(source, () => compactTarget);
+    }
+
+    for (final entry in characterNamePronunciations) {
+      for (final alias in entry.searchAliases) {
+        add(alias, entry.chinese);
+      }
+    }
+    return Map.unmodifiable(aliases);
   }
 
   static Map<String, String> fixedCharacterCallNamesForCharacter(
@@ -159,9 +216,11 @@ class ApiService {
     final configured =
         characterId == null ? null : _fixedCharacterCallNameMap[characterId];
     if (configured == null) return const {};
+    final configuredChinese = _fixedCharacterChineseCallNameMap[characterId];
     return Map.unmodifiable({
       for (final entry in configured.entries)
-        entry.key: _callNameChineseTarget(entry.key, entry.value),
+        entry.key: configuredChinese?[entry.key] ??
+            _callNameChineseTarget(entry.key, entry.value),
     });
   }
 
@@ -171,9 +230,14 @@ class ApiService {
     String? characterId,
   }) {
     final fixedCallNames = fixedCharacterCallNamesForCharacter(characterId);
+    final fixedChineseCallNames = _fixedCharacterChineseCallNames(
+      fixedCallNames,
+      characterId: characterId,
+    );
     final protectedText = _protectMappedNamesForJapaneseTranslation(
       chineseText,
       fixedCharacterCallNames: fixedCallNames,
+      fixedChineseCallNames: fixedChineseCallNames,
     );
     final restored = _restoreProtectedMappedNames(
       protectedText.text,
@@ -182,6 +246,7 @@ class ApiService {
     return _applyFixedCharacterCallNames(
       _applyStandardJapaneseNameSpellings(restored),
       fixedCallNames,
+      fixedChineseCallNames,
     );
   }
 
@@ -198,19 +263,28 @@ class ApiService {
       addLine(entry.japanese, entry.chinese);
       addLine(entry.compactJapanese, entry.chinese);
       addLine(entry.reading, entry.chinese);
-      for (final alias in entry.aliases.keys) {
-        addLine(alias, entry.chinese);
+      for (final alias in entry.aliases.entries) {
+        addLine(
+          alias.key,
+          _preservesCharacterAliasDisplay(alias.key)
+              ? alias.key
+              : entry.chinese,
+        );
       }
       for (final alias in entry.chineseAliases) {
         addLine(alias, entry.chinese);
       }
     }
-    for (final entry in _nameEntries) {
-      void add(String source) {
-        addLine(source, entry.chinese);
+    for (final entry in termNamePronunciations) {
+      addLine(entry.japanese, entry.chinese);
+      addLine(entry.compactJapanese, entry.chinese);
+      addLine(entry.reading, entry.chinese);
+      for (final variant in entry.romanizedReadingVariants) {
+        addLine(variant, entry.chinese);
       }
-
-      add(entry.japanese);
+      for (final alias in entry.aliases.keys) {
+        addLine(alias, entry.chinese);
+      }
     }
     return lines;
   }
@@ -222,16 +296,25 @@ class ApiService {
         entry.japanese,
         entry.compactJapanese,
         entry.reading,
-        ...entry.aliases.keys,
+        for (final alias in entry.aliases.keys)
+          if (!_preservesCharacterAliasDisplay(alias)) alias,
         ...entry.chineseAliases,
       }) {
         if (source.isEmpty || source == entry.chinese) continue;
         result = result.replaceAll(source, entry.chinese);
       }
     }
-    for (final entry in _nameEntries) {
-      if (entry.japanese != entry.chinese) {
-        result = result.replaceAll(entry.japanese, entry.chinese);
+    for (final entry in termNamePronunciations) {
+      for (final source in {
+        entry.japanese,
+        entry.compactJapanese,
+        entry.reading,
+        ...entry.romanizedReadingVariants,
+        for (final alias in entry.aliases.keys)
+          if (!entry.japanese.contains(alias)) alias,
+      }) {
+        if (source.isEmpty || source == entry.chinese) continue;
+        result = result.replaceAll(source, entry.chinese);
       }
     }
     return result;
@@ -239,6 +322,10 @@ class ApiService {
 
   static String nameSearchMatchKey(String text) {
     return _cjkLooseMatchKey(text).replaceAll(RegExp(r'[\s　]+'), '');
+  }
+
+  static bool _preservesCharacterAliasDisplay(String alias) {
+    return RegExp(r'[A-Za-z]').hasMatch(alias);
   }
 
   static String _genderHintsForTranslationPrompt(String? webContext) {
@@ -321,8 +408,10 @@ class ApiService {
         characterPersonality,
         characterId: characterId,
       );
-      final fixedChineseCallNames =
-          _fixedCharacterChineseCallNames(fixedCharacterCallNames);
+      final fixedChineseCallNames = _fixedCharacterChineseCallNames(
+        fixedCharacterCallNames,
+        characterId: characterId,
+      );
 
       if (timeContext != null && timeContext.isNotEmpty) {
         systemBuffer.writeln();
@@ -374,7 +463,15 @@ class ApiService {
       // 第一阶段始终生成中文角色回答。事实、时间线和人设保持同一语言，
       // 先确定“说什么”，日语角色再在第二阶段独立处理表达。
       systemBuffer.writeln();
-      systemBuffer.write('【语言要求】请全程用自然地道的中文回复，不要使用日语或其他语言。');
+      systemBuffer.write('【语言要求】请全程用自然地道的中文回复，不要使用日语或其他语言。'
+          '称呼用户时使用自然亲近的“你”，不要使用“您”。'
+          '整体使用现代口语聊天表达，不要使用偏文言或过度书面化的连接词。');
+      final chineseSpeechNameInstruction =
+          _chineseSpeechNameInstruction(characterId);
+      if (chineseSpeechNameInstruction.isNotEmpty) {
+        systemBuffer.writeln();
+        systemBuffer.write(chineseSpeechNameInstruction);
+      }
       if (fixedChineseCallNames.isNotEmpty) {
         systemBuffer.writeln();
         systemBuffer.write('【人物的称呼】提到以下人物时，必须使用指定的中文称呼，'
@@ -612,6 +709,13 @@ class ApiService {
         );
       }
 
+      rawResponseText = _applyFixedChineseCallNames(
+        rawResponseText,
+        fixedChineseCallNames,
+      );
+      rawResponseText = normalizeKnownNamesForChineseText(rawResponseText);
+      rawResponseText = _normalizeChineseConversationWording(rawResponseText);
+
       // ========================================
       // 中文角色：直接返回中文回复，跳过日语相关流程
       // ========================================
@@ -635,6 +739,7 @@ class ApiService {
           exactUserName: exactUserName,
           translatedUserName: translatedUserName,
           fixedCharacterCallNames: fixedCharacterCallNames,
+          fixedChineseCallNames: fixedChineseCallNames,
           webContext: webContext,
           isRetry: attempt > 1,
         );
@@ -1318,41 +1423,65 @@ $responseShapeReminder
   static String _applyFixedCharacterCallNames(
     String text,
     Map<String, String> fixedCharacterCallNames,
+    Map<String, String> fixedChineseCallNames,
   ) {
     if (text.isEmpty || fixedCharacterCallNames.isEmpty) return text;
 
     var result = text;
-    final entries = fixedCharacterCallNames.entries.toList()
+    final entries = fixedChineseCallNames.entries.toList()
       ..sort((a, b) => b.key.length.compareTo(a.key.length));
 
     for (final entry in entries) {
-      final displayName = entry.key.trim();
-      final callName = entry.value.trim();
-      if (displayName.isEmpty || callName.isEmpty) continue;
+      final chineseCallName = entry.value.trim();
+      final callName = fixedCharacterCallNames[entry.key]?.trim() ?? '';
+      if (chineseCallName.isEmpty || callName.isEmpty) continue;
+      final protectedFullNames = <String>{
+        entry.key.trim(),
+        _applyStandardJapaneseNameSpellings(entry.key.trim()),
+      }.where((value) => value.isNotEmpty).toSet();
 
       final variants = <String>{
-        displayName,
-        _applyStandardJapaneseNameSpellings(displayName),
-        _callNameChineseTarget(displayName, callName),
+        chineseCallName,
+        _applyStandardJapaneseNameSpellings(chineseCallName),
       }.where((value) => value.isNotEmpty && value != callName).toList()
         ..sort((a, b) => b.length.compareTo(a.length));
 
       for (final variant in variants) {
         for (final suffix in _knownJapaneseHonorifics) {
-          result = result.replaceAll('$variant$suffix', callName);
+          result = _replaceCallNameVariant(
+            result,
+            '$variant$suffix',
+            callName,
+            protectedFullNames,
+          );
         }
-        result = _replaceNameTerm(result, variant, callName);
+        result = _replaceCallNameVariant(
+          result,
+          variant,
+          callName,
+          protectedFullNames,
+        );
       }
 
       if (_endsWithKnownHonorific(callName)) {
         for (final suffix in _knownJapaneseHonorifics) {
           if (callName.endsWith(suffix)) {
-            result = result.replaceAll('$callName$suffix', callName);
+            result = _replaceCallNameVariant(
+              result,
+              '$callName$suffix',
+              callName,
+              protectedFullNames,
+            );
           }
         }
       } else {
         for (final suffix in _knownJapaneseHonorifics) {
-          result = result.replaceAll('$callName$suffix', callName);
+          result = _replaceCallNameVariant(
+            result,
+            '$callName$suffix',
+            callName,
+            protectedFullNames,
+          );
         }
       }
     }
@@ -1405,11 +1534,36 @@ $responseShapeReminder
     return result;
   }
 
+  static String _normalizeChineseConversationWording(String text) {
+    return text.replaceAll('您', '你').replaceAll('若是', '要是');
+  }
+
+  @visibleForTesting
+  static String normalizeChineseConversationWordingForTest(String text) {
+    return _normalizeChineseConversationWording(text);
+  }
+
+  static String _chineseSpeechNameInstruction(String? characterId) {
+    final profile = _characterSpeechNameProfiles[characterId];
+    if (profile == null) return '';
+    return '【角色自称与用户称呼】角色提到自己时使用“${profile.chineseSelfPronoun}”。'
+        '称呼用户时使用“你”，不要使用“您”。';
+  }
+
+  static String _japaneseSelfPronounInstruction(String? characterId) {
+    final profile = _characterSpeechNameProfiles[characterId];
+    if (profile == null) return '';
+    return '中国語原文の「${profile.chineseSelfPronoun}」が話者自身を指す場合、'
+        '日本語では必ず「${profile.japaneseSelfPronoun}」として訳してください。'
+        '「${profile.forbiddenJapaneseSelfPronouns.join('」「')}」は使わないでください。';
+  }
+
   static _ProtectedTranslationText _protectMappedNamesForJapaneseTranslation(
     String text, {
     String? exactUserName,
     String? translatedUserName,
     Map<String, String> fixedCharacterCallNames = const {},
+    Map<String, String> fixedChineseCallNames = const {},
   }) {
     var protectedText = text;
     final placeholders = <String, String>{};
@@ -1422,16 +1576,16 @@ $responseShapeReminder
       }
     }
 
-    for (final entry in fixedCharacterCallNames.entries) {
+    for (final entry in fixedChineseCallNames.entries) {
       final displayName = entry.key.trim();
-      final japaneseCallName = entry.value.trim();
-      if (displayName.isEmpty || japaneseCallName.isEmpty) continue;
-      nameMap[displayName] = japaneseCallName;
-      final chineseCallName =
-          _callNameChineseTarget(displayName, japaneseCallName);
-      if (chineseCallName.isNotEmpty) {
-        nameMap[chineseCallName] = japaneseCallName;
+      final chineseCallName = entry.value.trim();
+      final japaneseCallName = fixedCharacterCallNames[displayName]?.trim();
+      if (chineseCallName.isEmpty ||
+          japaneseCallName == null ||
+          japaneseCallName.isEmpty) {
+        continue;
       }
+      nameMap[chineseCallName] = japaneseCallName;
     }
 
     for (final entry in _chineseToJapaneseNameMap().entries) {
@@ -1514,6 +1668,57 @@ $responseShapeReminder
     return changed ? buffer.toString() : text;
   }
 
+  static String _replaceCallNameVariant(
+    String text,
+    String source,
+    String target,
+    Set<String> protectedFullNames,
+  ) {
+    if (source.isEmpty || source == target) return text;
+    if (source.runes.length == 1) {
+      return _replaceNameTerm(text, source, target);
+    }
+    final buffer = StringBuffer();
+    var changed = false;
+    var index = 0;
+    while (index < text.length) {
+      if (!text.startsWith(source, index) ||
+          _isProtectedFullNameSuffix(
+            text,
+            index,
+            source,
+            protectedFullNames,
+          )) {
+        buffer.write(text[index]);
+        index += 1;
+        continue;
+      }
+
+      buffer.write(target);
+      changed = true;
+      index += source.length;
+    }
+    return changed ? buffer.toString() : text;
+  }
+
+  static bool _isProtectedFullNameSuffix(
+    String text,
+    int start,
+    String source,
+    Set<String> protectedFullNames,
+  ) {
+    for (final fullName in protectedFullNames) {
+      if (!fullName.endsWith(source) || fullName.length <= source.length) {
+        continue;
+      }
+      final fullStart = start - (fullName.length - source.length);
+      if (fullStart >= 0 && text.startsWith(fullName, fullStart)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   static bool _isStandaloneSingleCharacterName(List<int> runes, int index) {
     final previous = index > 0 ? String.fromCharCode(runes[index - 1]) : '';
     final next =
@@ -1539,31 +1744,71 @@ $responseShapeReminder
     final result = <String, String>{};
     for (final entry in characterNamePronunciations) {
       result[entry.chinese] = entry.compactJapanese;
+      result[entry.chinese.replaceAll(RegExp(r'[\s　]+'), '')] =
+          entry.compactJapanese;
       for (final alias in entry.chineseAliases) {
         result[alias] = entry.compactJapanese;
+        result[alias.replaceAll(RegExp(r'[\s　]+'), '')] = entry.compactJapanese;
       }
-      for (final alias in entry.aliases.keys) {
-        result[alias] = entry.compactJapanese;
+      for (final alias in entry.aliases.entries) {
+        result[alias.key] = _characterAliasJapaneseDisplay(
+          alias.key,
+          alias.value,
+          entry,
+        );
       }
     }
-    for (final entry in _nameEntries) {
+    for (final entry in termNamePronunciations) {
       result[entry.chinese] = entry.japanese;
+      result[entry.chinese.replaceAll(RegExp(r'[\s　]+'), '')] = entry.japanese;
+      for (final alias in entry.aliases.keys) {
+        if (entry.japanese.contains(alias)) continue;
+        result[alias] = entry.japanese;
+      }
     }
     return result;
   }
 
-  static Map<String, String> _fixedCharacterChineseCallNames(
-    Map<String, String> fixedCharacterCallNames,
+  static String _characterAliasJapaneseDisplay(
+    String alias,
+    String aliasReading,
+    CharacterNamePronunciation entry,
   ) {
+    final trimmedAlias = alias.trim();
+    if (_preservesCharacterAliasDisplay(trimmedAlias)) return trimmedAlias;
+    final trimmedReading = aliasReading.trim();
+    if (trimmedReading.isNotEmpty) return trimmedReading;
+    return entry.compactJapanese;
+  }
+
+  static Map<String, String> _fixedCharacterChineseCallNames(
+    Map<String, String> fixedCharacterCallNames, {
+    String? characterId,
+  }) {
     final result = <String, String>{};
+    final configuredChinese = characterId == null
+        ? null
+        : _fixedCharacterChineseCallNameMap[characterId];
     for (final entry in fixedCharacterCallNames.entries) {
       final displayName = entry.key.trim();
       final callName = entry.value.trim();
       if (displayName.isEmpty || callName.isEmpty) continue;
-      final chineseCallName = _callNameChineseTarget(displayName, callName);
+      final chineseCallName = configuredChinese?[displayName] ??
+          _callNameChineseTarget(displayName, callName);
       if (chineseCallName.isNotEmpty) {
         result[displayName] = chineseCallName;
       }
+    }
+    return result;
+  }
+
+  static String _applyFixedChineseCallNames(
+    String text,
+    Map<String, String> fixedChineseCallNames,
+  ) {
+    var result = text;
+    for (final entry in fixedChineseCallNames.entries) {
+      result = _replaceNameTerm(result, entry.key, entry.value);
     }
     return result;
   }
@@ -1596,17 +1841,46 @@ $responseShapeReminder
     final callKey = _cjkLooseMatchKey(bareCallName);
     String baseTarget;
 
-    if (callKey.isNotEmpty && displayKey.startsWith(callKey)) {
+    if (_containsKana(bareCallName)) {
+      baseTarget = _knownChineseGivenName(displayName) ?? displayName;
+    } else if (callKey.isNotEmpty && displayKey.startsWith(callKey)) {
       baseTarget = _takeRunes(displayName, targetLength, fromEnd: false);
     } else if (callKey.isNotEmpty && displayKey.endsWith(callKey)) {
-      baseTarget = _takeRunes(displayName, targetLength, fromEnd: true);
-    } else if (_containsKana(bareCallName)) {
       baseTarget = _takeRunes(displayName, targetLength, fromEnd: true);
     } else {
       baseTarget = displayName;
     }
 
     return '$baseTarget$suffixTranslation';
+  }
+
+  static String? _knownChineseGivenName(String displayName) {
+    final displayKey = displayName.replaceAll(RegExp(r'[\s　]+'), '');
+    for (final entry in characterNamePronunciations) {
+      final chinese = entry.chinese.trim();
+      if (chinese.isEmpty) continue;
+      final compactChinese = chinese.replaceAll(RegExp(r'[\s　]+'), '');
+      if (displayKey != compactChinese &&
+          !entry.chineseAliases
+              .map((alias) => alias.replaceAll(RegExp(r'[\s　]+'), ''))
+              .contains(displayKey)) {
+        continue;
+      }
+
+      final explicitParts = chinese.split(RegExp(r'[\s　]+'));
+      if (explicitParts.length >= 2 && explicitParts.last.trim().isNotEmpty) {
+        return explicitParts.last.trim();
+      }
+
+      final japaneseParts = entry.japanese.trim().split(RegExp(r'[\s　]+'));
+      if (japaneseParts.length < 2) return null;
+      final surnameLength = japaneseParts.first.runes.length;
+      if (compactChinese.runes.length <= surnameLength) return null;
+      return String.fromCharCodes(
+        compactChinese.runes.skip(surnameLength),
+      );
+    }
+    return null;
   }
 
   static String _takeRunes(
@@ -1657,7 +1931,8 @@ $responseShapeReminder
   }
 
   static String _japaneseTranslationStyle(String? characterId) {
-    return switch (characterId) {
+    final selfPronounRule = _japaneseSelfPronounInstruction(characterId);
+    final baseStyle = switch (characterId) {
       'shinobu' =>
         '胡蝶しのぶらしい、柔らかく上品で落ち着いた丁寧語を使ってください。基本は「です・ます」調とし、乱暴または過度にくだけた語尾にしないでください。',
       'sakiko' =>
@@ -1667,6 +1942,7 @@ $responseShapeReminder
       'tomori' => '高松燈らしい、素朴で柔らかく、少しためらいのある自然な話し方にしてください。強気で流暢すぎる表現にしないでください。',
       _ => '原文の人物らしい一人称、丁寧さ、語尾と感情の強さを保ってください。',
     };
+    return selfPronounRule.isEmpty ? baseStyle : '$baseStyle$selfPronounRule';
   }
 
   static String _japaneseFallbackTextForCharacter(String? characterId) {
@@ -1699,7 +1975,7 @@ $responseShapeReminder
   }
 
   // ========================================
-  // 日语判定（新增）
+  // 日语判定
   // ========================================
   // 判断文本是否「像日语」：只要含至少一个平假名（ぁ-ゖ）或片假名（ァ-ヺ），就视为日语。
   // 原因：
@@ -1733,55 +2009,55 @@ $responseShapeReminder
     String? characterId,
   ) {
     if (!isJapaneseStyleCompatible(text, characterId)) return false;
-    if (characterId == 'sakiko' || characterId == 'shinobu') {
-      if (!_hasConsistentPoliteSentenceEndings(text)) return false;
-    }
-    if (characterId != 'sakiko') return true;
-
-    final clauses = _japaneseValidationClauses(text);
-    if (clauses.length < 4) return true;
-    return RegExp(r'ですわ|ますわ|ですの|ませんの|ですこと').hasMatch(text);
-  }
-
-  static bool _hasConsistentPoliteSentenceEndings(String text) {
-    final sentences = text
-        .split(RegExp(r'[。！？!?]+'))
-        .map((part) => part.trim())
-        .where((part) => part.isNotEmpty)
-        .toList();
-    if (sentences.length <= 2) return true;
-
-    final politeSentences = sentences.where((sentence) {
-      return RegExp(
-        r'(?:です|ます|ません|でした|ました|でしょう|ございます|ですわ|ますわ|ですの|ませんの|ですこと)(?:ね|よ|か|わ)?$',
-      ).hasMatch(sentence);
-    }).length;
-    return politeSentences * 4 >= sentences.length * 3;
+    return true;
   }
 
   static bool isJapaneseStyleCompatible(String text, String? characterId) {
     if (text.trim().isEmpty) return false;
+    if (!_hasAllowedJapaneseSelfPronoun(text, characterId)) return false;
     if (characterId != 'sakiko' && characterId != 'shinobu') return true;
 
     final clauses = _japaneseValidationClauses(text);
     if (clauses.isEmpty) return false;
-    final politeClauses = clauses.where((clause) {
-      return RegExp(
-        r'(?:です|ます|ません|でした|ました|でしょう|ございます|ですわ|ますわ|ですの)(?:ね|よ|か|わ)?$',
-      ).hasMatch(clause);
-    }).length;
     final stronglyCasualClauses = clauses.where((clause) {
       return RegExp(r'(?:だよ|だね|なんだ|なんだよ|だろ|じゃん)$').hasMatch(clause);
     }).length;
-    final minimumPoliteClauses = clauses.length <= 3 ? 1 : 2;
-    if (politeClauses < minimumPoliteClauses || stronglyCasualClauses > 1) {
-      return false;
+    return stronglyCasualClauses <= 1;
+  }
+
+  static bool _hasAllowedJapaneseSelfPronoun(
+    String text,
+    String? characterId,
+  ) {
+    final profile = _characterSpeechNameProfiles[characterId];
+    if (profile == null) return true;
+    return !profile.forbiddenJapaneseSelfPronouns.any(
+      (pronoun) => _containsJapaneseSelfPronoun(text, pronoun),
+    );
+  }
+
+  static bool _containsJapaneseSelfPronoun(String text, String pronoun) {
+    if (pronoun == '私') {
+      return RegExp(r'私(?=$|[はもがのにをへでと、。！？\s]|自身|たち|達)').hasMatch(text);
     }
-    return true;
+    return text.contains(pronoun);
   }
 
   static bool _containsChineseResidueInJapanese(String text) {
+    if (_containsChineseOnlyParenthetical(text)) return true;
     return _japaneseValidationClauses(text).any(_isStructurallyChineseClause);
+  }
+
+  static bool _containsChineseOnlyParenthetical(String text) {
+    final parentheticalPattern = RegExp(r'[（(]([^（）()]{1,40})[）)]');
+    for (final match in parentheticalPattern.allMatches(text)) {
+      final content = (match.group(1) ?? '').trim();
+      if (content.isEmpty) continue;
+      final kanaCount = _countPattern(content, RegExp(r'[\u3040-\u30ffー]'));
+      final hanCount = _countPattern(content, RegExp(r'[\u4e00-\u9fff]'));
+      if (kanaCount == 0 && hanCount >= 4) return true;
+    }
+    return false;
   }
 
   static List<String> _japaneseValidationClauses(String text) {
@@ -1823,6 +2099,7 @@ $responseShapeReminder
     required String? exactUserName,
     required String? translatedUserName,
     required Map<String, String> fixedCharacterCallNames,
+    required Map<String, String> fixedChineseCallNames,
     required String? webContext,
     required bool isRetry,
   }) async {
@@ -1832,6 +2109,7 @@ $responseShapeReminder
         exactUserName: exactUserName,
         translatedUserName: translatedUserName,
         fixedCharacterCallNames: fixedCharacterCallNames,
+        fixedChineseCallNames: fixedChineseCallNames,
       );
       final sourceUnits = _splitChineseTranslationUnits(protectedText.text);
       if (sourceUnits.isEmpty) return '';
@@ -1845,6 +2123,38 @@ $responseShapeReminder
             {'source_index': i + 1, 'text': sourceUnits[i]},
         ],
       });
+      final systemPrompt = isRetry
+          ? '你是负责角色台词的中译日翻译器。\n'
+              '输入是已经确定内容和角色性的中文回答。你的任务不是复述、润色中文或解释，而是把每个 source_index 的 text 翻译成自然日语。\n'
+              '\n'
+              '硬性规则：\n'
+              '1. 只输出这个 JSON 对象：{"translations":[{"source_index":1,"text":"日本語訳"}]}。不要代码块，不要说明。\n'
+              '2. 每个输入 source_index 必须对应一个译文，数量、顺序、source_index 必须完全一致；不要跨句移动、合并或拆分。\n'
+              '3. text 里只能写日语。严禁保留中文原句、中文动作描写、中文标点说明或“翻译如下”等前置语。\n'
+              '4. 如果原文包含中文括号动作，例如“（轻轻点头）”，必须翻成日语括号动作，例如“（そっと頷いて）”。\n'
+              '5. 原文里的 __JP_NAME_0__ 这类占位符必须在同一个 source_index 的译文里原样保留，一个字符也不能改，不能移动到别的句子。\n'
+              '6. 事实范围、动作主体、对象、主动/被动、因果关系和完成程度必须保持一致。\n'
+              '7. 必须包含平假名或片假名，写成日本语母语者日常会话里自然会说的句子。\n'
+              '8. $genderHints'
+              '9. 角色语体要求：${_japaneseTranslationStyle(characterId)}\n'
+              '10. 输出前逐项检查：是否仍有中文残留；是否每个 source_index 都完成了真正的日语翻译。\n'
+          : 'あなたはキャラクター会話の中日翻訳者です。\n'
+              '入力は内容とキャラクター性を確定済みの中国語返答です。'
+              '日本語話者が日常会話で自然に話す文章として翻訳してください。\n'
+              '\n'
+              '厳守事項:\n'
+              '1. 次の形の JSON オブジェクトだけを出力すること: '
+              '{"translations":[{"source_index":1,"text":"日本語訳"}]}。コードブロックや説明を付けない。\n'
+              '2. 入力の各 source_index に対して翻訳を一つだけ出し、件数と順序を完全に一致させる。文を別の index に移動、結合、分割しない。\n'
+              '3. text は日本語だけにし、中国語の語句、説明、注釈、前置きを残さない。\n'
+              '4. 各文の事実範囲、動作主、対象、能動・受動、因果関係、完了の程度を変えない。自然な日本語にするための語順変更はよいが、誰が誰に何をしたかを変えない。\n'
+              '5. 元の文にある __JP_NAME_0__ のような占位符は、その同じ index の訳文に一文字も変えず残す。別の文へ移さない。\n'
+              '6. 元のテキストに括弧書きの動作や表情がある場合は、削除せず自然な日本語にして括弧内に残す。\n'
+              '7. 必ず平仮名または片仮名を含む自然な日本語にし、中国語の漢字語を字形だけで残さない。\n'
+              '8. $genderHints'
+              '9. ${_japaneseTranslationStyle(characterId)}\n'
+              '10. 出力前に各 source_index の原文と訳文を一対一で照合し、主語と能動・受動が一致しているか確認する。\n'
+              '$retryInstruction';
       final response = await http.post(
         Uri.parse('$deepSeekBaseUrl/chat/completions'),
         headers: {
@@ -1857,23 +2167,7 @@ $responseShapeReminder
           'messages': [
             {
               'role': 'system',
-              'content': 'あなたはキャラクター会話の中日翻訳者です。\n'
-                  '入力は内容とキャラクター性を確定済みの中国語返答です。'
-                  '日本語話者が日常会話で自然に話す文章として翻訳してください。\n'
-                  '\n'
-                  '厳守事項:\n'
-                  '1. 次の形の JSON オブジェクトだけを出力すること: '
-                  '{"translations":[{"source_index":1,"text":"日本語訳"}]}。コードブロックや説明を付けない。\n'
-                  '2. 入力の各 source_index に対して翻訳を一つだけ出し、件数と順序を完全に一致させる。文を別の index に移動、結合、分割しない。\n'
-                  '3. text は日本語だけにし、中国語の語句、説明、注釈、前置きを残さない。\n'
-                  '4. 各文の事実範囲、動作主、対象、能動・受動、因果関係、完了の程度を変えない。自然な日本語にするための語順変更はよいが、誰が誰に何をしたかを変えない。\n'
-                  '5. 元の文にある __JP_NAME_0__ のような占位符は、その同じ index の訳文に一文字も変えず残す。別の文へ移さない。\n'
-                  '6. 元のテキストに括弧書きの動作や表情がある場合は、削除せず自然な日本語にして括弧内に残す。\n'
-                  '7. 必ず平仮名または片仮名を含む自然な日本語にし、中国語の漢字語を字形だけで残さない。\n'
-                  '8. $genderHints'
-                  '9. ${_japaneseTranslationStyle(characterId)}\n'
-                  '10. 出力前に各 source_index の原文と訳文を一対一で照合し、主語と能動・受動が一致しているか確認する。\n'
-                  '$retryInstruction',
+              'content': systemPrompt,
             },
             {
               'role': 'user',
@@ -1906,7 +2200,11 @@ $responseShapeReminder
         result = _sanitizeUserNameHonorifics(result, exactUserName);
         result =
             _applyStandardJapaneseNameSpellings(_removeRubyReadings(result));
-        result = _applyFixedCharacterCallNames(result, fixedCharacterCallNames);
+        result = _applyFixedCharacterCallNames(
+          result,
+          fixedCharacterCallNames,
+          fixedChineseCallNames,
+        );
         return result.trim();
       } else {
         debugPrint('日文转换 API 错误: ${response.statusCode}');
@@ -2287,12 +2585,26 @@ class _ProtectedTranslationText {
   });
 }
 
-class _NameEntry {
-  final String japanese;
-  final String chinese;
+class _CharacterCallName {
+  final String fullName;
+  final String chineseCallName;
+  final String japaneseCallName;
 
-  const _NameEntry({
-    required this.japanese,
-    required this.chinese,
+  const _CharacterCallName(
+    this.fullName,
+    this.chineseCallName,
+    this.japaneseCallName,
+  );
+}
+
+class _CharacterSpeechNameProfile {
+  final String chineseSelfPronoun;
+  final String japaneseSelfPronoun;
+  final List<String> forbiddenJapaneseSelfPronouns;
+
+  const _CharacterSpeechNameProfile({
+    required this.chineseSelfPronoun,
+    required this.japaneseSelfPronoun,
+    required this.forbiddenJapaneseSelfPronouns,
   });
 }

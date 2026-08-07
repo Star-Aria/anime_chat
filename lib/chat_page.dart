@@ -216,9 +216,9 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
   String? _personalityOverride;
   String? _userNameOverride;
   String? _userNameTranslationOverride;
-  String? _userNamePronunciation; // 新增：缓存用户的称呼读音
+  String? _userNamePronunciation; // 缓存用户的称呼读音
 
-  bool _showOriginal = true; // 新增：是否显示日文原文
+  bool _showOriginal = true; // 是否显示日文原文
   bool _showTranslation = true;
 
   bool _emotionAnalysisEnabled = true;

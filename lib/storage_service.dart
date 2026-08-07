@@ -61,12 +61,12 @@ class Message {
   final String role; // 'user' 或 'assistant'
   final String content;
   final DateTime timestamp;
-  final String? audioPath; // 单段音频缓存路径（旧版字段，保留兼容性，指向第一段）
-  final List<String>? audioPaths; // 情绪化 TTS 的多段音频路径列表（新增）
+  final String? audioPath; // 单段音频缓存路径（兼容字段，指向第一段）
+  final List<String>? audioPaths; // 情绪化 TTS 的多段音频路径列表
   // 列表顺序与句子切分顺序一一对应
   // 播放时按顺序逐段播放，实现句子级别的情绪化语音
-  final String? imagePath; // 用户发送的图片本地路径（单张，旧版兼容字段）
-  final List<String>? imagePaths; // 用户一次性发送的多张图片路径列表（新增）
+  final String? imagePath; // 用户发送的图片本地路径（单张兼容字段）
+  final List<String>? imagePaths; // 用户一次性发送的多张图片路径列表
   final String? imageDescription; // 豆包视觉模型对图片的描述（发给 AI 时用，不显示给用户）
 
   Message({

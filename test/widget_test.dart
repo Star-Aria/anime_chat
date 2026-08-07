@@ -53,14 +53,35 @@ void main() {
         '愛音さんと燈は、互いを支えてきた関係です。最初は不安もありました。それでも、二人は向き合いました。大切なことだと思います。',
         'sakiko',
       ),
-      isFalse,
+      isTrue,
     );
     expect(
       ApiService.isJapaneseTranslationStyleCompatible(
         'ええ、伺っておりますわ。愛音さんは燈を誘いました。燈は一度拒んでしまった。その後、二人は向き合いました。愛音さんは戻った。大切な関係です。',
         'sakiko',
       ),
-      isFalse,
+      isTrue,
+    );
+    expect(
+      ApiService.isJapaneseTranslationStyleCompatible(
+        '最近は、少しお話しできることがあります。にゃむが練習中に動画を撮って、海鈴が休憩中にマカロンを食べているところまで映ってしまいました。いつも冷静な海鈴が、珍しく慌てていましたね。',
+        'sakiko',
+      ),
+      isTrue,
+    );
+    expect(
+      ApiService.isJapaneseTranslationStyleCompatible(
+        '（そっと手にした紅茶を置いて）最近、確かに新しい公演を準備しておりますの。ただ、具体的な詳細はあまりお話しできませんわ。何と言っても神秘感を保つことが大切ですものね。',
+        'sakiko',
+      ),
+      isTrue,
+    );
+    expect(
+      ApiService.isJapaneseTranslationStyleCompatible(
+        '（微かに口元をほころばせて）最近、面白いことが一つありましたの。にゃむが練習中にうっかりドラムスティックを投げ飛ばしてしまい、ちょうど海鈴のベースに当たったんです。彼女はずっとそれが意図的な即興演奏だと言っていますが、あのような慌てた様子は、珍しいものです。',
+        'sakiko',
+      ),
+      isTrue,
     );
   });
 
@@ -81,17 +102,78 @@ void main() {
     );
   });
 
+  test('Japanese style gate keeps per-character self pronouns', () {
+    expect(
+      ApiService.isJapaneseStyleCompatible(
+        'うん、疲れてない。僕も一緒に座ってる。',
+        'muichirou',
+      ),
+      isTrue,
+    );
+    expect(
+      ApiService.isJapaneseStyleCompatible(
+        'うん、疲れてない。俺も一緒に座ってる。',
+        'muichirou',
+      ),
+      isFalse,
+    );
+    expect(
+      ApiService.isJapaneseStyleCompatible(
+        'うん、疲れてない。私は一緒に座ってる。',
+        'muichirou',
+      ),
+      isFalse,
+    );
+    expect(
+      ApiService.isJapaneseStyleCompatible(
+        '俺には特に何もない。',
+        'giyu',
+      ),
+      isTrue,
+    );
+    expect(
+      ApiService.isJapaneseStyleCompatible(
+        '僕には特に何もない。',
+        'giyu',
+      ),
+      isFalse,
+    );
+    expect(
+      ApiService.isJapaneseStyleCompatible(
+        '私は大丈夫ですよ。',
+        'shinobu',
+      ),
+      isTrue,
+    );
+    expect(
+      ApiService.isJapaneseStyleCompatible(
+        '俺は大丈夫ですよ。',
+        'shinobu',
+      ),
+      isFalse,
+    );
+  });
+
+  test('Chinese conversation wording stays informal', () {
+    expect(
+      ApiService.normalizeChineseConversationWordingForTest(
+        '您若是出门的话记得多喝水。',
+      ),
+      '你要是出门的话记得多喝水。',
+    );
+  });
+
   test('Character name registry resolves stage names to canonical identity',
       () {
     final lock = characterNameByJapaneseForm['LOCK'];
     final shinobu = characterNameByJapaneseForm['しのぶ'];
     final kanao = characterNameByJapaneseForm['カナヲ'];
 
-    expect(lock?.chinese, '朝日六花');
+    expect(lock?.chinese.replaceAll(RegExp(r'[\s　]+'), ''), '朝日六花');
     expect(lock?.compactJapanese, '朝日六花');
     expect(namePronunciationDictionary['LOCK'], 'ろっく');
-    expect(shinobu?.chinese, '蝴蝶忍');
-    expect(kanao?.chinese, '栗花落香奈乎');
+    expect(shinobu?.chinese.replaceAll(RegExp(r'[\s　]+'), ''), '蝴蝶忍');
+    expect(kanao?.chinese.replaceAll(RegExp(r'[\s　]+'), ''), '栗花落香奈乎');
   });
 
   test('Character registry keeps configured kana display names and readings',
@@ -108,6 +190,118 @@ void main() {
     expect(ApiService.normalizeKnownNamesForChineseText('玉壺'), '玉壶');
   });
 
+  test('General term registry centralizes translation and TTS readings', () {
+    expect(termPronunciationDictionary['お館様'], 'おやかたさま');
+    expect(termPronunciationDictionary['主公大人'], 'おやかたさま');
+    expect(termPronunciationDictionary['鬼殺隊'], 'きさつたい');
+    expect(termPronunciationDictionary['CRYCHIC'], 'クライシック');
+    expect(
+      ApiService.nameTranslationGlossaryForPrompt(),
+      containsAll([
+        'お館様=主公大人',
+        '刀鍛冶の里=锻刀村',
+        '蝶屋敷=蝶屋',
+      ]),
+    );
+    expect(
+      ApiService.normalizeKnownNamesForChineseText('お館様和刀鍛冶の里。'),
+      '主公大人和锻刀村。',
+    );
+    expect(
+      ApiService.applyJapaneseNameMappingsForTest('主公大人提到了锻刀村。'),
+      'お館様提到了刀鍛冶の里。',
+    );
+    expect(
+      ApiService.canonicalChineseNamesForSearch(),
+      containsAll(['主公大人', '锻刀村']),
+    );
+  });
+
+  test('Ave Mujica song titles have TTS pronunciations', () {
+    expect(
+      termNamePronunciations.any(
+          (entry) => entry.chinese == '黑色生日' && entry.japanese == '黒のバースデイ'),
+      isTrue,
+    );
+    expect(termPronunciationDictionary['Kuro no Birthday'], 'くろのバースデイ');
+    expect(termPronunciationDictionary['KiLLKiSS'], 'キルキス');
+    expect(termPronunciationDictionary['Crucifix X'], 'クルシフィックス キス');
+    expect(termPronunciationDictionary['天球のMúsica'], 'そらのムジカ');
+    expect(termPronunciationDictionary["'S/' The Way"], 'スラッシュ ザ ウェイ');
+    expect(termPronunciationDictionary['Symbol II : 🜁'], 'シンボル ツー エア');
+    expect(
+      ApiService.applyJapaneseNameMappingsForTest(
+        '黑色生日和天球的Música都很适合Ave Mujica。',
+      ),
+      '黒のバースデイ和天球のMúsica都很适合Ave Mujica。',
+    );
+    expect(
+      ApiService.nameTranslationGlossaryForPrompt(),
+      containsAll([
+        '黒のバースデイ=黑色生日',
+        '天球のMúsica=天球的Música',
+      ]),
+    );
+    expect(
+      ApiService.normalizeKnownNamesForChineseText(
+        '黒のバースデイ和天球のMúsica都很适合Ave Mujica。',
+      ),
+      '黑色生日和天球的Música都很适合Ave Mujica。',
+    );
+    expect(termPronunciationDictionary['Hachibousei Dance'], 'はちぼうせいダンス');
+    expect(termPronunciationDictionary['Aoi Hitomi no Naka ni'], 'あおいひとみのなかに');
+    expect(
+      ApiService.applyJapaneseNameMappingsForTest(
+        'Kuro no Birthday和Aoi Hitomi no Naka ni都很适合Ave Mujica。',
+      ),
+      '黒のバースデイ和碧い瞳の中に都很适合Ave Mujica。',
+    );
+    expect(
+      ApiService.normalizeKnownNamesForChineseText(
+        'Kuro no Birthday和Aoi Hitomi no Naka ni都很适合Ave Mujica。',
+      ),
+      '黑色生日和碧蓝眼瞳之中都很适合Ave Mujica。',
+    );
+  });
+
+  test('MyGO song titles share translation and TTS pronunciations', () {
+    expect(termPronunciationDictionary['春日影'], 'はるひかげ');
+    expect(termPronunciationDictionary['Haruhikage'], 'はるひかげ');
+    expect(termPronunciationDictionary['迷星叫'], 'まよいうた');
+    expect(termPronunciationDictionary['Mayoiuta'], 'まよいうた');
+    expect(termPronunciationDictionary['詩超絆'], 'うたことば');
+    expect(termPronunciationDictionary['Utakotoba'], 'うたことば');
+    expect(termPronunciationDictionary['証命讚歌'], 'しょうめいさんか');
+    expect(termPronunciationDictionary['罗永线'], 'らいん');
+    expect(termPronunciationDictionary['Sasurai'], 'さすらい');
+    expect(
+      ApiService.applyJapaneseNameMappingsForTest(
+        '春日影和证命赞歌都很像MyGO会唱的歌。',
+      ),
+      '春日影和証命讃歌都很像MyGO会唱的歌。',
+    );
+    expect(
+      ApiService.nameTranslationGlossaryForPrompt(),
+      containsAll([
+        '春日影=春日影',
+        '詩超絆=诗超绊',
+        '証命讃歌=证命赞歌',
+      ]),
+    );
+    expect(
+      ApiService.normalizeKnownNamesForChineseText(
+        '詩超絆、証命讚歌和羅永線都在表里。',
+      ),
+      '诗超绊、证命赞歌和罗永线都在表里。',
+    );
+    expect(
+      ApiService.normalizeKnownNamesForChineseText(
+        'Haruhikage, Mayoiuta, and Utakotoba are MyGO songs.',
+      ),
+      '春日影, 迷星叫, and 诗超绊 are MyGO songs.',
+    );
+  });
+
   test('Chinese names map to canonical Japanese and per-character call names',
       () {
     final mapped = ApiService.applyJapaneseNameMappingsForTest(
@@ -115,7 +309,7 @@ void main() {
       characterId: 'sakiko',
     );
 
-    expect(mapped, '燈和愛音さん提到了そよ和ぎょっこ。');
+    expect(mapped, '燈和愛音さん提到了長崎そよ和ぎょっこ。');
     expect(
       ApiService.applyJapaneseNameMappingsForTest(
         'もう一度灯さんの歌を聞きます。',
@@ -129,6 +323,124 @@ void main() {
         characterId: 'sakiko',
       ),
       '愛音さんの話です。',
+    );
+    expect(
+      ApiService.fixedCharacterCallNameChineseTargets('sakiko')['祐天寺若麦'],
+      '若麦',
+    );
+    expect(
+      ApiService.fixedCharacterCallNameChineseTargets('sakiko')['八幡海铃'],
+      '海铃',
+    );
+    expect(
+      ApiService.fixedCharacterCallNameChineseTargets('tomori')['丰川祥子'],
+      '小祥',
+    );
+    expect(
+      ApiService.applyJapaneseNameMappingsForTest(
+        '若麦又在练习室里闹出一点动静。',
+        characterId: 'sakiko',
+      ),
+      'にゃむ又在练习室里闹出一点动静。',
+    );
+    expect(
+      ApiService.applyJapaneseNameMappingsForTest(
+        '海铃和若麦都在练习室。',
+        characterId: 'sakiko',
+      ),
+      '海鈴和にゃむ都在练习室。',
+    );
+    expect(
+      ApiService.applyJapaneseNameMappingsForTest(
+        '八幡海铃和祐天寺若麦都在练习室。',
+        characterId: 'sakiko',
+      ),
+      '八幡海鈴和祐天寺にゃむ都在练习室。',
+    );
+    expect(
+      ApiService.applyJapaneseNameMappingsForTest(
+        '小祥说她会再试一次。',
+        characterId: 'tomori',
+      ),
+      '祥ちゃん说她会再试一次。',
+    );
+  });
+
+  test('Character code-name aliases keep their display form', () {
+    final glossary = ApiService.nameTranslationGlossaryForPrompt();
+
+    expect(namePronunciationDictionary['Oblivionis'], 'オブリビオニス');
+    expect(
+      ApiService.normalizeKnownNamesForChineseText('Oblivionis和Mortis同台。'),
+      'Oblivionis和Mortis同台。',
+    );
+    expect(
+      ApiService.applyJapaneseNameMappingsForTest(
+        'Oblivionis和Mortis同台。',
+      ),
+      'Oblivionis和Mortis同台。',
+    );
+    expect(glossary, contains('Oblivionis=Oblivionis'));
+    expect(glossary, isNot(contains('Oblivionis=丰川 祥子')));
+    expect(ApiService.applyJapaneseNameMappingsForTest('玉壺出现了。'), 'ぎょっこ出现了。');
+  });
+
+  test('Character code-name aliases can resolve canon search targets', () {
+    final oblivionisTargets = WebContextService.canonSearchTargetsForTest(
+      userText: '小祥，Oblivionis以前经历过什么？',
+      query: 'BanG Dream Ave Mujica Oblivionis 经历',
+      characterId: 'sakiko',
+      characterName: '丰川祥子',
+    );
+    final layerTargets = WebContextService.canonSearchTargetsForTest(
+      userText: '小祥，LAYER有什么经历？',
+      query: 'BanG Dream RAISE A SUILEN LAYER 经历',
+      characterId: 'sakiko',
+      characterName: '丰川祥子',
+    );
+
+    expect(
+      oblivionisTargets.map((target) => target.replaceAll(RegExp(r'\s+'), '')),
+      contains('丰川祥子'),
+    );
+    expect(
+      layerTargets.map((target) => target.replaceAll(RegExp(r'\s+'), '')),
+      contains('和奏瑞依'),
+    );
+  });
+
+  test('Character search aliases do not affect translation display', () {
+    final searchAliases = ApiService.characterSearchAliasesForSearch();
+
+    expect(searchAliases['虫柱'], '蝴蝶忍');
+    expect(searchAliases['主公大人'], '产屋敷耀哉');
+    expect(
+        ApiService.normalizeKnownNamesForChineseText('虫柱和主公大人。'), '虫柱和主公大人。');
+    expect(
+      ApiService.applyJapaneseNameMappingsForTest('虫柱和主公大人。'),
+      '蟲柱和お館様。',
+    );
+
+    final pillarTargets = WebContextService.canonSearchTargetsForTest(
+      userText: '无一郎，你知道虫柱小时候发生过什么事吗？',
+      query: '鬼灭之刃 虫柱 小时候 经历',
+      characterId: 'muichirou',
+      characterName: '时透无一郎',
+    );
+    final leaderTargets = WebContextService.canonSearchTargetsForTest(
+      userText: '忍小姐，主公大人以前对柱们做过什么安排吗？',
+      query: '鬼灭之刃 主公大人 柱 安排',
+      characterId: 'shinobu',
+      characterName: '蝴蝶忍',
+    );
+
+    expect(
+      pillarTargets.map((target) => target.replaceAll(RegExp(r'\s+'), '')),
+      contains('蝴蝶忍'),
+    );
+    expect(
+      leaderTargets.map((target) => target.replaceAll(RegExp(r'\s+'), '')),
+      contains('产屋敷耀哉'),
     );
   });
 
@@ -339,6 +651,23 @@ void main() {
 
       expect(targets, contains('高松灯'));
       expect(targets, isNot(contains('企鹅')));
+    });
+
+    test('prioritizes character target over band context for profile traits',
+        () {
+      final targets = WebContextService.canonSearchTargetsForTest(
+        userText: 'MyGO的千早爱音有什么喜好？',
+        query: 'BanG Dream MyGO 千早爱音 喜好',
+        characterId: 'sakiko',
+        characterName: '丰川祥子',
+        primaryObjects: const ['MyGO'],
+        secondaryObjects: const ['千早爱音'],
+      );
+      final compactTargets =
+          targets.map((target) => target.replaceAll(RegExp(r'\s+'), ''));
+
+      expect(compactTargets.first, '千早爱音');
+      expect(compactTargets, isNot(contains('MyGO')));
     });
 
     test('does not classify a song opinion as an event process', () {
