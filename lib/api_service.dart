@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 import 'storage_service.dart';
 import 'api_keys.dart';
+import 'name_pronunciation.dart';
 import 'path_service.dart';
 
 class ApiService {
@@ -37,49 +38,16 @@ class ApiService {
   static const String _japaneseFallbackText = 'ごめん、ちょっと言葉が出てこなかった…もう一度話してくれる？';
 
   static const List<_NameEntry> _nameEntries = [
-    _NameEntry(japanese: 'カナヲ', chinese: '香奈乎'),
-    _NameEntry(japanese: 'しのぶ', chinese: '忍'),
-    _NameEntry(japanese: 'かなえ', chinese: '香奈惠'),
     _NameEntry(japanese: 'お館様', chinese: '主公大人'),
-    _NameEntry(japanese: '産屋敷あまね', chinese: '产屋敷天音'),
-    _NameEntry(japanese: 'はんてんぐ', chinese: '半天狗'),
-    _NameEntry(japanese: 'ぎょっこ', chinese: '玉壶', japaneseAliases: ['玉壺']),
-    _NameEntry(japanese: '神崎アオイ', chinese: '神崎葵'),
-    _NameEntry(japanese: '寺内きよ', chinese: '寺内清'),
-    _NameEntry(japanese: '中原すみ', chinese: '中原澄'),
-    _NameEntry(japanese: '高田なほ', chinese: '高田奈穗', chineseAliases: ['高田奈穂']),
-    _NameEntry(japanese: 'きよ', chinese: '清'),
-    _NameEntry(japanese: 'すみ', chinese: '澄'),
-    _NameEntry(japanese: 'なほ', chinese: '奈穗', chineseAliases: ['奈穂']),
     _NameEntry(japanese: '蝶屋敷', chinese: '蝶屋'),
     _NameEntry(japanese: '刀鍛冶の里', chinese: '锻刀村'),
-    _NameEntry(japanese: 'チュン太郎', chinese: '啾太郎'),
-    _NameEntry(japanese: '長崎そよ', chinese: '长崎爽世'),
-    _NameEntry(japanese: '祐天寺にゃむ', chinese: '祐天寺若麦'),
-    _NameEntry(japanese: '要楽奈', chinese: '要乐奈'),
-    _NameEntry(japanese: '純田まな', chinese: '纯田真奈'),
     _NameEntry(japanese: 'あのちゃん', chinese: '爱音酱'),
     _NameEntry(japanese: '祥ちゃん', chinese: '小祥'),
     _NameEntry(japanese: '睦ちゃん', chinese: '小睦'),
     _NameEntry(japanese: 'そよりん', chinese: '爽世世'),
     _NameEntry(japanese: 'ともりん', chinese: '灯灯'),
     _NameEntry(japanese: 'にゃむち', chinese: '喵梦亲'),
-    _NameEntry(japanese: '花園たえ', chinese: '花园多惠'),
-    _NameEntry(japanese: '牛込りみ', chinese: '牛込里美'),
-    _NameEntry(japanese: '市ヶ谷有咲', chinese: '市谷有咲'),
-    _NameEntry(japanese: '今井リサ', chinese: '今井莉莎'),
-    _NameEntry(japanese: '宇田川あこ', chinese: '宇田川亚子'),
-    _NameEntry(japanese: '青葉モカ', chinese: '青叶摩卡'),
-    _NameEntry(japanese: '上原ひまり', chinese: '上原绯玛丽'),
-    _NameEntry(japanese: '若宮イヴ', chinese: '若宫伊芙'),
-    _NameEntry(japanese: '弦巻こころ', chinese: '弦卷心'),
-    _NameEntry(japanese: '北沢はぐみ', chinese: '北泽育美'),
     _NameEntry(japanese: 'ミッシェル', chinese: '米歇尔'),
-    _NameEntry(japanese: '和奏レイ', chinese: '和奏瑞依'),
-    _NameEntry(japanese: '倉田ましろ', chinese: '仓田真白'),
-    _NameEntry(japanese: '二葉つくし', chinese: '二叶筑紫'),
-    _NameEntry(japanese: '桐ヶ谷透子', chinese: '桐谷透子'),
-    _NameEntry(japanese: '月島まりな', chinese: '月岛麻里奈'),
   ];
 
   static const Map<String, Map<String, String>> _fixedCharacterCallNameMap = {
@@ -164,11 +132,14 @@ class ApiService {
     for (final map in _fixedCharacterCallNameMap.values) {
       map.keys.forEach(add);
     }
-    for (final entry in _nameEntries) {
+    for (final entry in characterNamePronunciations) {
       add(entry.chinese);
       for (final alias in entry.chineseAliases) {
         add(alias);
       }
+    }
+    for (final entry in _nameEntries) {
+      add(entry.chinese);
     }
 
     return names;
@@ -197,38 +168,58 @@ class ApiService {
 
   static List<String> nameTranslationGlossaryForPrompt() {
     final lines = <String>[];
+    void addLine(String source, String chinese) {
+      final trimmed = source.trim();
+      if (trimmed.isEmpty) return;
+      final line = '$trimmed=$chinese';
+      if (!lines.contains(line)) lines.add(line);
+    }
+
+    for (final entry in characterNamePronunciations) {
+      addLine(entry.japanese, entry.chinese);
+      addLine(entry.compactJapanese, entry.chinese);
+      addLine(entry.reading, entry.chinese);
+      for (final alias in entry.aliases.keys) {
+        addLine(alias, entry.chinese);
+      }
+      for (final alias in entry.chineseAliases) {
+        addLine(alias, entry.chinese);
+      }
+    }
     for (final entry in _nameEntries) {
       void add(String source) {
-        final trimmed = source.trim();
-        if (trimmed.isEmpty) return;
-        final line = '$trimmed=${entry.chinese}';
-        if (!lines.contains(line)) lines.add(line);
+        addLine(source, entry.chinese);
       }
 
       add(entry.japanese);
-      for (final alias in entry.japaneseAliases) {
-        add(alias);
-      }
-      for (final alias in entry.chineseAliases) {
-        add(alias);
-      }
     }
     return lines;
   }
 
   static String normalizeKnownNamesForChineseText(String text) {
     var result = text;
-    for (final entry in _nameEntries) {
-      for (final source in [
+    for (final entry in characterNamePronunciations) {
+      for (final source in {
         entry.japanese,
-        ...entry.japaneseAliases,
+        entry.compactJapanese,
+        entry.reading,
+        ...entry.aliases.keys,
         ...entry.chineseAliases,
-      ]) {
+      }) {
         if (source.isEmpty || source == entry.chinese) continue;
         result = result.replaceAll(source, entry.chinese);
       }
     }
+    for (final entry in _nameEntries) {
+      if (entry.japanese != entry.chinese) {
+        result = result.replaceAll(entry.japanese, entry.chinese);
+      }
+    }
     return result;
+  }
+
+  static String nameSearchMatchKey(String text) {
+    return _cjkLooseMatchKey(text).replaceAll(RegExp(r'[\s　]+'), '');
   }
 
   static String _genderHintsForTranslationPrompt(String? webContext) {
@@ -295,6 +286,9 @@ class ApiService {
       final isEmotionSupportTurn = _isEmotionSupportUserMessage(userMessage);
       final isRelationshipArcTurn = _isRelationshipArcQuestion(userMessage);
       final isEventProcessTurn = _isEventProcessQuestion(userMessage);
+      final allowsBoundedRoleplay =
+          (webContext?.contains('【有限角色发挥】') ?? false) ||
+              (webContext?.contains('【明确设定与有限发挥并存】') ?? false);
 
       final StringBuffer systemBuffer = StringBuffer();
       systemBuffer.write(characterPersonality);
@@ -330,6 +324,10 @@ class ApiService {
 - 如果事实只支持“不太确定/听说/大概”，回复也要保留这种不确定性。
 - 优先回答用户真正问的点，不要主动加入联网事实里的旁支趣闻；如果要加入细节，必须逐字核对人物名字和动作主体。
 - 用户询问名称、喜好、常去地点、歌曲、招式等单点事实时，只能回答资料中明确写出的具体名词；资料没写出的动物名、地点名、歌曲名、人物名、招式名一律不能凭印象补充。资料没有明确答案时，要自然说明“这点没有明确听说/资料里只确认……”，再回答已确认的部分。
+- 如果本轮资料明确包含【有限角色发挥】，上一条只限制真实候选和事实边界：可以从摘要明确给出的候选中，以角色第一人称自然表达自己的选择、习惯、偏好、感受或评价，不需要网页直接写出这句主观回答。不得创造摘要中没有的专名、能力、经历或因果，也不要向用户提及“资料没有写/搜索结果没有说明”。
+- 如果本轮资料明确包含【明确原作设定优先】，必须直接采用资料中已经明确给出的喜好、习惯、频率或评价依据；角色化发挥只能补充自然语气，不能另选答案或弱化该设定。
+- 如果本轮资料包含【明确设定与有限发挥并存】，明确 facts 必须直接采用；标为候选范围的 facts 可以用于自然表达倾向，但不得反过来覆盖、否定或改写明确 facts。
+- 联网证据中的动画/游戏集数、章节、资料页、设定集等只用于核对事实。角色回答只能自然讲作品世界内发生的事，不得说“动画第几集、游戏剧情、资料记载、页面提到”等三次元出处。
 - 用户问“叫什么/名字/是谁/有哪些人”时，优先只回答被问对象的名字和必要身份；不要顺手展开同一网页里的相邻人物、管理者、亲属、后续经历或旁支设定。
 - 用户提到“我喜欢/我们家有/我最近在看”等自己的喜好或经历时，不等于当前角色也有同样喜好或经历；除非资料明确支持当前角色喜欢同一对象，否则只能回应用户的喜好，不要说“我也喜欢”。
 - 如果资料没有明确写出当前角色对用户所提对象的喜恶，不要替角色评价“也不错/很可爱/挺喜欢/不讨厌/讨厌”；只能说“你喜欢的话也很好”“听起来很有意思”这类不声明角色偏好的回应。
@@ -362,6 +360,9 @@ class ApiService {
         systemBuffer.writeln();
         systemBuffer.write(
             '【中文資料の扱い】参考資料が中国語で書かれている場合、必ず意味で日本語に訳してください。字形が似ているだけの日本語漢字語へ置き換えないでください。');
+        systemBuffer.writeln();
+        systemBuffer.write(
+            '【固有名詞の確認】中国語資料の人名・地名・技名は一語ずつ日本語表記に直してください。簡体字を日本語の字形に直しても、語中の文字順や固有名詞の構造を入れ替えてはいけません。');
         systemBuffer.writeln();
         systemBuffer.write(
             '【日本語表現ルール】複数の人物名を列挙するときは「A、B、C」または「AとBとC」の形にしてください。列挙の区切りとして「Aに、B、C」のような書き方はしないでください。');
@@ -417,6 +418,12 @@ class ApiService {
               : isEventProcessTurn
                   ? '【本轮回复篇幅】用户本轮在问事件经过或处理方式。用聊天口吻挑最相关的核心动作回答，不要从头到尾念资料。'
                   : '【本轮回复篇幅】用户本轮不是情绪倾诉。请用日常聊天篇幅回复，控制在4到8句左右。');
+      if (characterLanguage != 'zh' && isEventProcessTurn) {
+        systemBuffer.writeln();
+        systemBuffer.write(
+          '【今回の長さ】出来事の時系列は理解のための参考であり、回答用のチェックリストではありません。質問に直接関係する事実を2～4個だけ選び、全体を4～6文の日常会話にまとめてください。出力前に、中国語資料の簡体字表記や中国語の固有名詞が残っていないか確認し、すべて自然な日本語表記に直してください。',
+        );
+      }
 
       systemBuffer.writeln();
       systemBuffer.write('''
@@ -467,6 +474,7 @@ class ApiService {
               userMessage: userMessage,
               imageContext: imageContext,
               webContext: webContext,
+              allowsBoundedRoleplay: allowsBoundedRoleplay,
             );
 
       japaneseMessages.add(
@@ -621,44 +629,69 @@ class ApiService {
 
       if (!_isCleanJapaneseForTts(rawResponseText)) {
         debugPrint(
-          '回复未通过日语纯净度检测，先重试生成日文: '
+          '回复未通过日语纯净度检测，先忠实翻译为日文: '
           '${_logPreview(rawResponseText)}',
         );
 
-        final regenerated = await _retryJapaneseOnlyResponse(
-          messages: japaneseMessages,
-          badResponse: rawResponseText,
-          exactUserName: exactUserName,
+        final directlyTranslated = await _translateToJapanese(
+          rawResponseText,
+          characterId: characterId,
         );
-        if (_isCleanJapaneseForTts(regenerated)) {
-          rawResponseText = regenerated;
+        if (_isAcceptableJapaneseForCharacter(
+          directlyTranslated,
+          characterId,
+        )) {
+          debugPrint('中文/混合语言首答已忠实翻译为日文');
+          rawResponseText = directlyTranslated;
         } else {
-          debugPrint('重试生成仍未通过日语纯净度检测，开始翻译为日文...');
-          debugPrint('  重试返回: $regenerated');
-
-          String translated = rawResponseText;
-          bool success = false;
-
-          for (int attempt = 1; attempt <= _maxTranslationRetries; attempt++) {
-            debugPrint('  翻译尝试 $attempt / $_maxTranslationRetries ...');
-            translated = await _translateToJapanese(rawResponseText);
-            translated = _sanitizeUserNameHonorifics(translated, exactUserName);
-
-            if (_isCleanJapaneseForTts(translated)) {
-              debugPrint('  翻译成功（第 $attempt 次）: $translated');
-              success = true;
-              break;
-            } else {
-              debugPrint('  翻译结果仍未通过日语纯净度检测，准备重试');
-              debugPrint('  本次返回: $translated');
-            }
-          }
-
-          if (success) {
-            rawResponseText = translated;
+          debugPrint('忠实翻译仍未通过日语纯净度检测，重试生成日文...');
+          final regenerated = await _retryJapaneseOnlyResponse(
+            messages: japaneseMessages,
+            badResponse: rawResponseText,
+            exactUserName: exactUserName,
+            characterId: characterId,
+            isRelationshipArcTurn: isRelationshipArcTurn,
+            isEventProcessTurn: isEventProcessTurn,
+          );
+          if (_isAcceptableJapaneseForCharacter(regenerated, characterId)) {
+            rawResponseText = regenerated;
           } else {
-            debugPrint('  翻译多次失败，使用兜底日语文本: $_japaneseFallbackText');
-            rawResponseText = _japaneseFallbackText;
+            debugPrint('重试生成仍未通过日语纯净度检测，再次翻译为日文...');
+            debugPrint('  重试返回: $regenerated');
+
+            String translated = rawResponseText;
+            bool success = false;
+
+            for (int attempt = 1;
+                attempt <= _maxTranslationRetries;
+                attempt++) {
+              debugPrint('  翻译尝试 $attempt / $_maxTranslationRetries ...');
+              translated = await _translateToJapanese(
+                rawResponseText,
+                characterId: characterId,
+              );
+              translated =
+                  _sanitizeUserNameHonorifics(translated, exactUserName);
+
+              if (_isAcceptableJapaneseForCharacter(
+                translated,
+                characterId,
+              )) {
+                debugPrint('  翻译成功（第 $attempt 次）: $translated');
+                success = true;
+                break;
+              } else {
+                debugPrint('  翻译结果仍未通过日语纯净度检测，准备重试');
+                debugPrint('  本次返回: $translated');
+              }
+            }
+
+            if (success) {
+              rawResponseText = translated;
+            } else {
+              debugPrint('  翻译多次失败，使用兜底日语文本: $_japaneseFallbackText');
+              rawResponseText = _japaneseFallbackText;
+            }
           }
         }
       }
@@ -678,8 +711,11 @@ class ApiService {
           _applyFixedCharacterCallNames(japaneseText, fixedCharacterCallNames);
       if (!_isCleanJapaneseForTts(japaneseText)) {
         debugPrint('最终日语回复仍混入中文片段，重新翻译后再进入显示/TTS: $japaneseText');
-        final retranslated = await _translateToJapanese(japaneseText);
-        if (_isCleanJapaneseForTts(retranslated)) {
+        final retranslated = await _translateToJapanese(
+          japaneseText,
+          characterId: characterId,
+        );
+        if (_isAcceptableJapaneseForCharacter(retranslated, characterId)) {
           japaneseText = _applyStandardJapaneseNameSpellings(
             _removeRubyReadings(
               _sanitizeUserNameHonorifics(retranslated, exactUserName),
@@ -698,6 +734,25 @@ class ApiService {
         debugPrint('最终日语回复仍包含助手式客套问句，使用日常寒暄兜底: $japaneseText');
         japaneseText = _casualGreetingFallback(characterLanguage);
       }
+      if (!isJapaneseStyleCompatible(japaneseText, characterId)) {
+        debugPrint(
+          '最终日语回复未通过角色语体检测，按角色设定重生成: '
+          '${_logPreview(japaneseText)}',
+        );
+        final restyled = await _retryJapaneseOnlyResponse(
+          messages: japaneseMessages,
+          badResponse: japaneseText,
+          exactUserName: exactUserName,
+          characterId: characterId,
+          isRelationshipArcTurn: isRelationshipArcTurn,
+          isEventProcessTurn: isEventProcessTurn,
+        );
+        if (_isAcceptableJapaneseForCharacter(restyled, characterId)) {
+          japaneseText = restyled;
+        } else {
+          debugPrint('角色语体重生成仍未通过，保留原回复并在审计中标记');
+        }
+      }
 
       final textForTranslation = japaneseText.trim();
 
@@ -712,15 +767,19 @@ class ApiService {
           fixedCharacterCallNames: fixedCharacterCallNames,
         );
         final genderHints = _genderHintsForTranslationPrompt(webContext);
+        final characterStyle = _chineseTranslationStyle(characterId);
         final translationMessages = [
           {
             'role': 'system',
             'content': '你是一个专业的日语翻译。请将用户提供的日语文本翻译成中文。只输出翻译结果，不要有任何额外的解释或说明。\n'
-                '译文要像朋友之间自然聊天的中文，不要过度书面、客套或正式。\n'
-                '禁止使用"您"、"您的"、"阁下"、"是否"、"不必"这类疏远或正式的说法，默认使用"你"、"你的"、"是不是"、"不用"。\n'
+                '译文要像角色本人在用中文说话：自然，但不能把所有角色统一翻成随便、粗犷或网络化的口吻。\n'
+                '必须保留日语原文的礼貌程度、情绪强弱、措辞气质和人物性格；角色风格优先于笼统的口语化。\n'
+                '当前对话对象与角色关系亲近，第二人称默认使用“你/你的”，不要机械使用“您/您的/阁下”；除此之外，不得为了口语化擅自降低原文的优雅、克制或礼貌程度。\n'
+                '【当前说话角色的译文风格】$characterStyle\n'
                 '专有名词不要猜测性别或改写。\n'
                 '如果原文中出现形如 __USER_NAME__、__NAME_0__ 或 __NAMESEQ_0__ 的占位符，必须原样保留，不要翻译、删除或改写。\n'
                 '这些占位符中有一部分代表“当前说话角色对对方的固定称呼”，必须按占位符还原后的称呼翻译，不要自行扩写成全名，也不要改成对用户说话的“你”。\n'
+                '严格保留日语助词表达的动作主体、对象、起点、方向和同行关系；地点起点不能误译成同行者，主语和宾语也不能互换。\n'
                 '如果日语原文是在列举多个人名，译文也必须写成中文姓名并列，不要把姓名后的「に」误译成“对……来说/对于……”。\n'
                 '如果原文明确说的是女孩子或女性群体，中文代词优先使用“她们”或“这些孩子”；否则日语的“たち”不要默认译成“她们”，可以译成“他们”“这些人”“这些孩子”。\n'
                 '如果原文没有明确的性别代词，尽量重复姓名、称呼或使用“那孩子/对方”，不要自行猜成“他”或“她”。\n'
@@ -800,6 +859,7 @@ class ApiService {
     required String userMessage,
     required String imageContext,
     String? webContext,
+    bool allowsBoundedRoleplay = false,
   }) {
     final baseUserMessage = '$userMessage$imageContext';
     if (webContext == null || webContext.trim().isEmpty) {
@@ -809,8 +869,11 @@ class ApiService {
     final processReminder = _isRelationshipArcQuestion(userMessage)
         ? '\n【本轮写作提醒】用户问的是人物关系、相互影响、救赎或关系变化。不要只取资料开头的一条事实，也不要只做抽象评价；请按时间线挑选能体现关系变化的核心转折回答。资料里有明确地点、行动、台词或作品名时优先使用，但不需要把所有资料逐条复述。\n'
         : _isEventProcessQuestion(userMessage)
-            ? '\n【本轮写作提醒】用户问的是事件经过、处理方式或支援方式。请只选和用户问点直接相关的核心动作回答；资料里的后续审判、旁支冲突、结局补充，如果不是用户问点所需，不要主动展开。用户问“如何支援/救援/协助/处理”时，不要主动复述和支援目标相反的后续冲突。\n'
+            ? '\n【本轮写作提醒】用户问的是事件经过、处理方式或支援方式。时间线只用于理解顺序，不是回答清单；请只选2到4个和用户问点直接相关的核心事实，用4到6句日常聊天回答。资料里的后续审判、旁支冲突、结局补充，如果不是用户问点所需，不要主动展开。用户问“如何支援/救援/协助/处理”时，不要主动复述和支援目标相反的后续冲突。\n'
             : '';
+    final boundedRoleplayReminder = allowsBoundedRoleplay
+        ? '\n【本轮角色发挥提醒】网页摘要负责限定真实候选和事实边界。你可以从摘要明确列出的候选中自然表达角色自己的选择、习惯、偏好、感受或评价；不要创造新专名、新能力、新经历或新因果，也不要说“资料没有写”或“搜索结果没有说明”。\n'
+        : '';
 
     return '''
 【系统提供的本轮实时资料，不是用户发言】
@@ -828,6 +891,7 @@ $webContext
 【用户原话】
 $baseUserMessage
 $processReminder
+$boundedRoleplayReminder
 ''';
   }
 
@@ -1023,7 +1087,15 @@ $processReminder
     required List<Map<String, String>> messages,
     required String badResponse,
     required String? exactUserName,
+    required String? characterId,
+    required bool isRelationshipArcTurn,
+    required bool isEventProcessTurn,
   }) async {
+    final contentSelectionInstruction = isRelationshipArcTurn
+        ? '人物関係・相互影響・救済・関係変化について聞かれている場合は、資料の時系列を守り、関係の変化が分かる主要な転機だけを自然に選んでください。すべての段階を逐一説明する必要はありません。'
+        : isEventProcessTurn
+            ? '出来事の経緯・対処・支援について聞かれている場合は、質問された点に直接関係する中心的な行動を2～4個だけ選び、日常会話の長さで答えてください。資料や時系列を最初から最後まで逐一説明しないでください。'
+            : '質問に直接必要な事実だけを選び、資料を逐一読み上げないでください。';
     final retryMessages = List<Map<String, String>>.from(messages)
       ..add({
         'role': 'assistant',
@@ -1036,10 +1108,10 @@ $processReminder
             '中国語を混ぜないでください。翻訳文ではなく、最初から日本語で話してください。'
             '一人称、語尾、相手への呼び方はキャラクター設定に従ってください。'
             '本輪にリアルタイム資料や検索事実がある場合は、それを必ず使ってください。'
-            '人物関係・相互影響・救済・経緯について聞かれている場合は、抽象的な感想だけにせず、'
-            '資料にある具体的な行動、場所、台詞、転機を前半・中盤・後半から自然に入れてください。'
-            '資料に関係修復、帰還、和解、再接続を示す後半の事実がある場合は、途中の励ましだけで終わらせず、'
-            'その後半の結果も必ず含めてください。',
+            '中国語資料にある人名・地名・技名などの固有名詞は、文脈ごと機械的に置換せず、一語ずつ日本語の標準表記に直してから文章を組み立ててください。'
+            '字形を直す場合も、語中の文字順や固有名詞の構造を入れ替えないでください。'
+            '【話し方】${_japaneseTranslationStyle(characterId)}'
+            '$contentSelectionInstruction',
       });
 
     try {
@@ -1903,39 +1975,50 @@ $processReminder
 
   static Map<String, String> _japaneseToChineseNameMap() {
     final result = <String, String>{};
-    for (final entry in _nameEntries) {
+    for (final entry in characterNamePronunciations) {
       result[entry.japanese] = entry.chinese;
-      for (final alias in entry.japaneseAliases) {
+      result[entry.compactJapanese] = entry.chinese;
+      result[entry.reading] = entry.chinese;
+      for (final alias in entry.aliases.keys) {
         result[alias] = entry.chinese;
       }
+    }
+    for (final entry in _nameEntries) {
+      result[entry.japanese] = entry.chinese;
     }
     return result;
   }
 
   static Map<String, String> _chineseToJapaneseNameMap() {
     final result = <String, String>{};
+    for (final entry in characterNamePronunciations) {
+      result[entry.chinese] = entry.compactJapanese;
+      for (final alias in entry.chineseAliases) {
+        result[alias] = entry.compactJapanese;
+      }
+      for (final alias in entry.aliases.keys) {
+        result[alias] = entry.compactJapanese;
+      }
+    }
     for (final entry in _nameEntries) {
       result[entry.chinese] = entry.japanese;
-      for (final alias in entry.japaneseAliases) {
-        result[alias] = entry.japanese;
-      }
-      for (final alias in entry.chineseAliases) {
-        result[alias] = entry.japanese;
-      }
     }
     return result;
   }
 
   static Map<String, String> _standardJapaneseNameRulesForPrompt() {
     final result = <String, String>{};
+    for (final entry in characterNamePronunciations) {
+      result[entry.chinese] = entry.compactJapanese;
+      for (final alias in entry.chineseAliases) {
+        result[alias] = entry.compactJapanese;
+      }
+      for (final alias in entry.aliases.keys) {
+        result[alias] = entry.compactJapanese;
+      }
+    }
     for (final entry in _nameEntries) {
       result[entry.chinese] = entry.japanese;
-      for (final alias in entry.japaneseAliases) {
-        result[alias] = entry.japanese;
-      }
-      for (final alias in entry.chineseAliases) {
-        result[alias] = entry.japanese;
-      }
     }
     return result;
   }
@@ -2133,10 +2216,31 @@ $processReminder
         .replaceAll('您的', '你的')
         .replaceAll('您', '你')
         .replaceAll('阁下', '你')
-        .replaceAll('无需', '不用')
-        .replaceAll('一同', '一起')
-        .replaceAll('若是', '如果')
         .replaceAll('君她们', '君他们');
+  }
+
+  static String _chineseTranslationStyle(String? characterId) {
+    return switch (characterId) {
+      'shinobu' => '蝴蝶忍：温柔、优雅、礼貌而从容，关怀和调侃都较含蓄；避免粗俗、豪爽或过度随便的措辞。',
+      'muichirou' => '时透无一郎：安静、简洁、稍显淡然，语气直白但不粗鲁；偶尔流露少年感，不要翻得热烈健谈。',
+      'giyu' => '富冈义勇：寡言、克制、平静而直接，情绪表达内敛；用短而自然的句子，不要添加活泼语气。',
+      'sakiko' => '丰川祥子：优雅、克制、有教养，带自然的大小姐气质；即使亲近也不使用粗俗或过度随便的口吻。',
+      'tomori' => '高松灯：柔软、真诚、略显迟疑和内向，表达朴素而细腻；不要翻得圆滑、强势或过度成熟。',
+      _ => '忠实保留日语原文体现出的说话方式、礼貌程度和情绪，不额外改变人物口吻。',
+    };
+  }
+
+  static String _japaneseTranslationStyle(String? characterId) {
+    return switch (characterId) {
+      'shinobu' =>
+        '胡蝶しのぶらしい、柔らかく上品で落ち着いた丁寧語を使ってください。基本は「です・ます」調とし、乱暴または過度にくだけた語尾にしないでください。',
+      'sakiko' =>
+        '豊川祥子らしい、上品で抑制の利いた丁寧語を使ってください。基本は「です・ます」調とし、「ですわ・ますわ・ですの」も文脈に応じて自然に使えます。「だよ・だね・なんだ」のようなくだけた常体を続けないでください。',
+      'muichirou' => '時透無一郎らしい、静かで簡潔な少年の常体を使ってください。無理に丁寧語や華やかな表現を足さないでください。',
+      'giyu' => '冨岡義勇らしい、短く抑制された常体を使ってください。感情や語尾を過度に飾らないでください。',
+      'tomori' => '高松燈らしい、素朴で柔らかく、少しためらいのある自然な話し方にしてください。強気で流暢すぎる表現にしないでください。',
+      _ => '原文の人物らしい一人称、丁寧さ、語尾と感情の強さを保ってください。',
+    };
   }
 
   static String _stripKnownHonorific(String exactUserName) {
@@ -2185,6 +2289,32 @@ $processReminder
   static bool _isCleanJapaneseForTts(String text) {
     if (!_isLikelyJapanese(text)) return false;
     return !_containsChineseResidueInJapanese(text);
+  }
+
+  static bool _isAcceptableJapaneseForCharacter(
+    String text,
+    String? characterId,
+  ) {
+    return _isCleanJapaneseForTts(text) &&
+        isJapaneseStyleCompatible(text, characterId);
+  }
+
+  static bool isJapaneseStyleCompatible(String text, String? characterId) {
+    if (text.trim().isEmpty) return false;
+    if (characterId != 'sakiko' && characterId != 'shinobu') return true;
+
+    final clauses = _japaneseValidationClauses(text);
+    if (clauses.isEmpty) return false;
+    final politeClauses = clauses.where((clause) {
+      return RegExp(
+        r'(?:です|ます|ません|でした|ました|でしょう|ございます|ですわ|ますわ|ですの)(?:ね|よ|か|わ)?$',
+      ).hasMatch(clause);
+    }).length;
+    final stronglyCasualClauses = clauses.where((clause) {
+      return RegExp(r'(?:だよ|だね|なんだ|なんだよ|だろ|じゃん)$').hasMatch(clause);
+    }).length;
+    final minimumPoliteClauses = clauses.length <= 3 ? 1 : 2;
+    return politeClauses >= minimumPoliteClauses && stronglyCasualClauses <= 1;
   }
 
   static bool _containsChineseResidueInJapanese(String text) {
@@ -2249,11 +2379,12 @@ $processReminder
   static _ProtectedTranslationText _protectCanonicalJapaneseNames(String text) {
     var protectedText = text;
     final placeholders = <String, String>{};
-    final names = _nameEntries
-        .map((entry) => entry.japanese)
-        .where((name) => name.trim().isNotEmpty)
-        .toSet()
-        .toList()
+    final names = <String>{
+      for (final entry in characterNamePronunciations)
+        if (entry.compactJapanese.isNotEmpty) entry.compactJapanese,
+      for (final entry in _nameEntries)
+        if (entry.japanese.trim().isNotEmpty) entry.japanese,
+    }.toList()
       ..sort((a, b) => b.length.compareTo(a.length));
 
     for (final name in names) {
@@ -2334,7 +2465,10 @@ $processReminder
   //   - 不再在异常时静默返回原中文，而是返回空字符串，
   //     由外层 generateResponse 的 _isLikelyJapanese 校验决定是否重试或兜底，
   //     彻底杜绝把中文继续传给 TTS 的可能
-  static Future<String> _translateToJapanese(String chineseText) async {
+  static Future<String> _translateToJapanese(
+    String chineseText, {
+    required String? characterId,
+  }) async {
     try {
       final protectedText =
           _protectMappedNamesForJapaneseTranslation(chineseText);
@@ -2358,7 +2492,10 @@ $processReminder
                   '2. 「翻訳:」「日本語:」のような前置きを付けない。翻訳本文のみを出力する。\n'
                   '3. 元のテキストに括弧書きの動作描写（例:（笑顔で））がある場合は日本語の括弧で残してよい。\n'
                   '4. 必ず平仮名または片仮名を含む自然な日本語で出力すること。\n'
-                  '5. __JP_NAME_0__ のような占位符が含まれる場合は、翻訳せず、そのまま残すこと。',
+                  '5. __JP_NAME_0__ のような占位符が含まれる場合は、翻訳せず、そのまま残すこと。\n'
+                  '6. 人名・地名・技名などの固有名詞は一語ずつ識別して日本語の標準表記に直すこと。字形を直しても、語中の文字順や固有名詞の構造を入れ替えないこと。\n'
+                  '7. 内容を要約・追加・再構成せず、原文の文数、事実の範囲、主語と目的語、時間順序を保つこと。\n'
+                  '8. ${_japaneseTranslationStyle(characterId)}',
             },
             {
               'role': 'user',
@@ -2493,14 +2630,10 @@ class _ProtectedTranslationText {
 class _NameEntry {
   final String japanese;
   final String chinese;
-  final List<String> japaneseAliases;
-  final List<String> chineseAliases;
 
   const _NameEntry({
     required this.japanese,
     required this.chinese,
-    this.japaneseAliases = const [],
-    this.chineseAliases = const [],
   });
 }
 

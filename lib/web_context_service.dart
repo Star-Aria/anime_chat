@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
@@ -5,6 +6,8 @@ import 'package:http/http.dart' as http;
 import 'api_keys.dart';
 import 'api_service.dart';
 import 'character_config.dart';
+import 'grounding_contract.dart';
+import 'name_pronunciation.dart';
 import 'storage_service.dart';
 
 // ========================================
@@ -35,7 +38,14 @@ class WebContextService {
   static const String _deepSeekBaseUrl = 'https://api.deepseek.com/v1';
   static const String _baiduMapAk = ApiKeys.baiduMapAk;
   static const String _tavilyApiKey = ApiKeys.tavilyApiKey;
-  static const String _searchCacheVersion = 'search-v31';
+  static const String _searchCacheVersion = 'search-v37';
+  static const String _answerModeStrictFact = 'strict_fact';
+  static const String _answerModeBoundedRoleplay = 'bounded_roleplay';
+  static const String _answerModeAdaptive = 'adaptive';
+  static const String _answerBasisExplicitFact = 'explicit_fact';
+  static const String _answerBasisBoundedCandidates = 'bounded_candidates';
+  static const String _answerBasisInsufficient = 'insufficient';
+  static const String _answerBasisMixed = 'mixed';
   static const String _doubaoCustomSearchEndpoint =
       'https://open.feedcoopapi.com/search_api/web_search';
   static const String _doubaoGlobalSearchEndpoint =
@@ -51,6 +61,8 @@ class WebContextService {
   static const int _doubaoFactPerResultMaxChars = 20000;
   static const bool _verboseSearchDiagnostics = false;
   static const String _doubaoTimelineResultPrefix = '__DOUBAO_TIMELINE__';
+  static const String _doubaoAnswerBasisResultPrefix =
+      '__DOUBAO_ANSWER_BASIS__';
   static const String _arkChatBaseUrl =
       'https://ark.cn-beijing.volces.com/api/v3';
   static const Map<String, String> _browserSearchHeaders = {
@@ -111,6 +123,48 @@ class WebContextService {
     required String characterName,
     List<Message> conversationHistory = const [],
   }) async {
+    final result = await buildContextDetailed(
+      userMessage: userMessage,
+      characterId: characterId,
+      characterName: characterName,
+      conversationHistory: conversationHistory,
+    );
+    return result.context;
+  }
+
+  static Future<WebContextBuildResult> buildContextDetailed({
+    required String userMessage,
+    required String characterId,
+    required String characterName,
+    List<Message> conversationHistory = const [],
+  }) async {
+    final trace = GroundingRunTrace(
+      userMessage: userMessage,
+      characterId: characterId,
+    );
+    final context = await runZoned(
+      () => _buildContextInternal(
+        userMessage: userMessage,
+        characterId: characterId,
+        characterName: characterName,
+        conversationHistory: conversationHistory,
+      ),
+      zoneValues: {#groundingRunTrace: trace},
+    );
+    trace.finish();
+    debugPrint('联网调用统计: ${trace.compactSummary}');
+    return WebContextBuildResult(context: context, trace: trace);
+  }
+
+  static GroundingRunTrace? get _activeTrace =>
+      Zone.current[#groundingRunTrace] as GroundingRunTrace?;
+
+  static Future<String> _buildContextInternal({
+    required String userMessage,
+    required String characterId,
+    required String characterName,
+    List<Message> conversationHistory = const [],
+  }) async {
     final text = userMessage.trim();
     if (text.isEmpty) return '';
 
@@ -136,9 +190,19 @@ class WebContextService {
             ? ''
             : ', primary=${plan.primarySearchObjects.join('|')}, '
                 'secondary=${plan.secondarySearchObjects.join('|')}';
+    final answerRequirements = plan.answerRequirements.isNotEmpty
+        ? plan.answerRequirements
+        : [_AnswerRequirement(text: text)];
+    final requirementLog = answerRequirements.map((requirement) {
+      final cueText = requirement.directEvidenceCues.isEmpty
+          ? ''
+          : '{直接关系=${requirement.directEvidenceCues.join('/')}}';
+      return '${requirement.text}$cueText';
+    }).join('|');
     debugPrint(
       '联网计划: character=${profile.characterId}, '
       'category=${plan.category}, '
+      'answer_requirements=$requirementLog, '
       'weather=${plan.includeWeather}, festival=${plan.includeFestivals}, '
       'phenology=${plan.includePhenology}$planObjectLog',
     );
@@ -153,6 +217,7 @@ class WebContextService {
     // - 实时天气
     // 最后再合并成一整段上下文。
     final sections = <String>[];
+    var resolvedAnswerBasis = _answerBasisInsufficient;
 
     // 节日信息：
     // 现在优先联网搜索近期节日，让它随年份和地区自动更新。
@@ -241,13 +306,19 @@ class WebContextService {
           ? canonSearchTargets.first
           : webSearchQuery;
       final localProfileResults = plan.category == 'canon'
-          ? _searchLocalCharacterProfile(executionSearchQuery, profile)
+          ? _searchLocalCharacterProfile(
+              executionSearchQuery,
+              profile,
+              userIntent: text,
+            )
           : const <String>[];
 
       var results = await _searchDoubaoGroundedFacts(
         executionSearchQuery,
         userText: text,
         category: plan.category,
+        answerMode: _answerModeAdaptive,
+        answerRequirements: answerRequirements,
         profile: profile,
         searchTargets: canonSearchTargets,
       );
@@ -308,6 +379,16 @@ class WebContextService {
       }
 
       if (results.isNotEmpty) {
+        final answerBasisResults = results
+            .where(
+                (result) => result.startsWith(_doubaoAnswerBasisResultPrefix))
+            .map((result) =>
+                result.substring(_doubaoAnswerBasisResultPrefix.length).trim())
+            .where((result) => result.isNotEmpty)
+            .toList();
+        if (answerBasisResults.isNotEmpty) {
+          resolvedAnswerBasis = answerBasisResults.last;
+        }
         final timelineResults = results
             .where((result) => result.startsWith(_doubaoTimelineResultPrefix))
             .map((result) =>
@@ -315,18 +396,20 @@ class WebContextService {
             .where((result) => result.isNotEmpty)
             .toList();
         final searchResults = results
-            .where((result) => !result.startsWith(_doubaoTimelineResultPrefix))
+            .where((result) =>
+                !result.startsWith(_doubaoTimelineResultPrefix) &&
+                !result.startsWith(_doubaoAnswerBasisResultPrefix))
             .toList();
         final mergedSummaryResults = <String>[
           if (localProfileResults.isNotEmpty &&
               plan.category == 'canon' &&
-              _queryAsksProfileTraits(executionSearchQuery))
+              _queryAsksProfileTraits(text))
             ..._localProfileResultsAsSearchFacts(localProfileResults),
           ...searchResults,
         ];
         if (localProfileResults.isNotEmpty &&
             plan.category == 'canon' &&
-            _queryAsksProfileTraits(executionSearchQuery)) {
+            _queryAsksProfileTraits(text)) {
           sections.add('【角色设定资料】\n${localProfileResults.join('\n')}');
         }
         if (mergedSummaryResults.isNotEmpty) {
@@ -338,8 +421,7 @@ class WebContextService {
           sections.add('【事实时间线】\n${timelineResults.join('\n\n')}');
         }
         if (localProfileResults.isNotEmpty &&
-            !(plan.category == 'canon' &&
-                _queryAsksProfileTraits(executionSearchQuery))) {
+            !(plan.category == 'canon' && _queryAsksProfileTraits(text))) {
           sections.add('【角色设定资料】\n${localProfileResults.join('\n')}');
         }
       } else if (localProfileResults.isNotEmpty) {
@@ -372,6 +454,17 @@ ${profile.contextRule}
 
 ${sections.join('\n\n')}
 
+${resolvedAnswerBasis == _answerBasisExplicitFact ? '''
+【明确原作设定优先】
+本轮网页资料已经直接给出了用户所问内容的明确作品内设定。回答必须优先采用这项明确设定，不得用角色临场发挥的偏好、习惯或评价替换、弱化或否定它；可以在不改变事实的前提下自然接话。
+''' : resolvedAnswerBasis == _answerBasisMixed ? '''
+【明确设定与有限发挥并存】
+本轮部分问项已有明确作品内设定，必须原样优先采用；其余问项只有真实候选或行为依据，可以在这些事实边界内自然表达倾向。不得用候选推测覆盖明确设定，也不得创造摘要外的专名、能力、经历或因果。
+''' : resolvedAnswerBasis == _answerBasisBoundedCandidates ? '''
+【有限角色发挥】
+本轮网页资料用于限定真实候选、名称、能力、事件和关系边界，不需要替角色直接写出主观选择。角色可以在不违背资料的前提下，从摘要明确提供的候选中自然表达自己的偏好、习惯、感受或评价；不得创造摘要中不存在的专名、能力、经历或因果，也不要对用户说“资料没有写”或“搜索结果没有说明”。
+''' : ''}
+
 【使用这些信息的规则】
 - 这些信息是给你理解现实世界用的，不要机械地说“根据搜索结果”。
 - 只挑和用户问题最相关的 1-2 个事实自然带入，不要像天气预报、财经新闻或百科词条一样铺开讲。
@@ -379,12 +472,15 @@ ${sections.join('\n\n')}
 - 如果搜索摘要不够确定，就用“不太确定”“我印象里”“好像”这类自然表达，不要编造细节。
 - 回答原作/剧情事实时，只能使用搜索摘要里明确支持的信息；摘要没说清楚就表达不确定，不要用模型记忆补成确定事实。
 - 如果上下文包含【事实时间线】，它是回答的剧情顺序骨架；必须按时间线顺序组织叙述，不要把时间线里的事件前后移动，也不要把后续事实提前解释。
+- 时间线后的“依据事实：#编号”只用于核对每个节点的来源，不得在角色回复中念出编号或提到“依据事实”。
 - 使用搜索事实时必须保留动作主体和因果关系：不要把“某人的动物/部下/相关物”改成“某人本人”，不要把“某事被完成/某人被打倒”推断成搜索摘要未说明的角色完成。
 - 当用户问“经过、如何、怎么发生、怎么恢复、怎么解决、怎么支援、战斗过程”等事件经过时，必须覆盖时间线里明确出现的关键手段和结果；如果资料写到招式/手段、击败/救助结果、后续反应，不要只讲原因或性格变化。
 - 当用户问人物关系、相互影响、救赎、关系变化或一段经历时，必须覆盖搜索摘要支持的开端、冲突/逃避、追回/鼓励、回归/和解结果；不要只讲前半段，也不要把不同阶段用“然后”硬接成连续同一事件。
 - 如果时间线里后面的阶段才出现“回归、回到乐队、归队、和解、重新连接”等结果，前面的鼓励、谈心或相遇阶段不能写成已经达成这些结果。
 - 不要把不同地点、不同触发原因的阶段合并；地点、台词和结果必须绑定在时间线对应阶段上。
-- 当用户问“常用、最喜欢、最强、擅长、经常”等频率或偏好时，只有搜索摘要明确支持才能下定论；如果摘要只列出可用招式、作品表现或相关事实，就按“看情况/资料只确认这些”自然回答。
+- 严格事实模式下，频率、偏好和强弱判断必须由摘要明确支持。有限角色发挥模式下，可以从摘要明确给出的真实候选中自然选择和评价，但候选名称、能力、经历和因果仍必须以摘要为准。
+- 如果上下文包含【明确原作设定优先】，必须先回答该明确设定；角色化表达只能补充语气和感受，不能另选一个与设定冲突的答案。
+- 原文证据中的动画/游戏集数、章节、资料页、设定集等出处只用于核对事实；角色回答时只能自然讲作品世界内的事实，不得说“动画第几集、游戏剧情、资料记载、页面提到”等三次元来源表述。
 - 不要在回复里列链接。
 ''';
   }
@@ -492,6 +588,10 @@ ${_recentHistoryForPlanner(conversationHistory)}
             ? _jsonString(decoded['query'])
             : null,
         category: _jsonString(decoded['category']) ?? 'none',
+        answerMode: _answerModeAdaptive,
+        answerRequirements: _jsonAnswerRequirements(
+          decoded['answer_requirements'],
+        ),
         primarySearchObjects: _jsonStringList(decoded['primary_objects']),
         secondarySearchObjects: _jsonStringList(decoded['secondary_objects']),
       );
@@ -527,6 +627,12 @@ JSON 格式：
   "phenology": true/false,
   "web_search": true/false,
   "category": "none/weather/festival/canon/slang/economy/current/general",
+  "answer_requirements": [
+    {
+      "need": "用户问题中需要资料回答的独立问项",
+      "direct_evidence_cues": ["原文若要直接回答该问项，必须明确表达的关系或限定语；不填写答案"]
+    }
+  ],
   "query": "需要网页搜索时使用的搜索词；不需要则空字符串",
   "primary_objects": ["原作搜索的主要对象；每项只写一个角色、地点、事件、歌曲或作品内专名"],
   "secondary_objects": ["需要补充搜索的次要对象；每项也只能写一个对象"]
@@ -547,6 +653,8 @@ JSON 格式：
 12. 原作 query 必须包含用户真正询问的对象；不要因为当前聊天角色是 ${profile.characterName} 就把 ${profile.characterName} 放进 query，除非用户确实在问 ${profile.characterName} 本人。
 13. 如果问题围绕当前角色与另一个人物、地点或事件的作品内联系，query 优先写“被问到的具体对象 + 关系/事件 + 作品名”；当前角色名只能作为辅助词，不能重复出现。
 14. 原作搜索对象拆分规则：先解析用户真正询问的主要对象，再解析需要补充的次要对象；每个数组元素只能是一个干净对象名，不要把问题整句、作品名、感想、关系词或多个对象拼成一项。例如问“KiLLKiSS这首歌怎么样”时，主要对象是“KiLLKiSS”；问“灯喜欢什么动物”时，主要对象是“高松灯”；问“你当初在那田蜘蛛山如何支援”且当前角色就是被问者时，主要对象是当前角色。
+15. answer_requirements 只拆分用户实际需要回答的独立信息需求，不得在搜索前判断它是明确设定还是主观表达，也不要把寒暄、称呼或感想单独列成问项。
+16. direct_evidence_cues 只描述原文直接回答该问项时必须明确表达的关系或限定语，不得填写人物、招式、地点等答案，不得判断网页中是否存在答案。它用于读取网页后的命题核验；没有特殊限定时可以为空数组。
 ''';
   }
 
@@ -579,6 +687,45 @@ JSON 格式：
       final trimmed = item.trim();
       if (trimmed.isEmpty || result.contains(trimmed)) continue;
       result.add(trimmed);
+    }
+    return result;
+  }
+
+  static List<_AnswerRequirement> _jsonAnswerRequirements(dynamic value) {
+    if (value is! List) return const [];
+    final result = <_AnswerRequirement>[];
+    final seen = <String>{};
+    for (final item in value) {
+      String text;
+      List<String> directEvidenceCues;
+      if (item is String) {
+        text = item.trim();
+        directEvidenceCues = const [];
+      } else if (item is Map) {
+        text = _dynamicMapString(item, 'need').trim();
+        directEvidenceCues = _jsonStringList(item['direct_evidence_cues']);
+      } else {
+        continue;
+      }
+      if (text.isEmpty || !seen.add(text)) continue;
+      result.add(_AnswerRequirement(
+        text: text,
+        directEvidenceCues: directEvidenceCues,
+      ));
+    }
+    return result;
+  }
+
+  static List<int> _jsonIntList(
+    dynamic value, {
+    required int maxExclusive,
+  }) {
+    if (value is! List || maxExclusive <= 0) return const [];
+    final result = <int>[];
+    for (final item in value) {
+      final index = item is int ? item : int.tryParse(item.toString());
+      if (index == null || index < 0 || index >= maxExclusive) continue;
+      if (!result.contains(index)) result.add(index);
     }
     return result;
   }
@@ -680,6 +827,21 @@ JSON 格式：
       }
     }
 
+    final primarySearchObjects = category == 'canon'
+        ? _removeUnmentionedPlannerCharacterObjects(
+            plan.primarySearchObjects,
+            text,
+            profile,
+          )
+        : plan.primarySearchObjects;
+    final secondarySearchObjects = category == 'canon'
+        ? _removeUnmentionedPlannerCharacterObjects(
+            plan.secondarySearchObjects,
+            text,
+            profile,
+          )
+        : plan.secondarySearchObjects;
+
     return _SearchPlan(
       includeWeather: includeWeather,
       weatherCity: weatherCity,
@@ -687,9 +849,45 @@ JSON 格式：
       includePhenology: includePhenology,
       searchQuery: searchQuery,
       category: category,
-      primarySearchObjects: plan.primarySearchObjects,
-      secondarySearchObjects: plan.secondarySearchObjects,
+      answerMode: _answerModeAdaptive,
+      answerRequirements: plan.answerRequirements,
+      primarySearchObjects: primarySearchObjects,
+      secondarySearchObjects: secondarySearchObjects,
     );
+  }
+
+  static List<String> _removeUnmentionedPlannerCharacterObjects(
+    List<String> objects,
+    String userText,
+    _WebProfile profile,
+  ) {
+    if (objects.isEmpty) return objects;
+    final mentionedCharacters = _matchedCanonNamesForSearch(
+      userText,
+      '',
+      profile,
+    ).map((name) => name.replaceAll(RegExp(r'\s+'), '')).toSet();
+    if (_asksAboutCurrentCharacterInCanon(userText)) {
+      mentionedCharacters.add(
+        profile.characterName.replaceAll(RegExp(r'\s+'), ''),
+      );
+    }
+
+    final filtered = <String>[];
+    for (final object in objects) {
+      final normalized = _normalizeCanonSearchObject(
+        object,
+        userText,
+        profile,
+      ).replaceAll(RegExp(r'\s+'), '');
+      if (normalized.isEmpty) continue;
+      if (_isKnownCanonCharacterSearchObject(normalized, profile) &&
+          !mentionedCharacters.contains(normalized)) {
+        continue;
+      }
+      if (!filtered.contains(normalized)) filtered.add(normalized);
+    }
+    return filtered;
   }
 
   // 把 DeepSeek 给出的搜索词再整理一下：
@@ -816,33 +1014,25 @@ JSON 格式：
 
   static List<String> _searchLocalCharacterProfile(
     String query,
-    _WebProfile profile,
-  ) {
+    _WebProfile profile, {
+    String userIntent = '',
+  }) {
     try {
       final character = CharacterConfig.getCharacterById(profile.characterId);
       final rawPersonality = character.personality;
       final personality = rawPersonality.replaceAll(RegExp(r'\s+'), ' ');
-      final snippet = _relevantRawSnippet(
-        personality,
+      final intentText = userIntent.trim().isEmpty ? query : userIntent;
+      final relatedNames = _matchedCanonNamesForSearch(
         query,
-        character.name,
-        maxLength: 1200,
-        maxFragments: 8,
-        minLength: 180,
-      );
-      if (snippet.isNotEmpty) {
-        return ['1. ${character.name}：相关设定：$snippet'];
-      }
-
-      final relatedNames = _matchedCanonNamesForSearch(query, '', profile)
-          .where((name) => name.trim() != character.name.trim())
-          .toList();
+        userIntent,
+        profile,
+      ).where((name) => name.trim() != character.name.trim()).toList();
       final relatedSnippets = <String>[];
       for (final name in relatedNames.take(3)) {
         var relatedSnippet = _localProfileTraitSnippet(
           rawPersonality,
           name,
-          query,
+          intentText,
         );
         relatedSnippet = relatedSnippet.isNotEmpty
             ? relatedSnippet
@@ -871,7 +1061,20 @@ JSON 格式：
           '${relatedSnippets.length + 1}. ${character.name}设定中关于$name：$relatedSnippet',
         );
       }
-      return relatedSnippets;
+      if (relatedSnippets.isNotEmpty) return relatedSnippets;
+
+      final snippet = _relevantRawSnippet(
+        personality,
+        query,
+        character.name,
+        maxLength: 1200,
+        maxFragments: 8,
+        minLength: 180,
+      );
+      if (snippet.isNotEmpty) {
+        return ['1. ${character.name}：相关设定：$snippet'];
+      }
+      return const [];
     } catch (_) {
       return const [];
     }
@@ -1207,6 +1410,10 @@ ${_recentHistoryForPlanner(conversationHistory)}
         includePhenology: false,
         searchQuery: _normalizeSearchQuery(query, 'canon', text, profile),
         category: 'canon',
+        answerMode: _answerModeAdaptive,
+        answerRequirements: _jsonAnswerRequirements(
+          decoded['answer_requirements'],
+        ),
         primarySearchObjects: _jsonStringList(decoded['primary_objects']),
         secondarySearchObjects: _jsonStringList(decoded['secondary_objects']),
       );
@@ -1228,6 +1435,12 @@ ${_recentHistoryForPlanner(conversationHistory)}
 只输出 JSON，不要解释：
 {
   "canon_search": true/false,
+  "answer_requirements": [
+    {
+      "need": "需要原作资料回答的独立问项；不预判事实等级",
+      "direct_evidence_cues": ["原文若要直接回答该问项，必须明确表达的关系或限定语；不填写答案"]
+    }
+  ],
   "query": "需要搜索时给出简短搜索词；不需要则空字符串",
   "primary_objects": ["主要搜索对象；每项只写一个角色、地点、事件、歌曲或作品内专名"],
   "secondary_objects": ["次要搜索对象；每项也只写一个对象"]
@@ -1246,6 +1459,8 @@ query 规则：
 - query 要短，不要整句复制用户消息，不要把最近历史里的旧话题强行带入新话题。
 - 如果当前消息出现新对象，优先搜索新对象，不要沿用历史旧对象。
 - primary_objects / secondary_objects 必须拆成干净对象名；不要把作品名、问题整句、感想或关系词拼进去。
+- answer_requirements 只负责拆分需要查证的独立问项。是否存在明确设定、是否只能得到候选范围，必须留给读取网页后的事实抽取判断。
+- direct_evidence_cues 只写直接证据必须表达的关系或限定语，不写答案，也不判断资料是否存在。例如问项包含频率或偏好限定时，保留该限定关系；普通身份或名称问项可以为空。
 ''';
   }
 
@@ -2141,6 +2356,8 @@ ${location.name}：数据源 Open-Meteo；天气数据时间 $currentTime；当�
     String query, {
     required String userText,
     required String category,
+    required String answerMode,
+    required List<_AnswerRequirement> answerRequirements,
     required _WebProfile profile,
     List<String> searchTargets = const [],
   }) async {
@@ -2183,6 +2400,8 @@ ${location.name}：数据源 Open-Meteo；天气数据时间 $currentTime；当�
         category == 'canon' && _isEventProcessCanonQuestion(userText);
     final includeTimeline = needsBroadFactCoverage || eventProcessSearch;
     final extractionFactLimit = factLimit;
+    final minimumFactTarget = includeTimeline ? _complexCanonFactTarget : 2;
+    var collectedAnswerBasis = _answerBasisInsufficient;
     final displayQuery =
         searchTargets.isNotEmpty ? searchTargets.join(' / ') : baseQuery;
 
@@ -2196,7 +2415,6 @@ ${location.name}：数据源 Open-Meteo；天气数据时间 $currentTime；当�
       var phaseAdoptLayerName = phaseLayerName;
       var phaseHasCompleteAnswer = false;
       var phaseResultCount = 0;
-      var phaseHasUsefulPrimaryCoverage = false;
 
       if (category == 'canon' &&
           priority == 0 &&
@@ -2205,29 +2423,166 @@ ${location.name}：数据源 Open-Meteo；天气数据时间 $currentTime；当�
           searchTargets.isNotEmpty ? searchTargets : [baseQuery],
         );
         if (directItems.isNotEmpty) {
-          final extraction = await _extractDoubaoFactsWithModel(
-            searchQuery: displayQuery,
-            userText: userText,
-            category: category,
-            profile: profile,
-            items: directItems,
-            factLimit: extractionFactLimit,
-            preferEvidenceText: needsBroadFactCoverage,
-          );
+          var extraction = const _DoubaoFactExtraction.empty();
+          if (minimumFactTarget > 2 && directItems.length > 1) {
+            final perPageFacts = <_DoubaoGroundedFact>[];
+            var perPageBasis = _answerBasisInsufficient;
+            var perPageProvider = 'none';
+            for (final item in directItems) {
+              final pageExtraction = await _extractDoubaoFactsWithModel(
+                searchQuery: displayQuery,
+                userText: userText,
+                category: category,
+                profile: profile,
+                items: [item],
+                factLimit: extractionFactLimit,
+                minimumFactTarget: minimumFactTarget - perPageFacts.length > 0
+                    ? minimumFactTarget - perPageFacts.length
+                    : 1,
+                preferEvidenceText: needsBroadFactCoverage,
+                answerMode: answerMode,
+                answerRequirements: answerRequirements,
+              );
+              _addUniqueDoubaoFacts(
+                perPageFacts,
+                pageExtraction.facts,
+                maxFacts: needsBroadFactCoverage ? 40 : extractionFactLimit,
+              );
+              perPageBasis = _mergeAnswerBasis(
+                perPageBasis,
+                pageExtraction.answerBasis,
+              );
+              if (pageExtraction.provider != 'none') {
+                perPageProvider = pageExtraction.provider;
+              }
+            }
+            extraction = _DoubaoFactExtraction(
+              status:
+                  perPageFacts.length >= minimumFactTarget ? 'ok' : 'partial',
+              facts: perPageFacts,
+              discardReason: '',
+              provider: perPageProvider,
+              answerBasis: perPageBasis,
+            );
+          } else {
+            extraction = await _extractDoubaoFactsWithModel(
+              searchQuery: displayQuery,
+              userText: userText,
+              category: category,
+              profile: profile,
+              items: directItems,
+              factLimit: extractionFactLimit,
+              minimumFactTarget: minimumFactTarget,
+              preferEvidenceText: needsBroadFactCoverage,
+              answerMode: answerMode,
+              answerRequirements: answerRequirements,
+            );
+          }
+          if (extraction.facts.isEmpty) {
+            _logSearch('萌娘百科直达事实首次抽取为空，执行一次同页候选事实复核');
+            extraction = await _extractDoubaoFactsWithModel(
+              searchQuery: displayQuery,
+              userText: userText,
+              category: category,
+              profile: profile,
+              items: directItems,
+              factLimit: extractionFactLimit,
+              minimumFactTarget: minimumFactTarget,
+              preferEvidenceText: needsBroadFactCoverage,
+              answerMode: answerMode,
+              answerRequirements: answerRequirements,
+              candidateRecoveryPass: true,
+            );
+          }
+          if (minimumFactTarget > 2 &&
+              extraction.facts.length >= minimumFactTarget - 1 &&
+              extraction.facts.length < minimumFactTarget &&
+              _factsCoverAnswerRequirements(
+                extraction.facts,
+                answerRequirements,
+              )) {
+            _logSearch(
+              '萌娘百科直达事实已覆盖问项但尚差'
+              '${minimumFactTarget - extraction.facts.length}条，'
+              '先从同批全文补充不重复事实',
+            );
+            final representedSourceUrls = extraction.facts
+                .map((fact) => fact.sourceUrl.trim().toLowerCase())
+                .where((url) => url.isNotEmpty)
+                .toSet();
+            final representedSourceTitles = extraction.facts
+                .map((fact) => fact.sourceTitle.trim())
+                .where((title) => title.isNotEmpty)
+                .toSet();
+            final uncoveredDirectItems = directItems.where((item) {
+              final normalizedUrl = item.url.trim().toLowerCase();
+              final normalizedTitle = item.title.trim();
+              final urlCovered = normalizedUrl.isNotEmpty &&
+                  representedSourceUrls.contains(normalizedUrl);
+              final titleCovered = normalizedTitle.isNotEmpty &&
+                  representedSourceTitles.contains(normalizedTitle);
+              return !urlCovered && !titleCovered;
+            }).toList(growable: false);
+            final supplemental = await _extractDoubaoFactsWithModel(
+              searchQuery: displayQuery,
+              userText: userText,
+              category: category,
+              profile: profile,
+              items: uncoveredDirectItems.isNotEmpty
+                  ? uncoveredDirectItems
+                  : directItems,
+              factLimit: extractionFactLimit,
+              minimumFactTarget: minimumFactTarget - extraction.facts.length,
+              preferEvidenceText: needsBroadFactCoverage,
+              answerMode: answerMode,
+              answerRequirements: answerRequirements,
+              excludedFacts: extraction.facts,
+            );
+            if (supplemental.facts.isNotEmpty) {
+              final mergedFacts = [...extraction.facts];
+              _addUniqueDoubaoFacts(
+                mergedFacts,
+                supplemental.facts,
+                maxFacts: extractionFactLimit,
+              );
+              extraction = _DoubaoFactExtraction(
+                status: mergedFacts.length >= minimumFactTarget
+                    ? 'ok'
+                    : extraction.status,
+                facts: mergedFacts,
+                discardReason: extraction.discardReason,
+                provider: extraction.provider,
+                answerBasis: _mergeAnswerBasis(
+                  extraction.answerBasis,
+                  supplemental.answerBasis,
+                ),
+              );
+            }
+          }
           _logSearch(
             '萌娘百科词条直达优先: '
-            '命中${directItems.length}条，抽取事实=${extraction.facts.length}(${extraction.status})',
+            '命中${directItems.length}条，抽取事实=${extraction.facts.length}'
+            '(${extraction.status}, ${extraction.answerBasis})，'
+            '${_formatRequirementCoverageForLog(extraction.facts, answerRequirements)}',
           );
           if (extraction.facts.isNotEmpty) {
+            collectedAnswerBasis = _mergeAnswerBasis(
+              collectedAnswerBasis,
+              extraction.answerBasis,
+            );
             _addUniqueDoubaoFacts(
               collectedFacts,
               extraction.facts,
               maxFacts: needsBroadFactCoverage ? 40 : factLimit,
             );
-            phaseHasCompleteAnswer =
-                phaseHasCompleteAnswer || extraction.status != 'partial';
-            phaseHasUsefulPrimaryCoverage = includeTimeline &&
-                collectedFacts.length >= _complexCanonFactTarget;
+            phaseHasCompleteAnswer = _hasEnoughDoubaoFactsForSearchStop(
+              collectedFacts,
+              factLimit: factLimit,
+              needsBroadFactCoverage: needsBroadFactCoverage,
+              eventProcessSearch: eventProcessSearch,
+              extractionStatus: extraction.status,
+              answerRequirements: answerRequirements,
+            );
           }
           phaseResultCount += directItems.length;
         }
@@ -2247,14 +2602,23 @@ ${location.name}：数据源 Open-Meteo；天气数据时间 $currentTime；当�
             profile: profile,
             items: browserItems,
             factLimit: extractionFactLimit,
+            minimumFactTarget: minimumFactTarget,
             preferEvidenceText: needsBroadFactCoverage,
+            answerMode: answerMode,
+            answerRequirements: answerRequirements,
           );
           _logSearch(
             '本地百度/维基直达优先: '
             '命中${browserItems.length}条${_formatSourceHostsForLog(browserItems)}，'
-            '抽取事实=${extraction.facts.length}(${extraction.status})',
+            '抽取事实=${extraction.facts.length}'
+            '(${extraction.status}, ${extraction.answerBasis})，'
+            '${_formatRequirementCoverageForLog(extraction.facts, answerRequirements)}',
           );
           if (extraction.facts.isNotEmpty) {
+            collectedAnswerBasis = _mergeAnswerBasis(
+              collectedAnswerBasis,
+              extraction.answerBasis,
+            );
             _logSearchVerbose(
               '本地百度/维基事实提取摘要: '
               '${_formatDoubaoFactsCompactForLog(extraction.facts)}',
@@ -2264,25 +2628,21 @@ ${location.name}：数据源 Open-Meteo；天气数据时间 $currentTime；当�
               extraction.facts,
               maxFacts: needsBroadFactCoverage ? 40 : factLimit,
             );
-            phaseHasCompleteAnswer =
-                phaseHasCompleteAnswer || extraction.status != 'partial';
+            phaseHasCompleteAnswer = _hasEnoughDoubaoFactsForSearchStop(
+              collectedFacts,
+              factLimit: factLimit,
+              needsBroadFactCoverage: needsBroadFactCoverage,
+              eventProcessSearch: eventProcessSearch,
+              extractionStatus: extraction.status,
+              answerRequirements: answerRequirements,
+            );
             phaseAdoptLayerName = _searchLayerName(priority, '本地百度/维基补充');
           }
           phaseResultCount += browserItems.length;
         }
       }
 
-      final directFactsEnough = collectedFacts.isNotEmpty &&
-          ((!includeTimeline && phaseHasCompleteAnswer) ||
-              collectedFacts.length >= factLimit ||
-              phaseHasUsefulPrimaryCoverage ||
-              _hasEnoughDoubaoFactsForSearchStop(
-                collectedFacts,
-                factLimit: factLimit,
-                needsBroadFactCoverage: needsBroadFactCoverage,
-                eventProcessSearch: eventProcessSearch,
-                extractionStatus: 'partial',
-              ));
+      final directFactsEnough = phaseHasCompleteAnswer;
 
       if (!directFactsEnough) {
         for (final attempt in phaseAttempts) {
@@ -2360,16 +2720,25 @@ ${location.name}：数据源 Open-Meteo；天气数据时间 $currentTime；当�
             profile: profile,
             items: enrichedItems,
             factLimit: extractionFactLimit,
+            minimumFactTarget: minimumFactTarget,
             preferEvidenceText: needsBroadFactCoverage,
+            answerMode: answerMode,
+            answerRequirements: answerRequirements,
           );
           final enrichedContentCount =
               enrichedItems.where((item) => item.content.isNotEmpty).length;
           _logSearch(
             '搜索步骤结果[$layerName]: '
             '命中${items.length}条，正文$enrichedContentCount/${enrichedItems.length}，'
-            '抽取事实=${extraction.facts.length}(${extraction.status})',
+            '抽取事实=${extraction.facts.length}'
+            '(${extraction.status}, ${extraction.answerBasis})，'
+            '${_formatRequirementCoverageForLog(extraction.facts, answerRequirements)}',
           );
           if (extraction.facts.isNotEmpty) {
+            collectedAnswerBasis = _mergeAnswerBasis(
+              collectedAnswerBasis,
+              extraction.answerBasis,
+            );
             _logSearchVerbose(
               '豆包事实提取摘要: '
               '${_formatDoubaoFactsCompactForLog(extraction.facts)}',
@@ -2379,15 +2748,15 @@ ${location.name}：数据源 Open-Meteo；天气数据时间 $currentTime；当�
               extraction.facts,
               maxFacts: needsBroadFactCoverage ? 40 : factLimit,
             );
-            phaseHasCompleteAnswer =
-                phaseHasCompleteAnswer || extraction.status != 'partial';
-            if (_hasEnoughDoubaoFactsForSearchStop(
+            phaseHasCompleteAnswer = _hasEnoughDoubaoFactsForSearchStop(
               collectedFacts,
               factLimit: factLimit,
               needsBroadFactCoverage: needsBroadFactCoverage,
               eventProcessSearch: eventProcessSearch,
               extractionStatus: extraction.status,
-            )) {
+              answerRequirements: answerRequirements,
+            );
+            if (phaseHasCompleteAnswer) {
               _logSearch(
                 '网页事实已足够，停止搜索: '
                 '${_formatDoubaoFactsUsageForLog(collectedFacts, factLimit)}，'
@@ -2400,17 +2769,7 @@ ${location.name}：数据源 Open-Meteo；天气数据时间 $currentTime；当�
         }
       }
 
-      final phaseHasEnoughFacts = collectedFacts.isNotEmpty &&
-          ((!includeTimeline && phaseHasCompleteAnswer) ||
-              collectedFacts.length >= factLimit ||
-              phaseHasUsefulPrimaryCoverage ||
-              _hasEnoughDoubaoFactsForSearchStop(
-                collectedFacts,
-                factLimit: factLimit,
-                needsBroadFactCoverage: needsBroadFactCoverage,
-                eventProcessSearch: eventProcessSearch,
-                extractionStatus: 'partial',
-              ));
+      final phaseHasEnoughFacts = phaseHasCompleteAnswer;
 
       if (phaseHasEnoughFacts) {
         _logSearch(
@@ -2427,12 +2786,20 @@ ${location.name}：数据源 Open-Meteo；天气数据时间 $currentTime；当�
           profile: profile,
         );
         if (formatted.isNotEmpty) {
+          final resolvedCollectedBasis = _answerBasisForFacts(
+            collectedFacts,
+            fallback: collectedAnswerBasis,
+          );
+          final resultsWithBasis = [
+            ...formatted,
+            '$_doubaoAnswerBasisResultPrefix$resolvedCollectedBasis',
+          ];
           _writeSearchCache(
-            _searchCacheKey('doubao::$baseQuery', category),
-            formatted,
+            _searchCacheKey('doubao::$answerMode::$baseQuery', category),
+            resultsWithBasis,
             'DoubaoSearch',
           );
-          return formatted;
+          return resultsWithBasis;
         }
       }
 
@@ -2462,12 +2829,20 @@ ${location.name}：数据源 Open-Meteo；天气数据时间 $currentTime；当�
         profile: profile,
       );
       if (formatted.isNotEmpty) {
+        final resolvedCollectedBasis = _answerBasisForFacts(
+          collectedFacts,
+          fallback: collectedAnswerBasis,
+        );
+        final resultsWithBasis = [
+          ...formatted,
+          '$_doubaoAnswerBasisResultPrefix$resolvedCollectedBasis',
+        ];
         _writeSearchCache(
-          _searchCacheKey('doubao::$baseQuery', category),
-          formatted,
+          _searchCacheKey('doubao::$answerMode::$baseQuery', category),
+          resultsWithBasis,
           'DoubaoSearch',
         );
-        return formatted;
+        return resultsWithBasis;
       }
     }
 
@@ -2547,8 +2922,15 @@ ${location.name}：数据源 Open-Meteo；天气数据时间 $currentTime；当�
             : '${directItem.title}::$target';
         if (seenUrls.add(key)) {
           items.add(directItem);
+          _logSearch(
+            '萌娘百科词条全文直达成功: '
+            '${directItem.title.replaceFirst(' - 萌娘百科', '')}，'
+            '正文${directItem.content.runes.length}字',
+          );
           continue;
         }
+        _logSearchVerbose('萌娘百科词条直达重复，已合并: $target -> ${directItem.url}');
+        continue;
       }
 
       final direct = await _searchDirectMoegirl(
@@ -2572,25 +2954,31 @@ ${location.name}：数据源 Open-Meteo；天气数据时间 $currentTime；当�
     try {
       final cleanTitle = title.trim();
       if (cleanTitle.isEmpty) return null;
-      final uri = Uri.https(
+      final requestUri = Uri.https(
         'zh.moegirl.org.cn',
         '/$cleanTitle',
         const {'variant': 'zh-cn'},
       );
-      final response = await http
-          .get(uri, headers: _browserSearchHeaders)
-          .timeout(_searchTimeout);
-      if (response.statusCode != 200) {
-        _logSearchVerbose(
-          '萌娘百科词条全文直达失败: status=${response.statusCode}, title=$title',
-        );
-        return null;
-      }
+      final extract = await _fetchMoegirlPlainTextExtract(cleanTitle);
+      var readable = extract?.text ?? '';
+      var canonicalTitle = extract?.canonicalTitle.trim() ?? '';
+      if (canonicalTitle.isEmpty) canonicalTitle = cleanTitle;
+      if (readable.isEmpty) {
+        final response = await http
+            .get(requestUri, headers: _browserSearchHeaders)
+            .timeout(_searchTimeout);
+        if (response.statusCode != 200) {
+          _logSearchVerbose(
+            '萌娘百科词条全文直达失败: status=${response.statusCode}, title=$title',
+          );
+          return null;
+        }
 
-      final html = utf8.decode(response.bodyBytes, allowMalformed: true);
-      var readable = _preferredMoegirlSectionText(html);
-      if (readable.runes.length < 800) {
-        readable = _cleanMoegirlContentText(html);
+        final html = utf8.decode(response.bodyBytes, allowMalformed: true);
+        readable = _preferredMoegirlSectionText(html);
+        if (readable.runes.length < 800) {
+          readable = _cleanMoegirlContentText(html);
+        }
       }
       final cleaned = readable.replaceAll(RegExp(r'\s+'), ' ').trim();
       if (cleaned.runes.length < 240 || _looksLikeGarbledText(cleaned)) {
@@ -2600,14 +2988,16 @@ ${location.name}：数据源 Open-Meteo；天气数据时间 $currentTime；当�
         return null;
       }
 
-      _logSearch(
-        '萌娘百科词条全文直达成功: $title，正文${cleaned.runes.length}字',
+      final canonicalUri = Uri.https(
+        'zh.moegirl.org.cn',
+        '/$canonicalTitle',
+        const {'variant': 'zh-cn'},
       );
       return _DoubaoSearchItem(
-        title: '$cleanTitle - 萌娘百科',
+        title: '$canonicalTitle - 萌娘百科',
         snippet: '',
         siteName: 'zh.moegirl.org.cn',
-        url: uri.toString(),
+        url: canonicalUri.toString(),
         summary: '',
         content: cleaned,
         publishTime: '',
@@ -2616,6 +3006,52 @@ ${location.name}：数据源 Open-Meteo；天气数据时间 $currentTime；当�
       _logSearchVerbose('萌娘百科词条全文直达异常: title=$title, error=$e');
       return null;
     }
+  }
+
+  static Future<({String text, String canonicalTitle})?>
+      _fetchMoegirlPlainTextExtract(String title) async {
+    try {
+      final uri = Uri.https('zh.moegirl.org.cn', '/api.php', {
+        'action': 'query',
+        'prop': 'extracts',
+        'explaintext': '1',
+        'redirects': '1',
+        'titles': title,
+        'format': 'json',
+        'variant': 'zh-cn',
+      });
+      final response = await http
+          .get(uri, headers: _browserSearchHeaders)
+          .timeout(_searchTimeout);
+      if (response.statusCode != 200) return null;
+
+      final decoded = jsonDecode(
+        utf8.decode(response.bodyBytes, allowMalformed: true),
+      );
+      if (decoded is! Map) return null;
+      final query = decoded['query'];
+      if (query is! Map) return null;
+      final pages = query['pages'];
+      if (pages is! Map) return null;
+      for (final page in pages.values) {
+        if (page is! Map) continue;
+        final extract = page['extract'];
+        if (extract is! String || extract.trim().isEmpty) continue;
+        final cleaned = _cleanMoegirlContentText(extract);
+        if (cleaned.runes.length >= 240 && !_looksLikeGarbledText(cleaned)) {
+          _logSearchVerbose(
+            '萌娘百科官方 API 纯文本成功: $title，正文${cleaned.runes.length}字',
+          );
+          final canonicalTitle = page['title'] is String
+              ? (page['title'] as String).trim()
+              : title.trim();
+          return (text: cleaned, canonicalTitle: canonicalTitle);
+        }
+      }
+    } catch (e) {
+      _logSearchVerbose('萌娘百科官方 API 纯文本失败: $title, $e');
+    }
+    return null;
   }
 
   static _DoubaoSearchItem? _doubaoItemFromFormattedSearchResult(
@@ -3201,6 +3637,25 @@ ${location.name}：数据源 Open-Meteo；天气数据时间 $currentTime；当�
       }
     }
 
+    final pronunciationAliases = _uniquePronunciationCharacterAliases();
+    final normalizedCorpus = ApiService.nameSearchMatchKey(corpus);
+    for (final entry in pronunciationAliases.entries) {
+      final aliasKey = ApiService.nameSearchMatchKey(entry.key);
+      if (aliasKey.isNotEmpty && normalizedCorpus.contains(aliasKey)) {
+        add(entry.value);
+      }
+    }
+
+    final configuredCallNames =
+        ApiService.fixedCharacterCallNameChineseTargets(profile.characterId);
+    for (final entry in configuredCallNames.entries) {
+      final callName = entry.value.trim();
+      if (callName.isEmpty) continue;
+      if (_canonTextContainsTerm(corpus, callName)) {
+        add(entry.key);
+      }
+    }
+
     for (final name in ApiService.canonicalChineseNamesForSearch(
       characterId: profile.characterId,
     )) {
@@ -3221,6 +3676,45 @@ ${location.name}：数据源 Open-Meteo；天气数据时间 $currentTime；当�
       return 0;
     });
     return matches;
+  }
+
+  static Map<String, String> _uniquePronunciationCharacterAliases() {
+    final owners = <String, Set<String>>{};
+    final displayAliases = <String, String>{};
+    for (final entry in characterNamePronunciations) {
+      final writtenParts = entry.japanese
+          .split(RegExp(r'[\s　]+'))
+          .where((part) => part.trim().isNotEmpty)
+          .toList(growable: false);
+      final readingParts = entry.reading
+          .split(RegExp(r'[\s　]+'))
+          .where((part) => part.trim().isNotEmpty)
+          .toList(growable: false);
+      if (writtenParts.length < 2 || readingParts.length < 2) continue;
+      if (!RegExp(r'[一-龥ぁ-ゖァ-ヺ]').hasMatch(entry.japanese)) continue;
+
+      final writtenFullName = writtenParts.join();
+      for (final alias in <String>{
+        writtenFullName,
+        ...writtenParts,
+        ...readingParts,
+        ...entry.aliases.keys,
+      }) {
+        final aliasKey = ApiService.nameSearchMatchKey(alias);
+        if (aliasKey.isEmpty) continue;
+        owners.putIfAbsent(aliasKey, () => <String>{}).add(entry.chinese);
+        displayAliases.putIfAbsent(aliasKey, () => alias);
+      }
+    }
+
+    final result = <String, String>{};
+    for (final entry in owners.entries) {
+      if (entry.value.length != 1) continue;
+      final alias = displayAliases[entry.key];
+      if (alias == null || alias.isEmpty) continue;
+      result[alias] = entry.value.single;
+    }
+    return result;
   }
 
   static int _firstCanonNameHitIndex(String text, String name) {
@@ -3473,6 +3967,13 @@ ${location.name}：数据源 Open-Meteo；天气数据时间 $currentTime；当�
         if (timeRange != null && timeRange.trim().isNotEmpty)
           'TimeRange': timeRange.trim(),
       };
+
+      _activeTrace?.recordRemoteCall(
+        kind: 'search_api',
+        provider: useGlobal ? 'Doubao Global' : 'Doubao Custom',
+        operation: 'web_search',
+        requestLabel: _truncateDoubaoQuery(query),
+      );
 
       final response = await http
           .post(
@@ -3882,7 +4383,12 @@ ${location.name}：数据源 Open-Meteo；天气数据时间 $currentTime；当�
     required _WebProfile profile,
     required List<_DoubaoSearchItem> items,
     required int factLimit,
+    required int minimumFactTarget,
     required bool preferEvidenceText,
+    required String answerMode,
+    required List<_AnswerRequirement> answerRequirements,
+    bool candidateRecoveryPass = false,
+    List<_DoubaoGroundedFact> excludedFacts = const [],
   }) async {
     try {
       final rawResults = _formatDoubaoRawResultsForModel(items);
@@ -3908,6 +4414,9 @@ ${location.name}：数据源 Open-Meteo；天气数据时间 $currentTime；当�
             profile,
             category,
             factLimit: factLimit,
+            minimumFactTarget: minimumFactTarget,
+            answerMode: answerMode,
+            answerRequirements: answerRequirements,
           ),
         },
         {
@@ -3915,6 +4424,24 @@ ${location.name}：数据源 Open-Meteo；天气数据时间 $currentTime；当�
           'content': '''
 用户问题：
 $userText
+
+独立问项（索引从 0 开始，facts 必须用 requirement_indexes 对应）：
+${answerRequirements.asMap().entries.map((entry) {
+            final cues = entry.value.directEvidenceCues.isEmpty
+                ? '无额外限定'
+                : '直接证据关系：${entry.value.directEvidenceCues.join('、')}';
+            return '${entry.key}. ${entry.value.text}（$cues）';
+          }).join('\n')}
+
+本轮最低有效事实目标：$minimumFactTarget 条。只有原文确实不足时才可以少于这个数量并返回 partial；不得用旁支信息凑数。
+
+${candidateRecoveryPass ? '这是同一批直达正文的唯一一次复核。首次抽取没有返回事实，请重新通读全文；如果没有直接频率、偏好或评价结论，但正文列出了真实候选、使用记录、特征或效果，必须按 bounded_candidates 输出，不能仅因缺少直接结论再次判 insufficient。' : ''}
+
+${excludedFacts.isEmpty ? '' : '''
+已采纳事实（本轮不要重复或换句话复述）：
+${excludedFacts.asMap().entries.map((entry) => '${entry.key + 1}. ${entry.value.text}').join('\n')}
+请继续通读同一批正文，只输出与上述事实语义不同、且与用户问项直接相关的补充事实。如果确实没有，返回 insufficient，不得拿旁支信息凑数。
+'''}
 
 搜索词：
 $searchQuery
@@ -3948,6 +4475,8 @@ $rawResults
         category: category,
         provider: chatResult.provider,
         factLimit: factLimit,
+        answerMode: answerMode,
+        answerRequirements: answerRequirements,
       );
       final validated = _validateExtractedFactsAgainstSearchResults(
         extraction,
@@ -3955,6 +4484,7 @@ $rawResults
         items: items,
         preferEvidenceText: preferEvidenceText,
         factLimit: factLimit,
+        answerMode: answerMode,
       );
       final augmented = _augmentPreferenceFactsFromSearchResults(
         validated,
@@ -4033,6 +4563,7 @@ $rawResults
       facts: merged,
       discardReason: extraction.discardReason,
       provider: extraction.provider == 'none' ? provider : extraction.provider,
+      answerBasis: extraction.answerBasis,
     );
   }
 
@@ -4060,6 +4591,7 @@ $rawResults
     required List<_DoubaoSearchItem> items,
     required bool preferEvidenceText,
     required int factLimit,
+    required String answerMode,
   }) {
     if (extraction.facts.isEmpty) {
       return extraction;
@@ -4068,15 +4600,43 @@ $rawResults
     final requireEvidence = preferEvidenceText;
     final validatedFacts = <_DoubaoGroundedFact>[];
     final droppedEvidenceFacts = <_DoubaoGroundedFact>[];
-    final droppedHabitFacts = <_DoubaoGroundedFact>[];
     final droppedSubjectFacts = <_DoubaoGroundedFact>[];
     final droppedBloatedProfileFacts = <_DoubaoGroundedFact>[];
+    final chronologyScope = items
+        .map((item) =>
+            item.url.trim().isNotEmpty ? item.url.trim() : item.title.trim())
+        .where((value) => value.isNotEmpty)
+        .join('|');
     for (final fact in extraction.facts) {
       final sourcedFact = _attachFallbackSourceIfUnambiguous(fact, items);
-      final sanitizedFact = _sanitizeExtractedFactForQuestion(
+      var sanitizedFact = _sanitizeExtractedFactForQuestion(
         sourcedFact,
         userText: userText,
       );
+      sanitizedFact = sanitizedFact.copyWith(
+        eventOrder: sanitizedFact.eventOrder > 0 &&
+                sanitizedFact.eventOrderEvidence.trim().isNotEmpty
+            ? sanitizedFact.eventOrder
+            : 0,
+        chronologyScope: sanitizedFact.eventOrder > 0 &&
+                sanitizedFact.eventOrderEvidence.trim().isNotEmpty
+            ? chronologyScope
+            : '',
+      );
+      if (sanitizedFact.answerBasis == _answerBasisExplicitFact &&
+          sanitizedFact.directAnswerExcerpt.isNotEmpty) {
+        final sourceText = _sourceTextForFact(sanitizedFact, items);
+        if (sourceText.isEmpty ||
+            !_containsLooseText(
+              sourceText,
+              sanitizedFact.directAnswerExcerpt,
+            )) {
+          sanitizedFact = sanitizedFact.copyWith(
+            answerBasis: _answerBasisBoundedCandidates,
+            directAnswerExcerpt: '',
+          );
+        }
+      }
       if (!_sourceExcerptIsSupported(
         sanitizedFact,
         items,
@@ -4087,23 +4647,11 @@ $rawResults
           _isBloatedProfileBoxFact(sanitizedFact)) {
         droppedBloatedProfileFacts.add(sourcedFact);
       } else if (_queryAsksProfileTraits(userText) &&
+          extraction.answerBasis != _answerBasisExplicitFact &&
           !_preferenceFactMatchesSourceSubject(sanitizedFact)) {
         droppedSubjectFacts.add(sourcedFact);
-      } else if (_queryAsksProfileTraits(userText) &&
-          _isUnsupportedHabitLocationFact(sanitizedFact, items)) {
-        droppedHabitFacts.add(sourcedFact);
       } else {
-        final evidenceText = _shortenRunes(sanitizedFact.sourceExcerpt, 260);
-        validatedFacts.add(
-          requireEvidence && sanitizedFact.sourceExcerpt.trim().isNotEmpty
-              ? sanitizedFact.copyWith(
-                  text: _withSourceSubjectHint(
-                    evidenceText,
-                    sanitizedFact.sourceTitle,
-                  ),
-                )
-              : sanitizedFact,
-        );
+        validatedFacts.add(sanitizedFact);
       }
     }
 
@@ -4111,12 +4659,6 @@ $rawResults
       debugPrint(
         '豆包事实后校验丢弃证据片段不可定位的事实: '
         '${_formatDoubaoFactsCompactForLog(droppedEvidenceFacts)}',
-      );
-    }
-    if (droppedHabitFacts.isNotEmpty) {
-      debugPrint(
-        '豆包事实后校验丢弃缺少习惯语义支撑的地点事实: '
-        '${_formatDoubaoFactsCompactForLog(droppedHabitFacts)}',
       );
     }
     if (droppedSubjectFacts.isNotEmpty) {
@@ -4133,7 +4675,6 @@ $rawResults
     }
     if (!preferEvidenceText &&
         droppedEvidenceFacts.isEmpty &&
-        droppedHabitFacts.isEmpty &&
         droppedSubjectFacts.isEmpty &&
         droppedBloatedProfileFacts.isEmpty) {
       return extraction;
@@ -4144,25 +4685,19 @@ $rawResults
     ].take(factLimit).toList(growable: false);
 
     return _DoubaoFactExtraction(
-      status: finalFacts.isEmpty ? 'insufficient' : 'partial',
+      status: finalFacts.isEmpty
+          ? 'insufficient'
+          : answerMode == _answerModeBoundedRoleplay
+              ? extraction.status
+              : 'partial',
       facts: finalFacts,
       discardReason: extraction.discardReason,
       provider: extraction.provider,
+      answerBasis: _answerBasisForFacts(
+        finalFacts,
+        fallback: extraction.answerBasis,
+      ),
     );
-  }
-
-  static String _withSourceSubjectHint(String text, String sourceTitle) {
-    final cleaned = text.replaceAll(RegExp(r'\s+'), ' ').trim();
-    final subject = _sourceTitleSubject(sourceTitle);
-    if (cleaned.isEmpty || subject.isEmpty) return cleaned;
-    final compactText = cleaned.replaceAll(RegExp(r'\s+'), '');
-    final compactSubject = subject.replaceAll(RegExp(r'\s+'), '');
-    if (compactText.startsWith(compactSubject)) return cleaned;
-    if (compactText.length >= compactSubject.length &&
-        compactText.substring(0, compactSubject.length) == compactSubject) {
-      return cleaned;
-    }
-    return '$subject：$cleaned';
   }
 
   static String _sourceTitleSubject(String sourceTitle) {
@@ -4353,39 +4888,7 @@ $rawResults
       return fact;
     }
 
-    return _DoubaoGroundedFact(
-      text: firstPreferenceClause,
-      sourceTitle: fact.sourceTitle,
-      sourceUrl: fact.sourceUrl,
-      sourceExcerpt: fact.sourceExcerpt,
-    );
-  }
-
-  static bool _isUnsupportedHabitLocationFact(
-    _DoubaoGroundedFact fact,
-    List<_DoubaoSearchItem> items,
-  ) {
-    final text = fact.text;
-    if (!RegExp(r'闲暇|空闲|休息日|休日|常去|经常去|经常|よく|暇').hasMatch(text)) {
-      return false;
-    }
-
-    final places = RegExp(
-      r'[\u4e00-\u9fffA-Za-z0-9!！・･·ー]{1,16}(?:馆|館|院|校|园|園|店|屋|室|场|場|所|house|House)',
-      caseSensitive: false,
-    ).allMatches(text).map((match) => match.group(0) ?? '').where((value) {
-      if (value.length < 2) return false;
-      return !RegExp(r'时候|时间|资料|事实').hasMatch(value);
-    }).toSet();
-    if (places.isEmpty) return false;
-
-    final sourceText = _sourceTextForFact(fact, items);
-    if (sourceText.isEmpty) return false;
-
-    for (final place in places) {
-      if (_sourceSupportsHabitPlace(sourceText, place)) return false;
-    }
-    return true;
+    return fact.copyWith(text: firstPreferenceClause);
   }
 
   static String _sourceTextForFact(
@@ -4403,19 +4906,6 @@ $rawResults
       if (titleMatches || urlMatches) return item.bestText;
     }
     return items.map((item) => item.bestText).join(' ');
-  }
-
-  static bool _sourceSupportsHabitPlace(String sourceText, String place) {
-    final source = sourceText.replaceAll(RegExp(r'\s+'), ' ');
-    final habit = RegExp(r'兴趣|愛好|爱好|闲暇|空闲|休日|休息日|常去|经常|よく|暇');
-    for (final match in RegExp(RegExp.escape(place)).allMatches(source)) {
-      final start = match.start - 80 < 0 ? 0 : match.start - 80;
-      final end =
-          match.end + 80 > source.length ? source.length : match.end + 80;
-      final window = source.substring(start, end);
-      if (habit.hasMatch(window)) return true;
-    }
-    return false;
   }
 
   static bool _isBloatedProfileBoxFact(_DoubaoGroundedFact fact) {
@@ -4471,6 +4961,8 @@ $rawResults
     required String category,
     required String provider,
     required int factLimit,
+    required String answerMode,
+    required List<_AnswerRequirement> answerRequirements,
   }) {
     final jsonText = _extractJsonObject(content);
     Object? strictParseError;
@@ -4483,6 +4975,8 @@ $rawResults
             category: category,
             provider: provider,
             factLimit: factLimit,
+            answerMode: answerMode,
+            answerRequirements: answerRequirements,
           );
         }
       } catch (e) {
@@ -4495,6 +4989,8 @@ $rawResults
       category: category,
       provider: provider,
       factLimit: factLimit,
+      answerMode: answerMode,
+      answerRequirements: answerRequirements,
     );
     if (strictParseError != null) {
       if (lenient.facts.isNotEmpty) {
@@ -4514,6 +5010,8 @@ $rawResults
     required String category,
     required String provider,
     required int factLimit,
+    required String answerMode,
+    required List<_AnswerRequirement> answerRequirements,
   }) {
     final facts = <_DoubaoGroundedFact>[];
     final rawFacts = decoded['facts'];
@@ -4528,23 +5026,85 @@ $rawResults
         if (category == 'canon' && _looksLikeProductionMetaFact(text)) {
           continue;
         }
+        final factBasis = _normalizeFactAnswerBasis(
+          _dynamicMapString(rawFact, 'basis'),
+        );
+        final directAnswerExcerpt =
+            _dynamicMapString(rawFact, 'direct_answer_excerpt');
+        final rawEventOrder = rawFact['event_order'];
+        final eventOrder = rawEventOrder is int
+            ? rawEventOrder
+            : int.tryParse('${rawEventOrder ?? ''}') ?? 0;
+        final requirementIndexes = _jsonIntList(
+          rawFact['requirement_indexes'],
+          maxExclusive: answerRequirements.length,
+        );
+        final directEvidenceMatches = _directAnswerExcerptMatchesRequirements(
+          directAnswerExcerpt,
+          requirementIndexes: requirementIndexes,
+          answerRequirements: answerRequirements,
+        );
         facts.add(_DoubaoGroundedFact(
           text: text,
           sourceTitle: _dynamicMapString(rawFact, 'source_title'),
           sourceUrl: _dynamicMapString(rawFact, 'source_url'),
           sourceExcerpt: _dynamicMapString(rawFact, 'source_excerpt'),
+          requirementIndexes: requirementIndexes,
+          answerBasis: factBasis == _answerBasisExplicitFact &&
+                  (directAnswerExcerpt.isEmpty || !directEvidenceMatches)
+              ? _answerBasisBoundedCandidates
+              : factBasis,
+          isStrongEvidence:
+              _dynamicMapString(rawFact, 'evidence_strength') == 'strong',
+          directAnswerExcerpt: directAnswerExcerpt,
+          eventOrder: eventOrder > 0 ? eventOrder : 0,
+          eventOrderEvidence:
+              _dynamicMapString(rawFact, 'event_order_evidence'),
         ));
       }
     }
 
-    final status = _dynamicMapString(decoded, 'status');
+    final status = _normalizeFactExtractionStatus(
+      _dynamicMapString(decoded, 'status'),
+      hasFacts: facts.isNotEmpty,
+    );
     final reason = _dynamicMapString(decoded, 'discard_reason');
+    final answerBasis = _normalizeAnswerBasis(
+      _dynamicMapString(decoded, 'answer_basis'),
+      answerMode: answerMode,
+      hasFacts: facts.isNotEmpty,
+    );
     return _DoubaoFactExtraction(
-      status: status.isEmpty ? (facts.isEmpty ? 'insufficient' : 'ok') : status,
+      status: status,
       facts: facts.take(factLimit).toList(),
       discardReason: reason,
       provider: provider,
+      answerBasis: _answerBasisForFacts(
+        facts,
+        fallback: answerBasis,
+      ),
     );
+  }
+
+  static bool _directAnswerExcerptMatchesRequirements(
+    String directAnswerExcerpt, {
+    required List<int> requirementIndexes,
+    required List<_AnswerRequirement> answerRequirements,
+  }) {
+    if (directAnswerExcerpt.trim().isEmpty) return false;
+    if (answerRequirements.isEmpty) return true;
+    if (requirementIndexes.isEmpty) return false;
+
+    for (final index in requirementIndexes) {
+      if (index < 0 || index >= answerRequirements.length) return false;
+      final cues = answerRequirements[index].directEvidenceCues;
+      if (cues.isEmpty) continue;
+      final hasMatchingCue = cues.any(
+        (cue) => _containsLooseText(directAnswerExcerpt, cue),
+      );
+      if (!hasMatchingCue) return false;
+    }
+    return true;
   }
 
   static String _applyDoubaoGenderJudgementToFactText(
@@ -4602,12 +5162,15 @@ $rawResults
     required String category,
     required String provider,
     required int factLimit,
+    required String answerMode,
+    required List<_AnswerRequirement> answerRequirements,
   }) {
     final facts = <_DoubaoGroundedFact>[];
     String pendingText = '';
     String pendingTitle = '';
     String pendingUrl = '';
     String pendingExcerpt = '';
+    var rawAnswerBasis = '';
 
     void flush() {
       final text = _normalizeExtractedFactText(pendingText.trim());
@@ -4619,6 +5182,10 @@ $rawResults
           sourceTitle: pendingTitle.trim(),
           sourceUrl: pendingUrl.trim(),
           sourceExcerpt: pendingExcerpt.trim(),
+          requirementIndexes: answerRequirements.isEmpty ? const [] : const [0],
+          answerBasis: answerMode == _answerModeAdaptive
+              ? _answerBasisBoundedCandidates
+              : _answerBasisInsufficient,
         ));
       }
       pendingText = '';
@@ -4654,6 +5221,8 @@ $rawResults
         pendingUrl = readJsonishLineValue(line);
       } else if (RegExp(r'"source_excerpt"\s*:').hasMatch(line)) {
         pendingExcerpt = readJsonishLineValue(line);
+      } else if (RegExp(r'"answer_basis"\s*:').hasMatch(line)) {
+        rawAnswerBasis = readJsonishLineValue(line);
       }
     }
     if (pendingText.isNotEmpty) flush();
@@ -4664,6 +5233,11 @@ $rawResults
         facts: facts.take(factLimit).toList(),
         discardReason: '',
         provider: '$provider/宽松解析',
+        answerBasis: _normalizeAnswerBasis(
+          rawAnswerBasis,
+          answerMode: answerMode,
+          hasFacts: true,
+        ),
       );
     }
 
@@ -4673,7 +5247,95 @@ $rawResults
       facts: const [],
       discardReason: '事实抽取返回内容无法解析',
       provider: provider,
+      answerBasis: _answerBasisInsufficient,
     );
+  }
+
+  static String _normalizeAnswerBasis(
+    String rawBasis, {
+    required String answerMode,
+    required bool hasFacts,
+  }) {
+    if (!hasFacts) return _answerBasisInsufficient;
+    switch (rawBasis.trim()) {
+      case _answerBasisExplicitFact:
+        return _answerBasisExplicitFact;
+      case _answerBasisBoundedCandidates:
+        return answerMode == _answerModeBoundedRoleplay ||
+                answerMode == _answerModeAdaptive
+            ? _answerBasisBoundedCandidates
+            : _answerBasisInsufficient;
+      case _answerBasisMixed:
+        return answerMode == _answerModeAdaptive
+            ? _answerBasisMixed
+            : _answerBasisExplicitFact;
+      default:
+        return answerMode == _answerModeBoundedRoleplay ||
+                answerMode == _answerModeAdaptive
+            ? _answerBasisBoundedCandidates
+            : _answerBasisExplicitFact;
+    }
+  }
+
+  static String _normalizeFactAnswerBasis(String rawBasis) {
+    return rawBasis.trim() == _answerBasisExplicitFact
+        ? _answerBasisExplicitFact
+        : rawBasis.trim() == _answerBasisBoundedCandidates
+            ? _answerBasisBoundedCandidates
+            : _answerBasisInsufficient;
+  }
+
+  static String _normalizeFactExtractionStatus(
+    String rawStatus, {
+    required bool hasFacts,
+  }) {
+    switch (rawStatus.trim()) {
+      case 'ok':
+      case 'partial':
+        return hasFacts ? rawStatus.trim() : 'insufficient';
+      case 'insufficient':
+        return hasFacts ? 'partial' : 'insufficient';
+      default:
+        return hasFacts ? 'partial' : 'insufficient';
+    }
+  }
+
+  static String _mergeAnswerBasis(String current, String incoming) {
+    if (current == _answerBasisMixed || incoming == _answerBasisMixed) {
+      return _answerBasisMixed;
+    }
+    if ((current == _answerBasisExplicitFact &&
+            incoming == _answerBasisBoundedCandidates) ||
+        (current == _answerBasisBoundedCandidates &&
+            incoming == _answerBasisExplicitFact)) {
+      return _answerBasisMixed;
+    }
+    if (current == _answerBasisExplicitFact ||
+        incoming == _answerBasisExplicitFact) {
+      return _answerBasisExplicitFact;
+    }
+    if (current == _answerBasisBoundedCandidates ||
+        incoming == _answerBasisBoundedCandidates) {
+      return _answerBasisBoundedCandidates;
+    }
+    return _answerBasisInsufficient;
+  }
+
+  static String _answerBasisForFacts(
+    List<_DoubaoGroundedFact> facts, {
+    String fallback = _answerBasisInsufficient,
+  }) {
+    var hasExplicit = false;
+    var hasBounded = false;
+    for (final fact in facts) {
+      hasExplicit = hasExplicit || fact.answerBasis == _answerBasisExplicitFact;
+      hasBounded =
+          hasBounded || fact.answerBasis == _answerBasisBoundedCandidates;
+    }
+    if (hasExplicit && hasBounded) return _answerBasisMixed;
+    if (hasExplicit) return _answerBasisExplicitFact;
+    if (hasBounded) return _answerBasisBoundedCandidates;
+    return facts.isEmpty ? _answerBasisInsufficient : fallback;
   }
 
   static String _normalizeExtractedFactText(String text) {
@@ -4772,6 +5434,20 @@ $rawResults
         'stream': false,
       };
 
+      final operation = providerName.contains('搜索计划')
+          ? 'planner'
+          : providerName.contains('时间线')
+              ? 'timeline'
+              : providerName.contains('事实抽取') || providerName.contains('事实提取')
+                  ? 'facts'
+                  : 'other';
+      _activeTrace?.recordRemoteCall(
+        kind: 'model',
+        provider: providerName,
+        operation: operation,
+        requestLabel: model,
+      );
+
       return http
           .post(
             Uri.parse('$baseUrl/chat/completions'),
@@ -4808,8 +5484,14 @@ $rawResults
     }
   }
 
-  static String _doubaoFactExtractorPrompt(_WebProfile profile, String category,
-      {required int factLimit}) {
+  static String _doubaoFactExtractorPrompt(
+    _WebProfile profile,
+    String category, {
+    required int factLimit,
+    required int minimumFactTarget,
+    required String answerMode,
+    required List<_AnswerRequirement> answerRequirements,
+  }) {
     final nameGlossary = ApiService.nameTranslationGlossaryForPrompt()
         .map((entry) => '- $entry')
         .join('\n');
@@ -4825,10 +5507,21 @@ $rawResults
 只有所有候选都与用户问题无关，或只剩三次元制作信息/UI 噪声时，才输出 status="insufficient"。
 '''
         : '';
+    final requirementCount = answerRequirements.length;
+    const answerModeRule = '''
+【检索后判级】
+搜索计划没有预判任何问项能否自由发挥。你必须先完整阅读本次输入，再逐条判断：
+- explicit_fact：source_excerpt 能直接支持问项中的完整命题，包括主体、对象、关系和所有限定条件，而不只是证明某个对象或动作存在。
+- bounded_candidates：原文没有直接下结论，但提供了真实候选、长期行为、使用记录、特征或效果，足以限定角色自然回答的范围。
+- insufficient：既没有直接答案，也没有足够限定范围的相关事实。
+明确事实永远优先；不得因为候选更容易找到而跳过正文中的直接设定。
+''';
     return '''
 你是搜索结果事实提取器，不是聊天角色。
 只能使用给定搜索结果，不得补充模型记忆。
 $canonRule
+$answerModeRule
+本轮共有 $requirementCount 个独立问项。每条 fact 必须通过 requirement_indexes 标明它支持哪些问项。
 当前角色联网范围：
 ${profile.contextRule}
 
@@ -4840,12 +5533,19 @@ $nameGlossary
 格式：
 {
   "status": "ok、partial 或 insufficient",
+  "answer_basis": "explicit_fact、bounded_candidates 或 insufficient",
   "facts": [
     {
       "text": "直接回答用户问题的一条事实，中文，短句",
       "source_excerpt": "能直接支持 text 的连续原文片段，必须从搜索结果内容中摘取，不要改写，不要用省略号拼接不连续片段",
       "source_title": "来自哪条搜索结果的标题",
       "source_url": "来自哪条搜索结果的 URL",
+      "requirement_indexes": [0],
+      "basis": "explicit_fact 或 bounded_candidates",
+      "direct_answer_excerpt": "仅 explicit_fact 填写：直接表达该问项完整答案的最小连续原文；bounded_candidates 必须为空",
+      "evidence_strength": "strong 或 supporting",
+      "event_order": 1,
+      "event_order_evidence": "仅事件存在明确先后时填写：说明该 fact 在本批相关事件中的顺序依据；非事件事实填空字符串",
       "people": [
         {
           "name": "本条 fact 中出现的人物中文名",
@@ -4870,10 +5570,21 @@ $nameGlossary
 7b. 对曲目候选，只能写“资料列出/页面提到的曲目包括……”，不能写成“角色最喜欢……”。最终角色偏好由聊天模型结合人设表达。
 8. facts 必须是搜索结果中明确出现或能从同一条结果直接概括出的内容；不要补充搜索结果没有的信息。
 8a. 每条 fact 都必须提供 source_excerpt。source_excerpt 必须是搜索结果中的连续原文片段，直接支持 text 里的动作主体、动作对象、时间顺序和因果关系；不要用“……”拼接不连续原文。如果找不到能直接支持的连续原文片段，就不要输出这条 fact。
+8aa. source_excerpt 和 direct_answer_excerpt 也必须遵守三次元信息过滤。若作品内事实后面紧跟制作、企划、宣传、官方玩梗或现实活动等附加分句，只截取前面能支持 fact 的最小连续作品内原文，不要把后面的三次元分句一并带入证据。
 8b. 改写 text 时不得调换主语和宾语，不得把 A 对 B 做的事改成 B 对 A 做的事，不得把“被动/接受帮助”的角色改成“主动帮助”的角色。关系和经历类事实如果容易误改，优先让 text 贴近 source_excerpt 的原句结构。
 8c. 每条 fact 只写一个清晰动作节点或事实点；如果原文一句话同时包含发现、救助、交给后续人员、击败敌人、救出他人等多个动作，必须拆成多条 facts，不要合并成一条。
+8d. 对同一事件过程或关系变化中的 facts，必须先通读全部输入，再按真实剧情顺序填写从 1 开始递增的 event_order；相同阶段可以相同。不得按搜索结果顺序、来源分组或重要程度编号。原文无法判断先后的 fact 不得猜测，event_order 填 0 且 event_order_evidence 为空。
+8e. event_order_evidence 只说明原文中的先后依据，例如明确时间词、前后动作衔接或同一叙事段落的位置；不得用模型外部记忆补顺序。
 9. 不要为了凑满 facts 输出旁支趣闻；如果用户只是在问名称、身份、地点、喜好等单点事实，只输出能直接回答这个点的事实和必要补充。
-10. 涉及“常用、最强、最喜欢、擅长、经常”等频率或偏好判断时，只有搜索结果明确说明时才能这样写；如果资料只列出招式、作品表现或使用场景，必须抽取这些“已知使用过/资料列出/代表性”的事实并将 status 设为 "partial"，不要判 insufficient，也不要推断频率和偏好。
+9a. 如果用户一句话中包含多个彼此独立的问项，必须逐项检查整份正文并尽量为每个问项抽取事实；只有所有问项都已被直接事实覆盖时，严格事实模式的 status 才能为 "ok"。不能因为其中一个问项已有答案就忽略其余问项。
+9b. 回答喜好、习惯、频率或常去地点时，正文若同时存在直接设定和单次剧情举例，必须优先抽取直接设定。单次去过某地、某一集出现某行为，只能写成“曾经去过/做过”，不得代替正文中的习惯结论，也不得据此把 status 提升为 "ok"。
+10. facts 本身不得把“使用过/资料列出/具有某种效果”改写成网页没有明确支持的频率、偏好或强弱结论。没有直接结论时，fact 仍应保持客观写成“使用过/资料列出”，并令 basis="bounded_candidates"，主观表达留给最终聊天模型。
+10d. 判定 explicit_fact 时执行“完整命题蕴含”检查：把用户问项改写成一个可判断真假的陈述，再确认 source_excerpt 是否直接支持整个陈述。若证据只证明角色使用过某招式、去过某地点、接触过某对象或表达过一次态度，却没有直接支持问项中的频率、偏好、通常行为、强弱或评价限定，就必须标为 bounded_candidates，不能标为 explicit_fact。
+10e. explicit_fact 必须额外填写 direct_answer_excerpt：它是 source_excerpt 中能直接表达问项完整答案的最小连续原文，而不是整段背景。若原文没有这样的短语或句子，direct_answer_excerpt 必须为空，并将 basis 改为 bounded_candidates。程序会把缺少 direct_answer_excerpt 的 explicit_fact 自动降级。
+10f. 每个独立问项后附有“直接证据关系”。这些词只描述问项中的关系或限定，不代表资料已经存在答案。只有 direct_answer_excerpt 本身明确表达相应关系时才能标为 explicit_fact；仅有对象、动作、候选或一次经历时仍标为 bounded_candidates。程序会在读取结果后再次核验这一点。
+10a. 在输出 bounded_candidates 前必须先通读所有输入，寻找同一问项的明确设定；找到时改用 explicit_fact。响应顶层 answer_basis 按本轮事实整体填写：只有明确事实则为 explicit_fact，只有候选事实则为 bounded_candidates，两者都有时填写 mixed，没有可用事实时填写 insufficient。
+10b. evidence_strength="strong" 表示这一条事实单独就足以把该问项的回答限定在可靠范围内；否则写 supporting。不要为了减少搜索而夸大证据强度。
+10c. status 只概括本批输入：所有独立问项都至少有 explicit_fact，或已有足够的 bounded_candidates 时使用 "ok"；只覆盖部分问项时使用 "partial"。程序还会根据 requirement_indexes、basis、evidence_strength 和最低 facts 数独立复核停止条件。
 11. 必须严格区分时间顺序和因果关系。原文只表达“之后、随后、当时、期间”时，不要改写成“因为、由于、导致”；涉及受伤、中毒、死亡、失败等结果时，原因必须来自搜索结果明确表述。
 12. 用户询问“喜欢什么、常去哪里、闲暇去哪”等喜好/习惯时，原文或同一条结果正文只要明确出现“喜欢、喜好、爱好、兴趣、常去、经常去、闲暇、休日、放课后”等语义，就必须抽取；简介、经历、关系、轶事、余谈里的明确作品内资料都可以作为依据。卡面标题、别号、萌点、标签、图片说明、服装/周边名称、角色比喻不能改写成“喜欢”或“经常”。如果只看到这些弱线索，最多写“资料只出现相关标签/称呼，不能确认是喜好”。
 13. 必须区分“一次剧情中去过某地点”和“闲暇常去某地点”。如果原文只说某集、某事件、某次去了水族馆、学校、Livehouse 等地点，不能抽成“闲暇时会去/经常去”；只能写“曾经去过”。只有原文明确写出兴趣、闲暇、空闲、休息日、经常、常去等习惯语义，才能作为常去地点事实。
@@ -4882,7 +5593,7 @@ $nameGlossary
 16. 如果用户问题限定了某个时期、形成过程、组成阶段、当初、前后或期间，facts 必须优先围绕这个时间范围；明确属于更晚阶段、另一个篇章、另一次后续事件或回顾性补充的信息不要抽取，除非用户明确追问后续发展。
 17. 用户询问“经过、如何、怎么发生、怎么恢复、怎么解决、怎么支援、战斗过程”等事件经过时，不要用人物性格、身份、外貌等背景资料凑数；优先抽取与问题动作直接相关的触发、关键行动、使用手段、结果和后续反应。
 18. 如果同一条搜索结果围绕同一事件连续写到了起因、关键动作、胜负/成败结果、后续反应或情绪变化，必须尽量拆成多条 facts 覆盖完整链路，而不是只抽第一句。
-19. 经过类、人物关系类问题只要同一来源中存在多个连续相关步骤，facts 至少输出 5 条，优先接近 factLimit；除非原文确实只有 1 到 2 个相关事实，否则不能只输出 1 到 3 条就结束。
+19. 本轮最低有效事实目标是 $minimumFactTarget 条。只要同一来源中存在多个相关命题，就必须将复合段落按主体、关系、原因、影响或结果拆成各自可由原文支持的原子 facts，优先接近 factLimit；只有原文确实不足时才能少于最低目标并返回 partial，不得用旁支信息凑数。
 20. 对战斗、任务、救援、恢复、解决类经过，若原文写到了使用的招式/手段、击败/救助/成败结果、相关人物生还或情绪变化，这些都属于经过本身，必须优先抽取。
 20b. 用户问“如何支援/救援/协助/处理”时，facts 必须围绕这个动作目标：出发/介入、发现对象、使用手段、交给后续人员、解决敌人、救出对象可以拆成独立 facts；不要用后续审判、与被支援一方的旁支冲突、结局补充来凑数量。
 21. 每条 fact 的 people 字段必须列出 text 中出现的具体人物；不要列团体、学校、乐队、组织或地点。
@@ -4903,14 +5614,47 @@ $nameGlossary
     required bool needsBroadFactCoverage,
     required bool eventProcessSearch,
     required String extractionStatus,
+    required List<_AnswerRequirement> answerRequirements,
   }) {
     if (facts.isEmpty) return false;
-    if (needsBroadFactCoverage || eventProcessSearch) {
-      return facts.length >= _complexCanonFactTarget;
+    final usableFacts = facts.take(factLimit).toList(growable: false);
+    final minimumFacts = needsBroadFactCoverage || eventProcessSearch
+        ? _complexCanonFactTarget
+        : 2;
+    if (usableFacts.length < minimumFacts) return false;
+
+    if (answerRequirements.isEmpty) {
+      return extractionStatus == 'ok';
     }
-    if (!needsBroadFactCoverage && extractionStatus != 'partial') return true;
-    if (facts.length >= factLimit) return true;
-    return false;
+
+    return _factsCoverAnswerRequirements(usableFacts, answerRequirements);
+  }
+
+  static bool _factsCoverAnswerRequirements(
+    List<_DoubaoGroundedFact> facts,
+    List<_AnswerRequirement> answerRequirements,
+  ) {
+    if (answerRequirements.isEmpty) return false;
+    for (var index = 0; index < answerRequirements.length; index++) {
+      final supportingFacts = facts
+          .where((fact) => fact.requirementIndexes.contains(index))
+          .toList(growable: false);
+      if (supportingFacts.isEmpty) return false;
+      if (supportingFacts
+          .any((fact) => fact.answerBasis == _answerBasisExplicitFact)) {
+        continue;
+      }
+
+      final boundedFacts = supportingFacts
+          .where((fact) => fact.answerBasis == _answerBasisBoundedCandidates)
+          .toList(growable: false);
+      if (boundedFacts.any((fact) => fact.isStrongEvidence) ||
+          boundedFacts.length >= 2) {
+        continue;
+      }
+      return false;
+    }
+    return true;
   }
 
   static bool _needsBroadCanonFactCoverage(String userText) {
@@ -5039,6 +5783,27 @@ URL：${item.url}
     return '抽取事实=${facts.length}，下方摘要展示最多=$displayed条/组';
   }
 
+  static String _formatRequirementCoverageForLog(
+    List<_DoubaoGroundedFact> facts,
+    List<_AnswerRequirement> requirements,
+  ) {
+    if (requirements.isEmpty) return '问项覆盖=未拆分';
+    final states = <String>[];
+    for (var index = 0; index < requirements.length; index++) {
+      final related =
+          facts.where((fact) => fact.requirementIndexes.contains(index));
+      final explicit = related
+          .where((fact) => fact.answerBasis == _answerBasisExplicitFact)
+          .length;
+      final bounded = related
+          .where((fact) => fact.answerBasis == _answerBasisBoundedCandidates)
+          .length;
+      final strong = related.where((fact) => fact.isStrongEvidence).length;
+      states.add('$index:明确$explicit/候选$bounded/强证据$strong');
+    }
+    return '问项覆盖=${states.join('；')}';
+  }
+
   static String _formatDoubaoFactsCompactForLog(
     List<_DoubaoGroundedFact> facts,
   ) {
@@ -5053,16 +5818,49 @@ URL：${item.url}
   static void _addUniqueDoubaoFacts(
       List<_DoubaoGroundedFact> target, List<_DoubaoGroundedFact> source,
       {required int maxFacts}) {
-    final seen = target
-        .map((fact) => fact.text.replaceAll(RegExp(r'\s+'), '').trim())
-        .where((text) => text.isNotEmpty)
-        .toSet();
+    final indexesByText = <String, int>{};
+    for (var i = 0; i < target.length; i++) {
+      final key = target[i].text.replaceAll(RegExp(r'\s+'), '').trim();
+      if (key.isNotEmpty) indexesByText[key] = i;
+    }
     for (final fact in source) {
       for (final expandedFact in _expandCompoundDoubaoFact(fact)) {
         final key = expandedFact.text.replaceAll(RegExp(r'\s+'), '').trim();
-        if (key.isEmpty || seen.contains(key)) continue;
+        if (key.isEmpty) continue;
+        final existingIndex = indexesByText[key];
+        if (existingIndex != null) {
+          final existing = target[existingIndex];
+          final mergedIndexes = <int>{
+            ...existing.requirementIndexes,
+            ...expandedFact.requirementIndexes,
+          }.toList()
+            ..sort();
+          target[existingIndex] = existing.copyWith(
+            requirementIndexes: mergedIndexes,
+            answerBasis: existing.answerBasis == _answerBasisExplicitFact ||
+                    expandedFact.answerBasis == _answerBasisExplicitFact
+                ? _answerBasisExplicitFact
+                : existing.answerBasis == _answerBasisBoundedCandidates ||
+                        expandedFact.answerBasis ==
+                            _answerBasisBoundedCandidates
+                    ? _answerBasisBoundedCandidates
+                    : _answerBasisInsufficient,
+            isStrongEvidence:
+                existing.isStrongEvidence || expandedFact.isStrongEvidence,
+            eventOrder: existing.eventOrder > 0
+                ? existing.eventOrder
+                : expandedFact.eventOrder,
+            eventOrderEvidence: existing.eventOrderEvidence.isNotEmpty
+                ? existing.eventOrderEvidence
+                : expandedFact.eventOrderEvidence,
+            chronologyScope: existing.chronologyScope.isNotEmpty
+                ? existing.chronologyScope
+                : expandedFact.chronologyScope,
+          );
+          continue;
+        }
         target.add(expandedFact);
-        seen.add(key);
+        indexesByText[key] = target.length - 1;
         if (target.length >= maxFacts) return;
       }
     }
@@ -5144,12 +5942,16 @@ URL：${item.url}
       profile: profile,
       facts: selectedFacts,
     );
-    if (timeline == null || timeline.trim().isEmpty) {
-      debugPrint('豆包时间线整理无可用结果，跳过时间线层');
-      return formatted;
+    if (timeline == null || timeline.nodes.isEmpty) {
+      debugPrint('豆包时间线未通过结构化校验，限制为单节点事实回答');
+      return [
+        ...formatted,
+        '$_doubaoTimelineResultPrefix【回答约束】\n'
+            '- 时间线没有通过本地引用校验；不得自行排列或串联多个事件，只能选择一项有原文证据的事实自然回应。',
+      ];
     }
 
-    final timelineText = timeline.trim();
+    final timelineText = timeline.toPromptText().trim();
     if (timelineText.isEmpty) return formatted;
 
     return [
@@ -5158,7 +5960,7 @@ URL：${item.url}
     ];
   }
 
-  static Future<String?> _buildDoubaoTimeline({
+  static Future<_DoubaoTimeline?> _buildDoubaoTimeline({
     required String userText,
     required _WebProfile profile,
     required List<_DoubaoGroundedFact> facts,
@@ -5181,9 +5983,14 @@ URL：${item.url}
     final factLines = <String>[];
     for (var i = 0; i < facts.length; i++) {
       final excerpt = facts[i].sourceExcerpt.trim();
+      final chronologyHint = facts[i].eventOrder > 0
+          ? '\n   本批剧情顺序：${facts[i].eventOrder}'
+              '（依据：${facts[i].eventOrderEvidence}）'
+          : '';
       factLines.add(
         '${i + 1}. ${facts[i].text}'
-        '${excerpt.isEmpty ? '' : '\n   原文证据：$excerpt'}',
+        '${excerpt.isEmpty ? '' : '\n   原文证据：$excerpt'}'
+        '$chronologyHint',
       );
     }
 
@@ -5195,15 +6002,22 @@ URL：${item.url}
 只能使用给定 facts，不能补充外部记忆。
 任务是帮后续角色回复模型避免把不连续事件直接拼接、避免调换主客体、避免省略关键地点或台词。
 注意：facts 的输入顺序是搜索/抽取顺序，不一定是剧情时间顺序；必须根据 facts 内部的时间词、因果词、地点、人物动作和原文证据重新排列。
+如果 fact 带有“本批剧情顺序”，同一批资料内必须严格按该编号从小到大排列；不得自行颠倒。不同批资料的编号不能直接互相比较，只能结合各自原文判断。
 $timelineFocusInstruction
 请输出 JSON 对象，不要 markdown，不要解释。
 格式：
 {
-  "timeline": ["按真实先后顺序整理的一条事实，中文短句，5到8条"],
+  "timeline": [
+    {
+      "text": "按真实先后顺序整理的一条事实，中文短句",
+      "fact_indexes": ["直接支持该节点的 facts 编号"]
+    }
+  ],
   "constraints": ["给后续回复模型的约束，中文短句，最多3条"]
 }
 要求：
-1. timeline 不能压缩成一条总述；只要 facts 超过 3 条，就必须至少输出 5 个阶段，但阶段类型必须服从用户问题，不要为了凑结构加入无关事实。
+1. timeline 只保留 facts 明确支持的真实阶段，通常输出2到8条；没有足够时间节点时宁可少写，绝对不能为了达到数量补写 facts 中不存在的事件。
+1a. 每个 timeline 节点必须填写 fact_indexes，至少引用一条直接支持该节点的 fact。text 必须是所引用 facts 的保守改写，不能添加被引用事实没有提到的人物、事件、原因、地点或结果。
 2. 如果 facts 中两个事件之间缺少连续关系，要在 constraints 里明确提醒不能用“然后/于是”直接连接。
 3. 如果同一事件中有多个地点或关键台词，timeline 必须保留承载结果的地点和台词。
 4. facts 里靠后的关键结果、回归、和解、重新连接、救助完成或处理结果不能被省略；如果它带有地点或台词，必须单独成为一个 timeline 阶段。
@@ -5249,48 +6063,131 @@ ${factLines.join('\n')}
       final data = jsonDecode(jsonText);
       if (data is! Map) return null;
 
-      final timeline = _dynamicStringList(data['timeline'])
-          .map(ApiService.normalizeKnownNamesForChineseText)
-          .where((line) => line.trim().isNotEmpty)
-          .take(8)
-          .toList();
+      final timeline = <_DoubaoTimelineNode>[];
+      final seenTimelineText = <String>{};
+      final rawTimeline = data['timeline'];
+      if (rawTimeline is List) {
+        for (final rawEntry in rawTimeline) {
+          if (rawEntry is! Map) continue;
+          final text = ApiService.normalizeKnownNamesForChineseText(
+            _dynamicMapString(rawEntry, 'text'),
+          ).trim();
+          final factIndexes = _jsonIntList(
+            rawEntry['fact_indexes'],
+            maxExclusive: facts.length + 1,
+          ).where((index) => index > 0).toList(growable: false);
+          if (text.isEmpty || factIndexes.isEmpty) continue;
+          if (!_timelineNodeIsGrounded(
+            text,
+            factIndexes: factIndexes,
+            facts: facts,
+          )) {
+            debugPrint(
+              '豆包时间线节点未通过事实引用校验，已丢弃: '
+              '${_shortenRunes(text, 90)}',
+            );
+            continue;
+          }
+          final key = _looseEvidenceKey(text);
+          if (key.isEmpty || !seenTimelineText.add(key)) continue;
+          timeline.add(_DoubaoTimelineNode(
+            text: text,
+            factIndexes: factIndexes,
+          ));
+          if (timeline.length >= 8) break;
+        }
+      }
       final constraints = _dynamicStringList(data['constraints'])
           .map(ApiService.normalizeKnownNamesForChineseText)
           .where((line) => line.trim().isNotEmpty)
           .take(3)
           .toList();
-      if (timeline.isEmpty && constraints.isEmpty) return null;
-      if (facts.length > 3 && timeline.length < 5) {
-        debugPrint(
-          '豆包时间线整理阶段数不足，仍保留以便后续模型参考: '
-          'timeline=${timeline.length}, facts=${facts.length}',
-        );
+      if (timeline.isEmpty) return null;
+      if (!_timelineOrderIsValid(timeline, facts)) {
+        debugPrint('豆包时间线未通过剧情顺序校验，拒绝采用整条时间线');
+        return null;
       }
-
-      final lines = <String>[];
-      if (timeline.isNotEmpty) {
-        lines.add('【时间线】');
-        for (var i = 0; i < timeline.length; i++) {
-          lines.add('${i + 1}. ${timeline[i]}');
-        }
-      }
-      if (constraints.isNotEmpty) {
-        lines.add('【回答约束】');
-        for (final constraint in constraints) {
-          lines.add('- $constraint');
-        }
-      }
-      final result = lines.join('\n').trim();
+      final result = _DoubaoTimeline(
+        nodes: timeline,
+        constraints: constraints,
+      );
       debugPrint(
         '豆包时间线整理结果: '
         'timeline=${timeline.length}, constraints=${constraints.length}; '
-        '${timeline.isEmpty ? '' : _shortenRunes(timeline.first, 90)}',
+        '${timeline.isEmpty ? '' : _shortenRunes(timeline.first.text, 90)}',
       );
       return result;
     } catch (e) {
       debugPrint('豆包时间线整理解析失败: $e');
       return null;
     }
+  }
+
+  static bool _timelineNodeIsGrounded(
+    String text, {
+    required List<int> factIndexes,
+    required List<_DoubaoGroundedFact> facts,
+  }) {
+    if (text.trim().isEmpty || factIndexes.isEmpty) return false;
+    final referencedFacts = factIndexes
+        .where((index) => index > 0 && index <= facts.length)
+        .map((index) => facts[index - 1])
+        .toList(growable: false);
+    if (referencedFacts.length != factIndexes.length) return false;
+
+    final evidenceText = referencedFacts
+        .expand((fact) => [fact.text, fact.sourceExcerpt])
+        .where((value) => value.trim().isNotEmpty)
+        .join(' ');
+    if (evidenceText.trim().isEmpty) return false;
+
+    final knownNames = <String>{
+      ...ApiService.canonicalChineseNamesForSearch(),
+      for (final entry in namePronunciationDictionary.entries)
+        ...entry.key.split(RegExp(r'[\s　]+')),
+    }.where((name) => name.trim().runes.length >= 2);
+    for (final name in knownNames) {
+      if (_containsLooseText(text, name) &&
+          !_containsLooseText(evidenceText, name)) {
+        return false;
+      }
+    }
+
+    final quotedText = RegExp(r'[“「『"]([^”」』"]{2,40})[”」』"]')
+        .allMatches(text)
+        .map((match) => match.group(1) ?? '')
+        .where((value) => value.isNotEmpty);
+    for (final quote in quotedText) {
+      if (!_containsLooseText(evidenceText, quote)) return false;
+    }
+    return !_looksLikeProductionMetaFact(text);
+  }
+
+  static bool _timelineOrderIsValid(
+    List<_DoubaoTimelineNode> nodes,
+    List<_DoubaoGroundedFact> facts,
+  ) {
+    final factSnapshots = [
+      for (var i = 0; i < facts.length; i++)
+        GroundingFactSnapshot(
+          index: i + 1,
+          text: facts[i].text,
+          eventOrder: facts[i].eventOrder,
+          chronologyScope: facts[i].chronologyScope,
+        ),
+    ];
+    final timelineSnapshots = [
+      for (var i = 0; i < nodes.length; i++)
+        GroundingTimelineSnapshot(
+          index: i + 1,
+          text: nodes[i].text,
+          factIndexes: nodes[i].factIndexes,
+        ),
+    ];
+    return GroundingContractValidator.validateTimeline(
+      facts: factSnapshots,
+      timeline: timelineSnapshots,
+    ).isEmpty;
   }
 
   static List<String> _dynamicStringList(dynamic value) {
@@ -8780,6 +9677,13 @@ class _SearchPlan {
   // 常见值：none / weather / festival / canon / slang / economy / current / general
   final String category;
 
+  // strict_fact：最终结论必须由资料直接支持。
+  // bounded_roleplay：资料限定真实候选，角色可在边界内自然表达主观选择。
+  final String answerMode;
+
+  // 描述需要网页回答的独立问项及其完整命题关系，不预判网页是否有答案。
+  final List<_AnswerRequirement> answerRequirements;
+
   final List<String> primarySearchObjects;
   final List<String> secondarySearchObjects;
 
@@ -8790,6 +9694,8 @@ class _SearchPlan {
     required this.includePhenology,
     required this.searchQuery,
     required this.category,
+    this.answerMode = WebContextService._answerModeStrictFact,
+    this.answerRequirements = const [],
     this.primarySearchObjects = const [],
     this.secondarySearchObjects = const [],
   });
@@ -8800,6 +9706,16 @@ class _SearchPlan {
       includeFestivals ||
       includePhenology ||
       (searchQuery != null && searchQuery!.isNotEmpty);
+}
+
+class _AnswerRequirement {
+  final String text;
+  final List<String> directEvidenceCues;
+
+  const _AnswerRequirement({
+    required this.text,
+    this.directEvidenceCues = const [],
+  });
 }
 
 enum _FestivalScope {
@@ -9223,12 +10139,26 @@ class _DoubaoGroundedFact {
   final String sourceTitle;
   final String sourceUrl;
   final String sourceExcerpt;
+  final List<int> requirementIndexes;
+  final String answerBasis;
+  final bool isStrongEvidence;
+  final String directAnswerExcerpt;
+  final int eventOrder;
+  final String eventOrderEvidence;
+  final String chronologyScope;
 
   const _DoubaoGroundedFact({
     required this.text,
     required this.sourceTitle,
     required this.sourceUrl,
     this.sourceExcerpt = '',
+    this.requirementIndexes = const [],
+    this.answerBasis = 'insufficient',
+    this.isStrongEvidence = false,
+    this.directAnswerExcerpt = '',
+    this.eventOrder = 0,
+    this.eventOrderEvidence = '',
+    this.chronologyScope = '',
   });
 
   _DoubaoGroundedFact copyWith({
@@ -9236,13 +10166,63 @@ class _DoubaoGroundedFact {
     String? sourceTitle,
     String? sourceUrl,
     String? sourceExcerpt,
+    List<int>? requirementIndexes,
+    String? answerBasis,
+    bool? isStrongEvidence,
+    String? directAnswerExcerpt,
+    int? eventOrder,
+    String? eventOrderEvidence,
+    String? chronologyScope,
   }) {
     return _DoubaoGroundedFact(
       text: text ?? this.text,
       sourceTitle: sourceTitle ?? this.sourceTitle,
       sourceUrl: sourceUrl ?? this.sourceUrl,
       sourceExcerpt: sourceExcerpt ?? this.sourceExcerpt,
+      requirementIndexes: requirementIndexes ?? this.requirementIndexes,
+      answerBasis: answerBasis ?? this.answerBasis,
+      isStrongEvidence: isStrongEvidence ?? this.isStrongEvidence,
+      directAnswerExcerpt: directAnswerExcerpt ?? this.directAnswerExcerpt,
+      eventOrder: eventOrder ?? this.eventOrder,
+      eventOrderEvidence: eventOrderEvidence ?? this.eventOrderEvidence,
+      chronologyScope: chronologyScope ?? this.chronologyScope,
     );
+  }
+}
+
+class _DoubaoTimelineNode {
+  final String text;
+  final List<int> factIndexes;
+
+  const _DoubaoTimelineNode({
+    required this.text,
+    required this.factIndexes,
+  });
+}
+
+class _DoubaoTimeline {
+  final List<_DoubaoTimelineNode> nodes;
+  final List<String> constraints;
+
+  const _DoubaoTimeline({
+    required this.nodes,
+    required this.constraints,
+  });
+
+  String toPromptText() {
+    final lines = <String>['【时间线】'];
+    for (var i = 0; i < nodes.length; i++) {
+      final node = nodes[i];
+      final references = node.factIndexes.map((index) => '#$index').join('、');
+      lines.add('${i + 1}. ${node.text}（依据事实：$references）');
+    }
+    if (constraints.isNotEmpty) {
+      lines.add('【回答约束】');
+      for (final constraint in constraints) {
+        lines.add('- $constraint');
+      }
+    }
+    return lines.join('\n');
   }
 }
 
@@ -9251,19 +10231,22 @@ class _DoubaoFactExtraction {
   final List<_DoubaoGroundedFact> facts;
   final String discardReason;
   final String provider;
+  final String answerBasis;
 
   const _DoubaoFactExtraction({
     required this.status,
     required this.facts,
     required this.discardReason,
     required this.provider,
+    this.answerBasis = 'insufficient',
   });
 
   const _DoubaoFactExtraction.empty()
       : status = 'insufficient',
         facts = const [],
         discardReason = '',
-        provider = 'none';
+        provider = 'none',
+        answerBasis = 'insufficient';
 }
 
 class _FactExtractorChatResult {

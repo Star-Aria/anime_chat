@@ -3,12 +3,15 @@ import 'dart:io';
 
 import 'package:anime_chat_app/api_service.dart';
 import 'package:anime_chat_app/character_config.dart';
+import 'package:anime_chat_app/grounding_contract.dart';
 import 'package:anime_chat_app/web_context_service.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'support/grounding_audit_policies.dart';
+
 void main() {
-  test('rerun search audit questions 1-10 without TTS', () async {
+  test('rerun search audit questions 1-13 without TTS', () async {
     if (Platform.environment['RUN_FIRST10_AUDIT'] != '1') {
       markTestSkipped('Set RUN_FIRST10_AUDIT=1 to call remote APIs.');
       return;
@@ -33,10 +36,14 @@ void main() {
       debugPrint('FIRST10_AUDIT_REPORT: ${reportFile.absolute.path}');
       return;
     }
+    final responseOnly = Platform.environment['AUDIT_RESPONSE_ONLY'] == '1';
 
     for (final item in selectedItems) {
       final character = CharacterConfig.getCharacterById(item.characterId);
-      final logs = <String>[];
+      final savedRecord = _recordForIndex(records, item.index);
+      final logs = responseOnly && savedRecord != null
+          ? _logsBeforeResponseGeneration(savedRecord.logs)
+          : <String>[];
       final oldDebugPrint = debugPrint;
       debugPrint = (String? message, {int? wrapWidth}) {
         if (message != null && message.trim().isNotEmpty) {
@@ -47,15 +54,27 @@ void main() {
 
       String webContext;
       Map<String, String> response;
+      GroundingRunTrace? groundingTrace = savedRecord?.groundingTrace;
       Object? error;
       StackTrace? stackTrace;
       try {
-        webContext = await WebContextService.buildContext(
-          userMessage: item.question,
-          characterId: character.id,
-          characterName: character.name,
-          conversationHistory: const [],
-        );
+        if (responseOnly) {
+          if (savedRecord == null || savedRecord.webContext.trim().isEmpty) {
+            throw StateError('仅重生成回答需要已有的联网上下文');
+          }
+          webContext = savedRecord.webContext;
+          groundingTrace = savedRecord.groundingTrace;
+          debugPrint('仅重生成回答: 复用第${item.index}题已保存的联网上下文');
+        } else {
+          final buildResult = await WebContextService.buildContextDetailed(
+            userMessage: item.question,
+            characterId: character.id,
+            characterName: character.name,
+            conversationHistory: const [],
+          );
+          webContext = buildResult.context;
+          groundingTrace = buildResult.trace;
+        }
         response = await ApiService.generateResponse(
           characterPersonality: character.personality,
           conversationHistory: const [],
@@ -79,6 +98,7 @@ void main() {
         webContext: webContext,
         japaneseAnswer: response['japanese'] ?? '',
         chineseAnswer: response['chinese'] ?? '',
+        groundingTrace: groundingTrace,
         error: error,
         stackTrace: stackTrace,
       );
@@ -163,6 +183,24 @@ const _auditItems = [
     characterName: '丰川祥子',
     question: '祥祥，KILLKISS真的太燃了，我好喜欢！祥祥觉得你们的这首歌怎么样呢，你比较喜欢mujica的哪些歌呢',
   ),
+  _AuditItem(
+    index: 11,
+    characterId: 'andy',
+    characterName: '安迪',
+    question: '我最近很喜欢看梦限大的番，姐姐应该不太了解番剧什么的吧hh',
+  ),
+  _AuditItem(
+    index: 12,
+    characterId: 'andy',
+    characterName: '安迪',
+    question: '姐姐，我最近有好多事情要做啊，好忙...真是力竭了',
+  ),
+  _AuditItem(
+    index: 13,
+    characterId: 'andy',
+    characterName: '安迪',
+    question: '听说今年被称为“Agent元年”，姐姐怎么看',
+  ),
 ];
 
 File _reportFile() {
@@ -191,10 +229,10 @@ String _formatReport(List<_AuditRecord> records, int expectedCount) {
   final sortedRecords = [...records]
     ..sort((a, b) => a.item.index.compareTo(b.item.index));
   final buffer = StringBuffer()
-    ..writeln('# 前十题联网搜索与回复复测报告')
+    ..writeln('# 十三题联网搜索与回复复测报告')
     ..writeln()
     ..writeln('- 生成时间：${DateTime.now().toIso8601String()}')
-    ..writeln('- 范围：原 13 题测试集中的第 1-10 题')
+    ..writeln('- 范围：原 13 题测试集')
     ..writeln('- 说明：固定总报告；单题重跑时替换对应题目段落，已合格题保留。')
     ..writeln();
 
@@ -283,6 +321,25 @@ List<_AuditRecord> _replaceRecord(
   }
   if (!replaced) result.add(replacement);
   result.sort((a, b) => a.item.index.compareTo(b.item.index));
+  return result;
+}
+
+_AuditRecord? _recordForIndex(List<_AuditRecord> records, int index) {
+  for (final record in records) {
+    if (record.item.index == index) return record;
+  }
+  return null;
+}
+
+List<String> _logsBeforeResponseGeneration(List<String> logs) {
+  final result = <String>[];
+  final responseLog = RegExp(
+    r'^(回复未通过|日语重生成|日语表记|翻译|最终日语|检测到回复|中文角色|仅重生成回答)',
+  );
+  for (final log in logs) {
+    if (responseLog.hasMatch(log.trim())) break;
+    result.add(log);
+  }
   return result;
 }
 
@@ -533,10 +590,15 @@ String _extractRelevantContext(String webContext) {
   if (first == null) return webContext.trim();
   var end = webContext.indexOf('\n\n【使用这些信息的规则】', first.start);
   if (end < 0) end = webContext.length;
-  return _removeContextBlock(
+  final withoutRoleBlock = _removeContextBlock(
     webContext.substring(first.start, end).trim(),
     '角色设定资料',
   );
+  return withoutRoleBlock
+      .split('\n')
+      .where((line) => !line.trimLeft().startsWith('本地角色设定：'))
+      .join('\n')
+      .trim();
 }
 
 String _removeContextBlock(String text, String title) {
@@ -566,6 +628,7 @@ class _AuditRecord {
   final String webContext;
   final String japaneseAnswer;
   final String chineseAnswer;
+  final GroundingRunTrace? groundingTrace;
   final Object? error;
   final StackTrace? stackTrace;
 
@@ -575,6 +638,7 @@ class _AuditRecord {
     required this.webContext,
     required this.japaneseAnswer,
     required this.chineseAnswer,
+    this.groundingTrace,
     this.error,
     this.stackTrace,
   });
@@ -600,6 +664,9 @@ class _AuditRecord {
       webContext: '${json['webContext'] ?? ''}',
       japaneseAnswer: '${json['japaneseAnswer'] ?? ''}',
       chineseAnswer: '${json['chineseAnswer'] ?? ''}',
+      groundingTrace: json['groundingTrace'] is Map
+          ? GroundingRunTrace.fromJson(json['groundingTrace'] as Map)
+          : null,
       error: json['error'],
       stackTrace: json['stackTrace'] == null
           ? null
@@ -616,6 +683,7 @@ class _AuditRecord {
         'webContext': webContext,
         'japaneseAnswer': japaneseAnswer,
         'chineseAnswer': chineseAnswer,
+        if (groundingTrace != null) 'groundingTrace': groundingTrace!.toJson(),
         if (error != null) 'error': '$error',
         if (stackTrace != null) 'stackTrace': '$stackTrace',
       };
@@ -630,8 +698,37 @@ class _AuditRecord {
     if (_containsObviousChinese(japaneseAnswer)) {
       result.add('日语回答疑似残留中文');
     }
+    if (japaneseAnswer.trim().isNotEmpty &&
+        !ApiService.isJapaneseStyleCompatible(
+          japaneseAnswer,
+          item.characterId,
+        )) {
+      result.add('日语回答不符合角色语体');
+    }
     if (item.index == 9 && !webContext.contains('【事实时间线】')) {
       result.add('关系/经过题缺少事实时间线');
+    }
+    if (webContext.trim().isNotEmpty) {
+      final parsed = GroundingSnapshot.fromAudit(
+        logs: logs,
+        webContext: webContext,
+        japaneseAnswer: japaneseAnswer,
+        chineseAnswer: chineseAnswer,
+      );
+      final snapshot = GroundingSnapshot(
+        contractVersion: parsed.contractVersion,
+        searchObjects: parsed.searchObjects,
+        facts: parsed.facts,
+        timeline: parsed.timeline,
+        searchApiCalls: groundingTrace?.searchApiCalls ?? parsed.searchApiCalls,
+        japaneseAnswer: parsed.japaneseAnswer,
+        chineseAnswer: parsed.chineseAnswer,
+      );
+      for (final issue in snapshot.validate(
+        groundingAuditPolicyFor(item.index),
+      )) {
+        result.add(issue.message);
+      }
     }
     return result;
   }
