@@ -56,6 +56,166 @@ class ChatSession {
   }
 }
 
+class MusicAttachment {
+  final String id;
+  final String title;
+  final String artist;
+  final String band;
+  final String? localAudioPath;
+  final String? previewUrl;
+  final String? coverPath;
+  final String? externalUrl;
+  final int? durationMs;
+  final String? note;
+  final String? description;
+  final String? lyricsPath;
+  final List<String> lyrics;
+  final List<String> moods;
+  final List<String> sound;
+  final List<String> themes;
+  final List<String> imagery;
+  final List<String> recommendationAngles;
+
+  const MusicAttachment({
+    required this.id,
+    required this.title,
+    required this.artist,
+    required this.band,
+    this.localAudioPath,
+    this.previewUrl,
+    this.coverPath,
+    this.externalUrl,
+    this.durationMs,
+    this.note,
+    this.description,
+    this.lyricsPath,
+    this.lyrics = const [],
+    this.moods = const [],
+    this.sound = const [],
+    this.themes = const [],
+    this.imagery = const [],
+    this.recommendationAngles = const [],
+  });
+
+  bool get hasPlayableSource =>
+      (localAudioPath != null && localAudioPath!.trim().isNotEmpty) ||
+      (previewUrl != null && previewUrl!.trim().isNotEmpty);
+
+  String get lyricsText {
+    final text = lyrics.join('\n').trim();
+    return text;
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'id': id,
+      'title': title,
+      'artist': artist,
+      'band': band,
+      'localAudioPath': localAudioPath,
+      'previewUrl': previewUrl,
+      'coverPath': coverPath,
+      'externalUrl': externalUrl,
+      'durationMs': durationMs,
+      'note': note,
+      'description': description,
+      'lyricsPath': lyricsPath,
+      'moods': moods,
+      'sound': sound,
+      'themes': themes,
+      'imagery': imagery,
+      'recommendationAngles': recommendationAngles,
+    };
+  }
+
+  factory MusicAttachment.fromJson(Map<String, dynamic> json) {
+    return MusicAttachment(
+      id: json['id'] as String? ?? '',
+      title: json['title'] as String? ?? '',
+      artist: json['artist'] as String? ?? '',
+      band: json['band'] as String? ?? '',
+      localAudioPath: json['localAudioPath'] as String?,
+      previewUrl: json['previewUrl'] as String?,
+      coverPath: json['coverPath'] as String?,
+      externalUrl: json['externalUrl'] as String?,
+      durationMs: json['durationMs'] as int?,
+      note: json['note'] as String?,
+      description: json['description'] as String?,
+      lyricsPath: json['lyricsPath'] as String?,
+      lyrics: _lyricsLinesFromJson(json['lyrics']),
+      moods: _stringListFromJson(json['moods']),
+      sound: _stringListFromJson(json['sound']),
+      themes: _stringListFromJson(json['themes']),
+      imagery: _stringListFromJson(json['imagery']),
+      recommendationAngles: _stringListFromJson(json['recommendationAngles']),
+    );
+  }
+
+  MusicAttachment copyWithLyrics(List<String> lyrics) {
+    return MusicAttachment(
+      id: id,
+      title: title,
+      artist: artist,
+      band: band,
+      localAudioPath: localAudioPath,
+      previewUrl: previewUrl,
+      coverPath: coverPath,
+      externalUrl: externalUrl,
+      durationMs: durationMs,
+      note: note,
+      description: description,
+      lyricsPath: lyricsPath,
+      lyrics: lyrics,
+      moods: moods,
+      sound: sound,
+      themes: themes,
+      imagery: imagery,
+      recommendationAngles: recommendationAngles,
+    );
+  }
+
+  static List<String> _stringListFromJson(dynamic value) {
+    if (value is! List) return const [];
+    return value
+        .whereType<String>()
+        .map((item) => item.trim())
+        .where((item) => item.isNotEmpty)
+        .toList(growable: false);
+  }
+
+  static List<String> _lyricsLinesFromJson(dynamic value) {
+    if (value is String) {
+      return _trimOuterEmptyLines(
+        value
+            .replaceAll('\r\n', '\n')
+            .replaceAll('\r', '\n')
+            .split('\n')
+            .map((line) => line.trimRight())
+            .toList(),
+      );
+    }
+    if (value is List) {
+      return _trimOuterEmptyLines(
+        value.whereType<String>().map((line) => line.trimRight()).toList(),
+      );
+    }
+    return const [];
+  }
+
+  static List<String> _trimOuterEmptyLines(List<String> lines) {
+    var start = 0;
+    var end = lines.length;
+    while (start < end && lines[start].trim().isEmpty) {
+      start++;
+    }
+    while (end > start && lines[end - 1].trim().isEmpty) {
+      end--;
+    }
+    if (start >= end) return const [];
+    return lines.sublist(start, end);
+  }
+}
+
 // 消息模型
 class Message {
   final String role; // 'user' 或 'assistant'
@@ -68,6 +228,7 @@ class Message {
   final String? imagePath; // 用户发送的图片本地路径（单张兼容字段）
   final List<String>? imagePaths; // 用户一次性发送的多张图片路径列表
   final String? imageDescription; // 豆包视觉模型对图片的描述（发给 AI 时用，不显示给用户）
+  final MusicAttachment? musicAttachment; // 聊天中分享的歌曲，不等同于角色 TTS 音频
 
   Message({
     required this.role,
@@ -78,6 +239,7 @@ class Message {
     this.imagePath,
     this.imagePaths,
     this.imageDescription,
+    this.musicAttachment,
   });
 
   Map<String, dynamic> toJson() {
@@ -90,6 +252,7 @@ class Message {
       'imagePath': imagePath,
       'imagePaths': imagePaths,
       'imageDescription': imageDescription,
+      'musicAttachment': musicAttachment?.toJson(),
     };
   }
 
@@ -107,6 +270,10 @@ class Message {
           ?.map((e) => e as String)
           .toList(),
       imageDescription: json['imageDescription'],
+      musicAttachment: json['musicAttachment'] is Map<String, dynamic>
+          ? MusicAttachment.fromJson(
+              json['musicAttachment'] as Map<String, dynamic>)
+          : null,
     );
   }
 
@@ -119,6 +286,7 @@ class Message {
     String? imagePath,
     List<String>? imagePaths,
     String? imageDescription,
+    MusicAttachment? musicAttachment,
   }) {
     return Message(
       role: role ?? this.role,
@@ -129,6 +297,7 @@ class Message {
       imagePath: imagePath ?? this.imagePath,
       imagePaths: imagePaths ?? this.imagePaths,
       imageDescription: imageDescription ?? this.imageDescription,
+      musicAttachment: musicAttachment ?? this.musicAttachment,
     );
   }
 }

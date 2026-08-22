@@ -36,6 +36,10 @@ class ApiService {
   //   存在的意义是：宁可让 AI 随便说一句日语兜底，也绝不能把中文塞给 TTS（GPT-SoVITS）
   //   导致语音乱掉、字幕也是中文。如果想换文案，改这里即可，但必须是纯日语。
   static const int _maxTranslationRetries = 2;
+  static const String _japaneseQuotationPunctuationInstruction =
+      '日本語の括弧は、曲名、歌詞の引用、人物の台詞の引用を「」で囲み、'
+      '書籍名、アルバム名、引用の中の引用を『』で囲む。'
+      '中国語の書名号《》や英語式の引用符“”を日本語訳に残さず、対象に応じて必ず「」または『』へ直す。\n';
 
   static const Map<String, List<_CharacterCallName>>
       _fixedCharacterCallNameEntries = {
@@ -372,6 +376,7 @@ class ApiService {
     List<String>? imagePaths,
     String? characterId,
     String characterLanguage = 'ja',
+    Map<String, dynamic>? lyricsTranslationReference,
   }) async {
     try {
       String imageContext = '';
@@ -741,6 +746,7 @@ class ApiService {
           fixedCharacterCallNames: fixedCharacterCallNames,
           fixedChineseCallNames: fixedChineseCallNames,
           webContext: webContext,
+          lyricsTranslationReference: lyricsTranslationReference,
           isRetry: attempt > 1,
         );
         if (_isAcceptableJapaneseForCharacter(japaneseText, characterId)) {
@@ -750,6 +756,7 @@ class ApiService {
           '日语角色化翻译未通过本地校验: '
           'attempt=$attempt, '
           'cleanJapanese=${_isCleanJapaneseForTts(japaneseText)}, '
+          'quotationPunctuation=${_usesJapaneseQuotationPunctuation(japaneseText)}, '
           'baseStyle=${isJapaneseStyleCompatible(japaneseText, characterId)}, '
           'translationStyle=${isJapaneseTranslationStyleCompatible(japaneseText, characterId)}, '
           'text=${_logPreview(japaneseText)}',
@@ -1612,6 +1619,47 @@ $responseShapeReminder
     );
   }
 
+  static _ProtectedTranslationText _protectKnownLyricsForJapaneseTranslation(
+    String text,
+    Map<String, dynamic>? lyricsTranslationReference,
+  ) {
+    if (lyricsTranslationReference == null) {
+      return _ProtectedTranslationText(text: text, placeholders: const {});
+    }
+    final rawPairs = lyricsTranslationReference['lyric_pairs'];
+    if (rawPairs is! List) {
+      return _ProtectedTranslationText(text: text, placeholders: const {});
+    }
+
+    final pairs = <MapEntry<String, String>>[];
+    for (final rawPair in rawPairs) {
+      if (rawPair is! Map) continue;
+      final chinese = '${rawPair['chinese'] ?? ''}'.trim();
+      final japanese = '${rawPair['japanese'] ?? ''}'.trim();
+      if (chinese.runes.length < 8 ||
+          japanese.isEmpty ||
+          RegExp(r'[A-Za-z]').hasMatch(chinese) ||
+          RegExp(r'[A-Za-z]').hasMatch(japanese)) {
+        continue;
+      }
+      pairs.add(MapEntry(chinese, japanese));
+    }
+    pairs.sort((left, right) => right.key.length.compareTo(left.key.length));
+
+    var protectedText = text;
+    final placeholders = <String, String>{};
+    for (final pair in pairs) {
+      if (!protectedText.contains(pair.key)) continue;
+      final placeholder = '__JP_LYRIC_${placeholders.length}__';
+      protectedText = protectedText.replaceAll(pair.key, placeholder);
+      placeholders[placeholder] = pair.value;
+    }
+    return _ProtectedTranslationText(
+      text: protectedText,
+      placeholders: placeholders,
+    );
+  }
+
   static String _restoreProtectedMappedNames(
     String text,
     Map<String, String> placeholders,
@@ -2000,7 +2048,12 @@ $responseShapeReminder
     String? characterId,
   ) {
     return _isCleanJapaneseForTts(text) &&
+        _usesJapaneseQuotationPunctuation(text) &&
         isJapaneseTranslationStyleCompatible(text, characterId);
+  }
+
+  static bool _usesJapaneseQuotationPunctuation(String text) {
+    return !RegExp(r'[《》“”]').hasMatch(text);
   }
 
   @visibleForTesting
@@ -2101,15 +2154,27 @@ $responseShapeReminder
     required Map<String, String> fixedCharacterCallNames,
     required Map<String, String> fixedChineseCallNames,
     required String? webContext,
+    required Map<String, dynamic>? lyricsTranslationReference,
     required bool isRetry,
   }) async {
     try {
-      final protectedText = _protectMappedNamesForJapaneseTranslation(
+      final protectedLyrics = _protectKnownLyricsForJapaneseTranslation(
         chineseText,
+        lyricsTranslationReference,
+      );
+      final protectedNames = _protectMappedNamesForJapaneseTranslation(
+        protectedLyrics.text,
         exactUserName: exactUserName,
         translatedUserName: translatedUserName,
         fixedCharacterCallNames: fixedCharacterCallNames,
         fixedChineseCallNames: fixedChineseCallNames,
+      );
+      final protectedText = _ProtectedTranslationText(
+        text: protectedNames.text,
+        placeholders: {
+          ...protectedLyrics.placeholders,
+          ...protectedNames.placeholders,
+        },
       );
       final sourceUnits = _splitChineseTranslationUnits(protectedText.text);
       if (sourceUnits.isEmpty) return '';
@@ -2122,7 +2187,15 @@ $responseShapeReminder
           for (var i = 0; i < sourceUnits.length; i++)
             {'source_index': i + 1, 'text': sourceUnits[i]},
         ],
+        if (lyricsTranslationReference != null)
+          'lyrics_translation_reference': lyricsTranslationReference,
       });
+      final lyricsInstruction = lyricsTranslationReference == null
+          ? ''
+          : '歌词翻译规则：输入中的 lyrics_translation_reference 只属于当前歌曲。'
+              '当中文原文引用或明显转述其中的 chinese 译词时，必须采用同一 lyric_pair 的 japanese 日文原词，不能把中文歌词自由反译。'
+              '__JP_LYRIC_0__ 这类歌词占位符必须原样保留在同一个 source_index。'
+              '不得主动添加中文原文没有引用的歌词；不得引用含英文单词、短语或句子的歌词行。歌名和专有名词不受此限制。\n';
       final systemPrompt = isRetry
           ? '你是负责角色台词的中译日翻译器。\n'
               '输入是已经确定内容和角色性的中文回答。你的任务不是复述、润色中文或解释，而是把每个 source_index 的 text 翻译成自然日语。\n'
@@ -2132,12 +2205,14 @@ $responseShapeReminder
               '2. 每个输入 source_index 必须对应一个译文，数量、顺序、source_index 必须完全一致；不要跨句移动、合并或拆分。\n'
               '3. text 里只能写日语。严禁保留中文原句、中文动作描写、中文标点说明或“翻译如下”等前置语。\n'
               '4. 如果原文包含中文括号动作，例如“（轻轻点头）”，必须翻成日语括号动作，例如“（そっと頷いて）”。\n'
-              '5. 原文里的 __JP_NAME_0__ 这类占位符必须在同一个 source_index 的译文里原样保留，一个字符也不能改，不能移动到别的句子。\n'
+              '5. 原文里的 __JP_NAME_0__、__JP_LYRIC_0__ 这类占位符必须在同一个 source_index 的译文里原样保留，一个字符也不能改，不能移动到别的句子。\n'
               '6. 事实范围、动作主体、对象、主动/被动、因果关系和完成程度必须保持一致。\n'
               '7. 必须包含平假名或片假名，写成日本语母语者日常会话里自然会说的句子。\n'
               '8. $genderHints'
               '9. 角色语体要求：${_japaneseTranslationStyle(characterId)}\n'
-              '10. 输出前逐项检查：是否仍有中文残留；是否每个 source_index 都完成了真正的日语翻译。\n'
+              '10. $_japaneseQuotationPunctuationInstruction'
+              '11. 输出前逐项检查：是否仍有中文残留；是否每个 source_index 都完成了真正的日语翻译。\n'
+              '$lyricsInstruction'
           : 'あなたはキャラクター会話の中日翻訳者です。\n'
               '入力は内容とキャラクター性を確定済みの中国語返答です。'
               '日本語話者が日常会話で自然に話す文章として翻訳してください。\n'
@@ -2148,12 +2223,14 @@ $responseShapeReminder
               '2. 入力の各 source_index に対して翻訳を一つだけ出し、件数と順序を完全に一致させる。文を別の index に移動、結合、分割しない。\n'
               '3. text は日本語だけにし、中国語の語句、説明、注釈、前置きを残さない。\n'
               '4. 各文の事実範囲、動作主、対象、能動・受動、因果関係、完了の程度を変えない。自然な日本語にするための語順変更はよいが、誰が誰に何をしたかを変えない。\n'
-              '5. 元の文にある __JP_NAME_0__ のような占位符は、その同じ index の訳文に一文字も変えず残す。別の文へ移さない。\n'
+              '5. 元の文にある __JP_NAME_0__、__JP_LYRIC_0__ のような占位符は、その同じ index の訳文に一文字も変えず残す。別の文へ移さない。\n'
               '6. 元のテキストに括弧書きの動作や表情がある場合は、削除せず自然な日本語にして括弧内に残す。\n'
               '7. 必ず平仮名または片仮名を含む自然な日本語にし、中国語の漢字語を字形だけで残さない。\n'
               '8. $genderHints'
               '9. ${_japaneseTranslationStyle(characterId)}\n'
-              '10. 出力前に各 source_index の原文と訳文を一対一で照合し、主語と能動・受動が一致しているか確認する。\n'
+              '10. $_japaneseQuotationPunctuationInstruction'
+              '11. 出力前に各 source_index の原文と訳文を一対一で照合し、主語と能動・受動が一致しているか確認する。\n'
+              '$lyricsInstruction'
               '$retryInstruction';
       final response = await http.post(
         Uri.parse('$deepSeekBaseUrl/chat/completions'),
@@ -2266,7 +2343,7 @@ $responseShapeReminder
     }
 
     final translatedUnits = <String>[];
-    final placeholderPattern = RegExp(r'__JP_NAME_\d+__');
+    final placeholderPattern = RegExp(r'__JP_(?:NAME|LYRIC)_\d+__');
     for (var i = 0; i < sourceUnits.length; i++) {
       final rawTranslation = translations[i];
       if (rawTranslation is! Map || rawTranslation['source_index'] != i + 1) {
@@ -2288,7 +2365,7 @@ $responseShapeReminder
           .toSet();
       if (!_sameStringSet(expectedPlaceholders, actualPlaceholders)) {
         return _AlignedTranslationParseResult.invalid(
-          '第 ${i + 1} 项的人名占位符发生丢失或跨句移动',
+          '第 ${i + 1} 项的受保护占位符发生丢失或跨句移动',
         );
       }
       if (_hasPotentialPassiveVoiceShift(
@@ -2327,6 +2404,25 @@ $responseShapeReminder
   @visibleForTesting
   static List<String> splitChineseTranslationUnitsForTest(String text) =>
       _splitChineseTranslationUnits(text);
+
+  @visibleForTesting
+  static Map<String, dynamic> protectKnownLyricsForJapaneseTranslationForTest(
+    String text,
+    Map<String, dynamic>? lyricsTranslationReference,
+  ) {
+    final protected = _protectKnownLyricsForJapaneseTranslation(
+      text,
+      lyricsTranslationReference,
+    );
+    return {
+      'text': protected.text,
+      'placeholders': protected.placeholders,
+    };
+  }
+
+  @visibleForTesting
+  static bool usesJapaneseQuotationPunctuationForTest(String text) =>
+      _usesJapaneseQuotationPunctuation(text);
 
   @visibleForTesting
   static String? parseAlignedJapaneseTranslationsForTest({

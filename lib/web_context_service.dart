@@ -8,6 +8,7 @@ import 'api_service.dart';
 import 'character_config.dart';
 import 'grounding_contract.dart';
 import 'name_pronunciation.dart';
+import 'path_service.dart';
 import 'storage_service.dart';
 
 // ========================================
@@ -84,6 +85,12 @@ class WebContextService {
     'Accept-Language': 'zh-CN,zh;q=0.9,ja;q=0.8,en;q=0.7',
     'Referer': 'https://m.baidu.com/',
     'Connection': 'keep-alive',
+  };
+  static const Map<String, String> _mediaWikiApiHeaders = {
+    'User-Agent':
+        'anime-chat-app/1.0 Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+    'Accept': 'application/json,text/plain,*/*',
+    'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
   };
 
   static void _logSearch(String message) {
@@ -3049,11 +3056,19 @@ ${location.name}：数据源 Open-Meteo；天气数据时间 $currentTime；当�
       }
 
       final html = utf8.decode(response.bodyBytes, allowMalformed: true);
+      if (_looksLikeBlockedPageContent(html)) {
+        _logSearchVerbose(
+          '豆包候选正文补全遇到访问挑战页: url=${item.url}',
+        );
+        return item;
+      }
       final readable = _isMoegirlUrl(requestUri.toString())
           ? _preferredMoegirlSectionText(html)
           : _cleanExternalCanonRawText(html, requestUri.toString());
       final cleaned = readable.replaceAll(RegExp(r'\s+'), ' ').trim();
-      if (cleaned.length < 120 || _looksLikeGarbledText(cleaned)) {
+      if (cleaned.length < 120 ||
+          _looksLikeGarbledText(cleaned) ||
+          _looksLikeBlockedPageContent(cleaned)) {
         _logSearchVerbose(
           '豆包候选正文补全为空或乱码: url=${item.url}, chars=${cleaned.length}',
         );
@@ -4512,7 +4527,7 @@ ${excludedFacts.asMap().entries.map((entry) => '${entry.key + 1}. ${entry.value.
 $searchQuery
 
 来源优先级：
-${_doubaoSourcePriorityInstruction(profile, category)}
+${_doubaoSourcePriorityInstruction(profile, category, userText)}
 
 搜索结果：
 $rawResults
@@ -4578,15 +4593,36 @@ $rawResults
           '${_formatDoubaoFactsCompactForLog(mediaAugmented.facts.skip(augmented.facts.length).toList())}',
         );
       }
-      if (validated.facts.isEmpty &&
+      if (mediaAugmented.facts.length < minimumFactTarget &&
           category == 'canon' &&
           _queryAsksMusicInfo(userText)) {
         final fallback = _fallbackMusicFactsFromSearchResults(
           items,
+          userText: userText,
           provider: '${chatResult.provider}+本地曲目信息兜底',
           factLimit: factLimit,
+          answerRequirements: answerRequirements,
         );
-        if (fallback.facts.isNotEmpty) return fallback;
+        if (fallback.facts.isNotEmpty) {
+          final merged = [...mediaAugmented.facts];
+          _addUniqueDoubaoFacts(merged, fallback.facts, maxFacts: factLimit);
+          if (merged.length > mediaAugmented.facts.length) {
+            _logSearchVerbose(
+              '本地曲目信息兜底: '
+              '${_formatDoubaoFactsCompactForLog(merged.skip(mediaAugmented.facts.length).toList())}',
+            );
+          }
+          return _DoubaoFactExtraction(
+            status: merged.length >= minimumFactTarget ? 'ok' : 'partial',
+            facts: merged.take(factLimit).toList(growable: false),
+            discardReason: mediaAugmented.discardReason,
+            provider: fallback.provider,
+            answerBasis: _answerBasisForFacts(
+              merged,
+              fallback: mediaAugmented.answerBasis,
+            ),
+          );
+        }
       }
       return mediaAugmented;
     } catch (e) {
@@ -4817,6 +4853,7 @@ $rawResults
     final requireEvidence = preferEvidenceText;
     final validatedFacts = <_DoubaoGroundedFact>[];
     final droppedEvidenceFacts = <_DoubaoGroundedFact>[];
+    final droppedNonWebFacts = <_DoubaoGroundedFact>[];
     final droppedSubjectFacts = <_DoubaoGroundedFact>[];
     final droppedBloatedProfileFacts = <_DoubaoGroundedFact>[];
     final chronologyScope = items
@@ -4858,7 +4895,9 @@ $rawResults
           );
         }
       }
-      if (!_sourceExcerptIsSupported(
+      if (!_hasWebSource(sanitizedFact)) {
+        droppedNonWebFacts.add(sourcedFact);
+      } else if (!_sourceExcerptIsSupported(
         sanitizedFact,
         items,
         requireExcerpt: requireEvidence,
@@ -4888,6 +4927,12 @@ $rawResults
         '${_formatDoubaoFactsCompactForLog(droppedEvidenceFacts)}',
       );
     }
+    if (droppedNonWebFacts.isNotEmpty) {
+      debugPrint(
+        '豆包事实后校验丢弃非网页来源事实: '
+        '${_formatDoubaoFactsCompactForLog(droppedNonWebFacts)}',
+      );
+    }
     if (droppedSubjectFacts.isNotEmpty) {
       debugPrint(
         '豆包事实后校验丢弃喜好主体不匹配的事实: '
@@ -4902,6 +4947,7 @@ $rawResults
     }
     if (!preferEvidenceText &&
         droppedEvidenceFacts.isEmpty &&
+        droppedNonWebFacts.isEmpty &&
         droppedSubjectFacts.isEmpty &&
         droppedBloatedProfileFacts.isEmpty) {
       return extraction;
@@ -4947,29 +4993,212 @@ $rawResults
 
   static bool _queryAsksMusicInfo(String userText) {
     return RegExp(
-      r'歌|歌曲|曲|乐队|樂隊|バンド|音楽|music|song|mujica|mygo',
+      r'歌|歌曲|曲|乐队|バンド|音楽|music|song|mujica|mygo',
       caseSensitive: false,
     ).hasMatch(userText);
   }
 
+  static bool _isUsefulMusicCanonFact(
+    _DoubaoGroundedFact fact,
+    String userText,
+  ) {
+    final combined = [
+      fact.sourceTitle,
+      fact.text,
+      fact.sourceExcerpt,
+      fact.directAnswerExcerpt,
+    ].join(' ').replaceAll(RegExp(r'\s+'), ' ').trim();
+    if (combined.isEmpty) return false;
+
+    final titleTerms = _explicitCanonTitleTerms(userText, '')
+        .where((term) => term.trim().isNotEmpty)
+        .toList(growable: false);
+    final mentionsSongTitle = titleTerms.isEmpty ||
+        titleTerms.any((term) => _containsLooseText(combined, term));
+    if (!mentionsSongTitle) return false;
+
+    final sourceScope = '${fact.sourceTitle} ${fact.sourceUrl}';
+    final titleSpecificSource = titleTerms.isEmpty ||
+        titleTerms.any((term) => _containsLooseText(sourceScope, term));
+    if (!titleSpecificSource) return false;
+
+    if (_looksLikeBareMusicIdentityFact(fact, titleTerms)) return false;
+    if (_looksLikeBareMusicTechnicalMetadata(fact)) return false;
+    if (_looksLikeLyricsPageUiNoise(fact)) return false;
+    if (_looksLikeMusicCatalogOrMemberNoise(combined, titleTerms)) {
+      return false;
+    }
+    if (_looksLikeMusicEvidenceLabelNoise(fact)) return false;
+    if (_looksLikeRomajiOnlyMusicEvidence(fact)) return false;
+    if (_looksLikeProductionMetaFact(combined)) return false;
+
+    return _hasSubstantiveMusicInfo(combined);
+  }
+
+  static bool _looksLikeMusicEvidenceLabelNoise(_DoubaoGroundedFact fact) {
+    final evidence = [
+      fact.sourceExcerpt,
+      fact.directAnswerExcerpt,
+    ].join(' ').replaceAll(RegExp(r'\s+'), ' ').trim();
+    if (evidence.isEmpty) return false;
+
+    final lower = evidence.toLowerCase();
+    final hasLyricsTableHeader = RegExp(
+          r'\b(romaji|kanji|translation|side by side|tv version)\b',
+          caseSensitive: false,
+        ).allMatches(evidence).length >=
+        2;
+    if (!hasLyricsTableHeader) return false;
+
+    final preview = _shortenRunes(evidence, 180);
+    final japaneseChars =
+        RegExp(r'[\u3040-\u30ff\u3400-\u9fff]').allMatches(preview).length;
+    final latinWords = RegExp(r'\b[a-z]{2,}\b').allMatches(lower).length;
+    return japaneseChars < 12 && latinWords >= 8;
+  }
+
+  static bool _looksLikeRomajiOnlyMusicEvidence(_DoubaoGroundedFact fact) {
+    final evidence = [
+      fact.sourceExcerpt,
+      fact.directAnswerExcerpt,
+    ].join(' ').replaceAll(RegExp(r'\s+'), ' ').trim();
+    if (evidence.isEmpty) return false;
+    if (RegExp(r'[\u3040-\u30ff\u3400-\u9fff]').hasMatch(evidence)) {
+      return false;
+    }
+    final lowered = evidence.toLowerCase();
+    return RegExp(r'\bromaji\b').hasMatch(lowered);
+  }
+
+  static bool _looksLikeBareMusicIdentityFact(
+    _DoubaoGroundedFact fact,
+    List<String> titleTerms,
+  ) {
+    final text = [fact.text, fact.sourceExcerpt, fact.directAnswerExcerpt]
+        .join(' ')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+    if (text.isEmpty) return true;
+    var normalized = text;
+    for (final title in titleTerms) {
+      normalized = normalized.replaceAll(
+        RegExp(RegExp.escape(title), caseSensitive: false),
+        'TITLE',
+      );
+    }
+    return RegExp(
+      r'^(?:资料页面)?(?:提到)?[：:]?\s*(?:《?TITLE》?\s*)?(?:is a song by|是由|歌曲|曲目|所属乐队为|所属乐队是|song by)\s*[A-Za-z0-9!☆_\-\s\u4e00-\u9fff]{1,40}[。.!]?$',
+      caseSensitive: false,
+    ).hasMatch(normalized);
+  }
+
+  static bool _looksLikeBareMusicTechnicalMetadata(_DoubaoGroundedFact fact) {
+    final text = [fact.text, fact.sourceExcerpt, fact.directAnswerExcerpt]
+        .join(' ')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+    if (text.isEmpty) return false;
+    final hasTempo = RegExp(
+      r'\bBPM\b|beats per minute|每分钟节拍|速度[:：]?\s*\d+',
+      caseSensitive: false,
+    ).hasMatch(text);
+    if (!hasTempo) return false;
+    final hasInterpretiveInfo = RegExp(
+      r'歌词|旋律|节奏感|氛围|主题|风格|曲风|情绪|意象|孤独|内心|过往|自立|破碎|挣扎|'
+      r'强烈|锋利|melody|theme|style|mood|atmosphere',
+      caseSensitive: false,
+    ).hasMatch(text);
+    return !hasInterpretiveInfo;
+  }
+
+  static bool _looksLikeLyricsPageUiNoise(_DoubaoGroundedFact fact) {
+    final text = fact.text.trim();
+    final excerpt = fact.sourceExcerpt.replaceAll(RegExp(r'\s+'), ' ').trim();
+    if (excerpt.isEmpty) return false;
+    final claimsLyrics = RegExp(r'歌词|lyric', caseSensitive: false)
+        .hasMatch('$text ${fact.sourceTitle} ${fact.sourceUrl}');
+    if (!claimsLyrics) return false;
+    if (_hasEarlyJapaneseLyricText(excerpt)) return false;
+    if (!_isLyricsPageUrl(fact.sourceUrl) &&
+        !RegExp(r'歌词正文|lyrics?', caseSensitive: false).hasMatch(text)) {
+      return false;
+    }
+    return true;
+  }
+
+  static bool _looksLikeMusicCatalogOrMemberNoise(
+    String text,
+    List<String> titleTerms,
+  ) {
+    final compact = text.replaceAll(RegExp(r'\s+'), ' ');
+    final hasCatalogSignal = RegExp(
+      r'Members|Discography|Tracklist|Songs?|曲目列表|成员|成员包括|乐队由|group consists|热门歌曲',
+      caseSensitive: false,
+    ).hasMatch(compact);
+    if (!hasCatalogSignal) return false;
+
+    final knownTitleMentions = _extractKnownMusicTitles(compact)
+        .map((match) => match.chineseTitle)
+        .toSet()
+        .length;
+    final mentionsRequestedTitle = titleTerms.any(
+      (term) => _containsLooseText(compact, term),
+    );
+    final hasUsefulDetail = _hasSubstantiveMusicInfo(compact) &&
+        RegExp(r'歌词|旋律|节奏|氛围|主题|风格|lyrics|melody|rhythm|theme',
+                caseSensitive: false)
+            .hasMatch(compact);
+    return mentionsRequestedTitle &&
+        knownTitleMentions >= 4 &&
+        !hasUsefulDetail;
+  }
+
+  static bool _hasSubstantiveMusicInfo(String text) {
+    return RegExp(
+      r'歌词|旋律|节奏|曲调|氛围|主题|风格|曲风|情绪|意象|'
+      r'孤独|内心|过往|自立|破碎|挣扎|舞台感|锋利|强烈|'
+      r'lyrics|lyric|melody|rhythm|tempo|theme|translation|verse|chorus|metal|symphonic',
+      caseSensitive: false,
+    ).hasMatch(text);
+  }
+
   static _DoubaoFactExtraction _fallbackMusicFactsFromSearchResults(
     List<_DoubaoSearchItem> items, {
+    required String userText,
     required String provider,
     required int factLimit,
+    required List<_AnswerRequirement> answerRequirements,
   }) {
     final facts = <_DoubaoGroundedFact>[];
-    void addFact(_DoubaoSearchItem item, String text, String excerpt) {
+    final requirementIndexes = _musicFallbackRequirementIndexes(
+      answerRequirements,
+    );
+    final asksForSongCandidates = _queryAsksMusicCandidates(userText);
+
+    void addFact(
+      _DoubaoSearchItem item,
+      String text,
+      String excerpt, {
+      bool allowCatalogCandidate = false,
+    }) {
       final cleanedText = text.replaceAll(RegExp(r'\s+'), ' ').trim();
       final cleanedExcerpt = excerpt.replaceAll(RegExp(r'\s+'), ' ').trim();
       if (cleanedText.length < 2 || cleanedExcerpt.length < 2) return;
       if (_looksLikeProductionMetaFact(cleanedText)) return;
       if (facts.any((fact) => fact.text == cleanedText)) return;
-      facts.add(_DoubaoGroundedFact(
+      final candidate = _DoubaoGroundedFact(
         text: cleanedText,
         sourceTitle: item.title,
         sourceUrl: item.url,
         sourceExcerpt: cleanedExcerpt,
-      ));
+        requirementIndexes: requirementIndexes,
+        answerBasis: _answerBasisBoundedCandidates,
+      );
+      if (!allowCatalogCandidate &&
+          !_isUsefulMusicCanonFact(candidate, userText)) {
+        return;
+      }
+      facts.add(candidate);
     }
 
     for (final item in items.take(_doubaoFactMaxResults)) {
@@ -4981,15 +5210,20 @@ $rawResults
           .trim();
 
       final knownTitles = _extractKnownMusicTitles(source);
-      if (knownTitles.isNotEmpty) {
+      if (knownTitles.length >= 2) {
         final excerpt = knownTitles.map((match) => match.sourceText).join(' ');
         final factText = '资料页面列出的曲目候选：'
             '${knownTitles.map((match) => match.chineseTitle).join('、')}';
-        addFact(item, factText, excerpt);
+        addFact(
+          item,
+          factText,
+          excerpt,
+          allowCatalogCandidate: asksForSongCandidates,
+        );
       }
 
       final introMatch = RegExp(
-        r'([^。！？.!?]{0,80}(?:歌曲|乐队|樂隊|演唱|曲名|成员|Members|debuted with the song|热门歌曲)[^。！？.!?]{0,160})',
+        r'([^。！？.!?]{0,80}(?:歌曲|乐队|演唱|曲名|成员|Members|debuted with the song|热门歌曲)[^。！？.!?]{0,160})',
         caseSensitive: false,
       ).firstMatch(source);
       if (introMatch != null) {
@@ -5013,6 +5247,16 @@ $rawResults
         );
       }
 
+      final lyricExcerpt = _musicLyricEvidenceSnippet(source);
+      if (lyricExcerpt.isNotEmpty) {
+        final factTitle = _musicFactTitleFromUserText(userText, title);
+        addFact(
+          item,
+          '歌词页给出《$factTitle》的歌词正文，可作为歌词主题和氛围参考',
+          lyricExcerpt,
+        );
+      }
+
       if (facts.length >= factLimit) break;
     }
 
@@ -5021,12 +5265,134 @@ $rawResults
       facts: facts.take(factLimit).toList(growable: false),
       discardReason: facts.isEmpty ? '未能从搜索结果中提取曲目信息' : '',
       provider: provider,
+      answerBasis: _answerBasisForFacts(
+        facts,
+        fallback: _answerBasisBoundedCandidates,
+      ),
     );
+  }
+
+  static List<int> _musicFallbackRequirementIndexes(
+    List<_AnswerRequirement> answerRequirements,
+  ) {
+    if (answerRequirements.isEmpty) return const [0];
+    final indexes = <int>[];
+    for (var i = 0; i < answerRequirements.length; i++) {
+      final text = answerRequirements[i].text;
+      if (_queryAsksMusicInfo(text) ||
+          _explicitCanonTitleTerms(text, '').isNotEmpty) {
+        indexes.add(i);
+      }
+    }
+    return indexes.isEmpty ? const [0] : indexes;
+  }
+
+  static Set<String>? _catalogMusicTitleFormsCache;
+
+  static Set<String> _catalogMusicTitleForms() {
+    final cached = _catalogMusicTitleFormsCache;
+    if (cached != null) return cached;
+
+    final forms = <String>{};
+    try {
+      final file = File(AppPaths.resolve(r'music\music_catalog.json'));
+      if (!file.existsSync()) {
+        _catalogMusicTitleFormsCache = const {};
+        return const {};
+      }
+      final decoded = jsonDecode(file.readAsStringSync());
+      if (decoded is List) {
+        for (final item in decoded.whereType<Map<String, dynamic>>()) {
+          final title = item['title'];
+          final id = item['id'];
+          if (title is String && title.trim().isNotEmpty) {
+            forms.add(_looseEvidenceKey(title));
+          }
+          if (id is String && id.trim().isNotEmpty) {
+            forms.add(_looseEvidenceKey(id));
+          }
+        }
+      }
+    } catch (_) {
+      // If the catalog is unavailable, keep the old term-registry behavior.
+    }
+
+    _catalogMusicTitleFormsCache = forms;
+    return forms;
+  }
+
+  static bool _queryAsksMusicCandidates(String userText) {
+    return RegExp(
+      r'哪些歌|哪首|曲目|歌单|比较喜欢.*歌|喜欢.*哪些|推荐.*歌|你们乐队',
+      caseSensitive: false,
+    ).hasMatch(userText);
+  }
+
+  static String _musicFactTitleFromUserText(String userText, String fallback) {
+    final titles = _explicitCanonTitleTerms(userText, '');
+    if (titles.isNotEmpty) return titles.first;
+    return fallback.trim().isEmpty ? '该曲' : fallback.trim();
+  }
+
+  static String _musicLyricEvidenceSnippet(String source) {
+    if (!_hasSubstantiveMusicInfo(source)) return '';
+    final japaneseSnippet = _firstJapaneseLyricSnippet(source);
+    if (japaneseSnippet.isNotEmpty) return japaneseSnippet;
+    for (final marker in ['Translation', 'Lyrics', '歌词']) {
+      var searchStart = 0;
+      while (searchStart < source.length) {
+        final start = source.indexOf(marker, searchStart);
+        if (start < 0) break;
+        searchStart = start + marker.length;
+        var end = source.length;
+        for (final boundary in [
+          'Song Meta',
+          'References',
+          'Release Date',
+          'Tracklist',
+          'Comments',
+        ]) {
+          final index = source.indexOf(boundary, start + marker.length);
+          if (index >= 0 && index < end) end = index;
+        }
+        final snippet =
+            source.substring(start, end).replaceAll(RegExp(r'\s+'), ' ').trim();
+        if (snippet.runes.length < 40) continue;
+        final shortened = _shortenRunes(snippet, 220);
+        if (_looksLikeProductionMetaFact(shortened)) continue;
+        if (_looksLikeRomajiOnlyText(shortened)) continue;
+        return shortened;
+      }
+    }
+    return '';
+  }
+
+  static String _firstJapaneseLyricSnippet(String source) {
+    for (final match
+        in RegExp(r'[\u3040-\u30ff\u3400-\u9fff]').allMatches(source)) {
+      final snippet =
+          source.substring(match.start).replaceAll(RegExp(r'\s+'), ' ').trim();
+      if (snippet.runes.length < 30) continue;
+      final preview = _shortenRunes(snippet, 120);
+      final cjkCount =
+          RegExp(r'[\u3040-\u30ff\u3400-\u9fff]').allMatches(preview).length;
+      if (cjkCount < 10) continue;
+      final shortened = _shortenRunes(snippet, 220);
+      if (_looksLikeProductionMetaFact(shortened)) continue;
+      return shortened;
+    }
+    return '';
+  }
+
+  static bool _looksLikeRomajiOnlyText(String text) {
+    if (RegExp(r'[\u3040-\u30ff\u3400-\u9fff]').hasMatch(text)) return false;
+    return RegExp(r'\bromaji\b', caseSensitive: false).hasMatch(text);
   }
 
   static List<_MusicTitleMatch> _extractKnownMusicTitles(String text) {
     if (text.trim().isEmpty) return const [];
     final matches = <_MusicTitleMatch>[];
+    final catalogTitleForms = _catalogMusicTitleForms();
 
     for (final entry in termNamePronunciations) {
       final variants = <String>{
@@ -5037,6 +5403,14 @@ $rawResults
         ...entry.aliases.keys,
       }.where((value) => value.trim().isNotEmpty).toList()
         ..sort((a, b) => b.length.compareTo(a.length));
+      if (catalogTitleForms.isNotEmpty &&
+          !variants.any(
+            (variant) => catalogTitleForms.contains(
+              _looseEvidenceKey(variant),
+            ),
+          )) {
+        continue;
+      }
 
       for (final variant in variants) {
         var start = 0;
@@ -5230,7 +5604,11 @@ $rawResults
     required String category,
     required String userText,
   }) {
-    final text = fact.text.replaceAll(RegExp(r'\s+'), ' ').trim();
+    final text = [
+      fact.text,
+      fact.sourceExcerpt,
+      fact.directAnswerExcerpt,
+    ].join(' ').replaceAll(RegExp(r'\s+'), ' ').trim();
     if (text.isEmpty) return false;
     if (category != 'canon' && !_queryAsksMediaOrEntertainment(userText)) {
       return false;
@@ -5240,10 +5618,12 @@ $rawResults
     // 书影音/番剧问题可以保留“这是哪部作品、主角/成员/题材”这类识别事实；
     // 但制作团队、职务、厂牌、发行商品等现实制作流水账仍然不进入角色回答边界。
     final productionStaffOrBusiness = RegExp(
-      r'导演|監督|编剧|脚本|系列构成|制作团队|制作组|制作委员会|制作人员|'
+      r'导演|编剧|脚本|系列构成|制作团队|制作组|制作委员会|制作人员|'
       r'由[^，。；;]{1,40}制作|动画制作|游戏制作|公司|出版社|唱片|厂牌|'
-      r'声优|聲優|配音|演员|作词|作詞|作曲|编曲|編曲|'
-      r'访谈|訪談|采访|活动|演唱会|特典|商品|周边|销量|榜单|排行|'
+      r'声优|配音|演员|作词|作曲|编曲|录音|'
+      r'访谈|采访|活动|演唱会|特典|商品|周边|蓝光|光盘|交换卡片|卡片|首批出货|全场影像|'
+      r'手游|手机节奏游戏|节奏游戏|游戏|收录|追加|销量|榜单|排行|获奖|奖项|大奖|'
+      r'Bilibili|Macro Link|主动联系|拨了电话|详细交流|'
       r'PV|视觉图|片头影像|片尾影像|首播|连播|播出|上映|发售|发行|发布|公开|宣传|'
       r'\bwritten by\b|\blyricist\b|\bcomposer\b|\barranger\b|\bproducer\b|'
       r'\blabel\b|\bcredits?\b|\bpersonnel\b|\bcharts?\b',
@@ -5912,6 +6292,7 @@ $rawResults
 如果一条资料是在作品本体、官方角色资料或作品内补充栏目中呈现角色设定、喜恶、经历、关系或台词，即使原文带有出处说明，也仍然按作品内事实处理；不要把这种设定误判成三次元制作信息。
 英文页面里的 opening theme、ending theme、released、label、limited edition、Blu-ray、lottery、ticket、live、chart、credits 等也属于三次元现实制作/发行信息；用户没有明确问现实发行或动画制作时不要抽取。
 用户询问歌曲、乐队或曲目感想时，歌曲名、所属乐队、乐队成员、作品内曲目列表、歌词主题或氛围的简短概括属于可用事实；但不要长篇摘录歌词，不要抽取现实发售、动画 OP/ED 用途、厂牌、特典、榜单或现实演出信息。
+如果来源是歌词页或歌曲页，优先从日文原歌词、中文/英文翻译、歌词主题解读或曲风描述中抽取能支持主题、意象、情绪或氛围的短证据；罗马音只表示读音，不是有效事实证据，不得把纯 Romaji 片段作为 source_excerpt。每条 source_excerpt 只截取必要短片段，不要整段歌词，也不要因为同页存在发行信息就忽略歌词正文。
 只要搜索结果里有能回答用户问题某个关键部分的作品内事实，就必须输出 facts；不要因为资料来自百科、解说站、资讯站或不是官方站而直接判 insufficient。
 当用户问“为什么、如何、经过、关系、有没有听说、怎么看某件事”时，可以从多个候选中抽取事件起因、关键经过、结果、相关人物和时间地点；不要求单条候选完整回答整个问题。
 只有所有候选都与用户问题无关，或只剩三次元制作信息/UI 噪声时，才输出 status="insufficient"。
@@ -5985,7 +6366,7 @@ $nameGlossary
 5. 不要从论坛讨论、同人创作、整活改写、剪辑视频说明、商品页、观众评论、二创设定中抽取作品设定；这些来源只能在用户明确问同人、二创、商品或社区讨论时使用。
 6. 如果候选中出现用户问题的核心对象，并给出了相关经历、关系、喜好、行动、结果或地点，即使信息不完整，也要抽取出来，不要返回 insufficient。
 7. 如果只找到零散相关事实，但不足以回答用户问的经过、原因、如何、关系变化或评价依据，status 使用 "partial"；如果已经足以支撑回答，status 使用 "ok"。
-7a. 用户问“觉得某首歌怎么样/喜欢某乐队哪些歌”时，不要要求资料直接出现角色主观评价。只要资料列出歌曲名、所属乐队、演唱者、BPM、歌词主题/氛围、曲目列表或代表曲目，就必须抽取为“可供角色评价的素材”或“可供角色选择的曲目候选”，status 至少为 "partial"。
+7a. 用户问“觉得某首歌怎么样/喜欢某乐队哪些歌”时，不要要求资料直接出现角色主观评价。优先抽取歌词主题、音乐氛围、曲风、旋律/节奏感、曲目列表或代表曲目；不要把只有演唱者、所属乐队或 BPM 的技术元数据当作有效素材，status 可为 "partial"。
 7b. 对曲目候选，只能写“资料列出/页面提到的曲目包括……”，不能写成“角色最喜欢……”。最终角色偏好由聊天模型结合人设表达。
 8. facts 必须是搜索结果中明确出现或能从同一条结果直接概括出的内容；不要补充搜索结果没有的信息。
 8a. 每条 fact 都必须提供 source_excerpt。source_excerpt 必须是搜索结果中的连续原文片段，直接支持 text 里的动作主体、动作对象、时间顺序和因果关系；不要用“……”拼接不连续原文。如果找不到能直接支持的连续原文片段，就不要输出这条 fact。
@@ -6187,6 +6568,23 @@ $nameGlossary
   }
 
   @visibleForTesting
+  static int minimumDoubaoSourceTargetForTest({
+    required String userText,
+    required String characterId,
+    required String characterName,
+  }) {
+    final profile = _WebProfile.forCharacter(
+      characterId: characterId,
+      characterName: characterName,
+    );
+    return _minimumDoubaoSourceTarget(
+      category: 'canon',
+      profile: profile,
+      userText: userText,
+    );
+  }
+
+  @visibleForTesting
   static List<String> doubaoCanonAttemptQueriesForTest({
     required String userText,
     required String characterId,
@@ -6235,6 +6633,7 @@ URL：${item.url}
   static String _doubaoSourcePriorityInstruction(
     _WebProfile profile,
     String category,
+    String userText,
   ) {
     if (category == 'canon' && profile.preferMoegirlCanonSearch) {
       return '优先参考萌娘百科等 A 站内容；只有 A 站没有覆盖用户问题所需事实时，才参考百度百科、维基百科、官方站或同系列资料站等 B 站内容。';
@@ -6310,7 +6709,8 @@ URL：${item.url}
     List<_DoubaoGroundedFact> facts,
     int displayLimit,
   ) {
-    final effectiveFacts = _dedupeDoubaoFacts(facts);
+    final effectiveFacts =
+        _dedupeDoubaoFacts(facts).where(_hasWebSource).toList(growable: false);
     final safeDisplayLimit = displayLimit < 0 ? 0 : displayLimit;
     final displayed = effectiveFacts.length < safeDisplayLimit
         ? effectiveFacts.length
@@ -6335,9 +6735,26 @@ URL：${item.url}
   }
 
   static String _doubaoFactSourceKey(_DoubaoGroundedFact fact) {
-    final url = fact.sourceUrl.trim().toLowerCase();
-    if (url.isNotEmpty) return url;
-    return fact.sourceTitle.trim().toLowerCase();
+    return _normalizedWebSourceUrl(fact.sourceUrl);
+  }
+
+  static bool _hasWebSource(_DoubaoGroundedFact fact) =>
+      _doubaoFactSourceKey(fact).isNotEmpty;
+
+  static String _normalizedWebSourceUrl(String rawUrl) {
+    final parsed = Uri.tryParse(rawUrl.trim());
+    if (parsed == null ||
+        !(parsed.scheme == 'http' || parsed.scheme == 'https') ||
+        parsed.host.isEmpty) {
+      return '';
+    }
+    final normalized = Uri(
+      scheme: parsed.scheme.toLowerCase(),
+      host: parsed.host.toLowerCase(),
+      port: parsed.hasPort ? parsed.port : null,
+      path: parsed.path,
+    );
+    return normalized.toString().replaceFirst(RegExp(r'/$'), '');
   }
 
   static String _formatRequirementCoverageForLog(
@@ -6377,6 +6794,7 @@ URL：${item.url}
       {required int maxFacts}) {
     final indexesByIdentity = <String, int>{};
     final indexesByTextAndSource = <String, int>{};
+    final indexesByLyricEvidence = <String, int>{};
     for (var i = 0; i < target.length; i++) {
       final identityKey = _doubaoFactIdentityKey(target[i]);
       if (identityKey.isNotEmpty) indexesByIdentity[identityKey] = i;
@@ -6384,13 +6802,21 @@ URL：${item.url}
       if (textAndSourceKey.isNotEmpty) {
         indexesByTextAndSource[textAndSourceKey] = i;
       }
+      final lyricKey = _musicLyricEvidenceDedupeKey(target[i]);
+      if (lyricKey.isNotEmpty) {
+        indexesByLyricEvidence[lyricKey] = i;
+      }
     }
     for (final fact in source) {
       final identityKey = _doubaoFactIdentityKey(fact);
       final textAndSourceKey = _doubaoFactTextAndSourceKey(fact);
-      if (identityKey.isEmpty && textAndSourceKey.isEmpty) continue;
+      final lyricKey = _musicLyricEvidenceDedupeKey(fact);
+      if (identityKey.isEmpty && textAndSourceKey.isEmpty && lyricKey.isEmpty) {
+        continue;
+      }
       final existingIndex = indexesByIdentity[identityKey] ??
-          indexesByTextAndSource[textAndSourceKey];
+          indexesByTextAndSource[textAndSourceKey] ??
+          indexesByLyricEvidence[lyricKey];
       if (existingIndex != null) {
         target[existingIndex] = _mergeDoubaoDuplicateFact(
           target[existingIndex],
@@ -6402,6 +6828,9 @@ URL：${item.url}
         if (textAndSourceKey.isNotEmpty) {
           indexesByTextAndSource[textAndSourceKey] = existingIndex;
         }
+        if (lyricKey.isNotEmpty) {
+          indexesByLyricEvidence[lyricKey] = existingIndex;
+        }
         continue;
       }
       target.add(fact);
@@ -6410,6 +6839,9 @@ URL：${item.url}
       }
       if (textAndSourceKey.isNotEmpty) {
         indexesByTextAndSource[textAndSourceKey] = target.length - 1;
+      }
+      if (lyricKey.isNotEmpty) {
+        indexesByLyricEvidence[lyricKey] = target.length - 1;
       }
       if (target.length >= maxFacts) return;
     }
@@ -6438,6 +6870,60 @@ URL：${item.url}
     if (textKey.isEmpty) return '';
     final sourceKey = _normalizeForDedupe(_doubaoFactSourceKey(fact));
     return '$sourceKey::$textKey';
+  }
+
+  static String _musicLyricEvidenceDedupeKey(_DoubaoGroundedFact fact) {
+    final text = fact.text.trim();
+    final excerpt = fact.sourceExcerpt.trim();
+    if (excerpt.isEmpty) return '';
+    if (!RegExp(r'歌词|lyric', caseSensitive: false).hasMatch(text) &&
+        !_isLyricsPageUrl(fact.sourceUrl)) {
+      return '';
+    }
+    if (!_hasEarlyJapaneseLyricText(excerpt)) return '';
+    final titleKey = _musicLyricFactTitleKey(fact);
+    if (titleKey.isEmpty) return '';
+    final lyricKey = _normalizedJapaneseLyricKey(excerpt);
+    if (lyricKey.length < 10) return '';
+    return 'music_lyric::$titleKey::$lyricKey';
+  }
+
+  static String _normalizedJapaneseLyricKey(String text) {
+    final buffer = StringBuffer();
+    for (final match
+        in RegExp(r'[\u3040-\u30ff\u3400-\u9fff]+').allMatches(text)) {
+      final chunk = match.group(0) ?? '';
+      if (_isMusicLyricHeadingChunk(chunk)) continue;
+      buffer.write(chunk);
+      if (buffer.length >= 13) break;
+    }
+    return buffer.toString();
+  }
+
+  static bool _isMusicLyricHeadingChunk(String text) {
+    return RegExp(r'^(?:バージョン|歌詞|日本語|翻訳|訳)$').hasMatch(text);
+  }
+
+  static bool _hasEarlyJapaneseLyricText(String text) {
+    final cleaned = _stripMusicLyricHeadingForDisplay(text);
+    final preview = _shortenRunes(cleaned, 120);
+    final firstKana = RegExp(r'[\u3040-\u30ff]').firstMatch(preview);
+    if (firstKana == null || firstKana.start > 36) return false;
+    final kanaCount = RegExp(r'[\u3040-\u30ff]').allMatches(preview).length;
+    final japaneseCount =
+        RegExp(r'[\u3040-\u30ff\u3400-\u9fff]').allMatches(preview).length;
+    return kanaCount >= 4 && japaneseCount >= 10;
+  }
+
+  static String _musicLyricFactTitleKey(_DoubaoGroundedFact fact) {
+    final quoted = RegExp(r'《([^》]{1,60})》').firstMatch(fact.text);
+    if (quoted != null) return _normalizeForDedupe(quoted.group(1) ?? '');
+    final title = fact.sourceTitle
+        .replaceAll(RegExp(r'\s*[-－—|｜].*$'), '')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+    if (title.isEmpty || title == '豆包搜索结果') return '';
+    return _normalizeForDedupe(title);
   }
 
   static _DoubaoGroundedFact _mergeDoubaoDuplicateFact(
@@ -7002,11 +7488,15 @@ ${factLines.join('\n')}
     }
 
     final grouped = <String, List<String>>{};
+    final titles = <String, String>{};
     final urls = <String, String>{};
     for (final fact in selectedFacts) {
       final title = fact.sourceTitle.isEmpty ? '豆包搜索结果' : fact.sourceTitle;
-      grouped.putIfAbsent(title, () => <String>[]).add(_factContextText(fact));
-      if (fact.sourceUrl.isNotEmpty) urls[title] = fact.sourceUrl;
+      final normalizedUrl = _doubaoFactSourceKey(fact);
+      final key = normalizedUrl.isNotEmpty ? normalizedUrl : title;
+      grouped.putIfAbsent(key, () => <String>[]).add(_factContextText(fact));
+      titles.putIfAbsent(key, () => title);
+      if (normalizedUrl.isNotEmpty) urls[key] = normalizedUrl;
     }
 
     var index = 0;
@@ -7014,17 +7504,146 @@ ${factLines.join('\n')}
       index += 1;
       final url = urls[entry.key] ?? '';
       final source = url.isEmpty ? '' : '（来源：$url）';
-      return '$index. ${entry.key}：相关事实：${entry.value.join(' / ')}$source';
+      final title = titles[entry.key] ?? entry.key;
+      return '$index. $title：相关事实：${entry.value.join(' / ')}$source';
     }).toList();
+  }
+
+  @visibleForTesting
+  static List<String> formatDoubaoFactsForTest({
+    required List<Map<String, String>> facts,
+    required int maxFacts,
+    bool separateFacts = false,
+  }) {
+    return _formatDoubaoFacts(
+      [
+        for (final fact in facts)
+          _DoubaoGroundedFact(
+            text: fact['text'] ?? '',
+            sourceTitle: fact['sourceTitle'] ?? '',
+            sourceUrl: fact['sourceUrl'] ?? '',
+            sourceExcerpt: fact['sourceExcerpt'] ?? '',
+          ),
+      ],
+      originalQuery: 'test',
+      maxFacts: maxFacts,
+      separateFacts: separateFacts,
+    );
+  }
+
+  @visibleForTesting
+  static bool usefulMusicCanonFactForTest({
+    required String userText,
+    required String text,
+    required String sourceTitle,
+    required String sourceUrl,
+    required String sourceExcerpt,
+  }) {
+    return _isUsefulMusicCanonFact(
+      _DoubaoGroundedFact(
+        text: text,
+        sourceTitle: sourceTitle,
+        sourceUrl: sourceUrl,
+        sourceExcerpt: sourceExcerpt,
+      ),
+      userText,
+    );
+  }
+
+  @visibleForTesting
+  static List<String> musicTitleCandidatesForTest(String text) {
+    return _extractKnownMusicTitles(text)
+        .map((match) => match.chineseTitle)
+        .toList(growable: false);
+  }
+
+  @visibleForTesting
+  static Future<Map<String, String>> bandoriWikiFetchDebugForTest(
+    String title,
+  ) async {
+    final path = title.trim().replaceAll(RegExp(r'\s+'), '_');
+    final pageUri = Uri.https('bandori.miraheze.org', '/wiki/$path');
+    final apiUri = Uri.https('bandori.miraheze.org', '/w/api.php', {
+      'action': 'parse',
+      'page': title.trim(),
+      'prop': 'text',
+      'format': 'json',
+      'formatversion': '2',
+    });
+    final response = await http
+        .get(apiUri, headers: _mediaWikiApiHeaders)
+        .timeout(_searchTimeout);
+    if (response.statusCode != 200 ||
+        !utf8
+            .decode(response.bodyBytes, allowMalformed: true)
+            .trimLeft()
+            .startsWith('{')) {
+      final body = utf8.decode(response.bodyBytes, allowMalformed: true);
+      return {
+        'url': pageUri.toString(),
+        'status': response.statusCode.toString(),
+        'htmlLength': body.runes.length.toString(),
+        'cleanLength': '0',
+        'garbled': 'false',
+        'preview': _shortenRunes(body.replaceAll(RegExp(r'\s+'), ' '), 500),
+      };
+    }
+    final decoded = jsonDecode(utf8.decode(response.bodyBytes));
+    final html = decoded['parse']?['text'] is String
+        ? decoded['parse']['text'] as String
+        : utf8.decode(response.bodyBytes, allowMalformed: true);
+    final readable = _extractBandoriWikiReadableText(html, titleHint: title);
+    final cleaned = readable.replaceAll(RegExp(r'\s+'), ' ').trim();
+    return {
+      'url': pageUri.toString(),
+      'status': response.statusCode.toString(),
+      'htmlLength': html.runes.length.toString(),
+      'cleanLength': cleaned.runes.length.toString(),
+      'garbled': _looksLikeGarbledText(cleaned).toString(),
+      'preview': _shortenRunes(cleaned, 500),
+    };
+  }
+
+  @visibleForTesting
+  static String lyricsPageReadableTextForTest(String html) {
+    return _extractLyricsPageReadableText(html);
+  }
+
+  @visibleForTesting
+  static bool blockedPageContentForTest(String text) {
+    return _looksLikeBlockedPageContent(text);
   }
 
   static String _factContextText(_DoubaoGroundedFact fact) {
     final text = fact.text.trim();
     final excerpt = fact.sourceExcerpt.trim();
     if (excerpt.isEmpty) return text;
+    if (text.startsWith('资料页面列出的曲目候选')) {
+      return '曲目候选：${_shortenRunes(text, 240)}；原文证据：'
+          '${_shortenRunes(excerpt, 220)}';
+    }
     final genderMetadata = _factGenderMetadata(text);
-    return '原文证据：${_shortenRunes(excerpt, 800)}'
+    final isLyricExcerpt = _musicLyricEvidenceDedupeKey(fact).isNotEmpty;
+    final evidenceLabel = isLyricExcerpt ? '歌词片段' : '原文证据';
+    final evidenceLimit = isLyricExcerpt ? 48 : 800;
+    final displayExcerpt =
+        isLyricExcerpt ? _stripMusicLyricHeadingForDisplay(excerpt) : excerpt;
+    return '$evidenceLabel：${_shortenRunes(displayExcerpt, evidenceLimit)}'
         '${genderMetadata.isEmpty ? '' : '（人物性别参考：$genderMetadata）'}';
+  }
+
+  static String _stripMusicLyricHeadingForDisplay(String text) {
+    var cleaned = text.trim();
+    final heading = RegExp(
+      r'^\s*(?:Lyrics|Kanji|Romaji|Translation|Japanese|Side by Side|TV Version|バージョン|歌詞|日本語|翻訳|訳)[\s:：-]*',
+      caseSensitive: false,
+    );
+    while (heading.hasMatch(cleaned)) {
+      final next = cleaned.replaceFirst(heading, '').trim();
+      if (next == cleaned) break;
+      cleaned = next;
+    }
+    return cleaned;
   }
 
   static String _factGenderMetadata(String factText) {
@@ -7051,14 +7670,16 @@ ${factLines.join('\n')}
     List<_DoubaoGroundedFact> facts,
     int maxFacts,
   ) {
-    final uniqueFacts = _dedupeDoubaoFacts(facts);
+    final uniqueFacts =
+        _dedupeDoubaoFacts(facts).where(_hasWebSource).toList(growable: false);
     if (uniqueFacts.length <= maxFacts) return uniqueFacts;
 
     final grouped = <String, List<_DoubaoGroundedFact>>{};
     final sourceOrder = <String>[];
     for (final fact in uniqueFacts) {
-      final key = fact.sourceUrl.isNotEmpty
-          ? fact.sourceUrl
+      final normalizedUrl = _doubaoFactSourceKey(fact);
+      final key = normalizedUrl.isNotEmpty
+          ? normalizedUrl
           : (fact.sourceTitle.isNotEmpty ? fact.sourceTitle : '豆包搜索结果');
       if (!grouped.containsKey(key)) {
         grouped[key] = <_DoubaoGroundedFact>[];
@@ -7181,9 +7802,12 @@ ${factLines.join('\n')}
 
   static bool _looksLikeProductionMetaFact(String text) {
     return RegExp(
-      r'导演|監督|编剧|脚本|制作|企划|企畫|公司|武士道|Bushiroad|声优|聲優|配音|采访|访谈|訪談|播出|上映|剧场版|劇場版|动画制作|ゲーム制作|演唱会|LIVE|活动|商业|运营|'
-      r'作词|作詞|作曲|编曲|編曲|片头曲|片頭曲|片尾曲|插曲|主题曲|主題曲|发售|发行|发行日期|数字独立单曲|单曲|专辑|唱片|销量|排行|'
-      r'\bopening theme\b|\bending theme\b|\breleased?\b|\brelease\b|\blabel\b|\blimited edition\b|\bblu-ray\b|\blottery\b|\btickets?\b|'
+      r'导演|编剧|脚本|制作|企划|公司|武士道|Bushiroad|声优|配音|采访|访谈|播出|上映|剧场版|动画制作|ゲーム制作|演唱会|LIVE|活动|商业|运营|录音|'
+      r'作词|作曲|编曲|片头曲|片尾曲|插曲|主题曲|发售|发行|发行日期|数字独立单曲|单曲|专辑|唱片|光盘|蓝光|碟|'
+      r'首批出货|附赠|交换卡片|卡片|特典|收录|追加|手游|手机节奏游戏|节奏游戏|游戏|全场影像|Veritas|销量|排行|获奖|奖项|大奖|'
+      r'Bilibili|Macro Link|主动联系|拨了电话|详细交流|'
+      r'日服|简中服|国际服|追加此歌曲|谱面|难度|物量|EXPERT|SPECIAL|NPS|'
+      r'\bopening theme\b|\bending theme\b|\breleased?\b|\brelease\b|\blabel\b|\blimited edition\b|\bblu-ray\b|\bblu ray\b|\bbonus\b|\bcard\b|\blottery\b|\btickets?\b|\bawards?\b|\bprize\b|'
       r'\bwritten by\b|\blyricist\b|\bcomposer\b|\barranger\b|\bproducer\b|\bcharts?\b|\baccolades?\b|\bcredits?\b|\bpersonnel\b',
       caseSensitive: false,
     ).hasMatch(text);
@@ -8504,12 +9128,22 @@ ${factLines.join('\n')}
     return replacement >= 3;
   }
 
+  static bool _looksLikeBlockedPageContent(String text) {
+    final normalized = text.replaceAll(RegExp(r'\s+'), ' ').trim();
+    if (normalized.isEmpty) return false;
+    return RegExp(
+      r'Just a moment|Enable JavaScript and cookies to continue|'
+      r'cf_chl_|challenge-platform|Cloudflare|Access Denied|Forbidden',
+      caseSensitive: false,
+    ).hasMatch(normalized);
+  }
+
   static bool _isRealWorldProductionFragment(String text) {
     final normalized = text.replaceAll(RegExp(r'\s+'), ' ');
     final productionSignals = RegExp(
-      r'导演|监督|監督|编剧|脚本|剧本|制作团队|制作组|制作委员会|制作人员|'
-      r'企划|企画|策划|製作|制作|动画制作|游戏制作|原案|原作方|'
-      r'采访|访谈|访問|透露|表示|指出|根据.*说法|'
+      r'导演|监督|编剧|脚本|剧本|制作团队|制作组|制作委员会|制作人员|'
+      r'企划|企画|策划|制作|动画制作|游戏制作|原案|原作方|'
+      r'采访|访谈|透露|表示|指出|根据.*说法|'
       r'设定.*展开|角色设定|初期设定|初期剧情|故事走向|剧情方向|剧本内容|'
       r'集数|第\d+集|第\d+话|第\d+話|第一季|第二季|总集篇|剧场版|'
       r'播出|上映|发售|发行|发布|公开|宣传|商业|联动|活动|'
@@ -8597,6 +9231,13 @@ ${factLines.join('\n')}
     // 成熟百科 / wiki
     'wikipedia.org',
     'fandom.com',
+    'animesonglyrics.com',
+    'ikuina.com',
+    'uta-net.com',
+    'utaten.com',
+    'joysound.com',
+    'j-lyric.net',
+    'petitlyrics.com',
     'moegirl.org',
     'moegirl.org.cn',
     'zh.moegirl.org.cn',
@@ -8880,6 +9521,14 @@ ${factLines.join('\n')}
       final baiduText = _extractBaiduBaikeReadableText(text);
       if (baiduText.isNotEmpty) return baiduText;
     }
+    if (_isBandoriWikiUrl(url)) {
+      final bandoriText = _extractBandoriWikiReadableText(text);
+      if (bandoriText.isNotEmpty) return bandoriText;
+    }
+    if (_isLyricsPageUrl(url)) {
+      final lyricsText = _extractLyricsPageReadableText(text);
+      if (lyricsText.isNotEmpty) return lyricsText;
+    }
 
     var cleaned = _stripGenericArticleUiHtml(text);
     cleaned = _cleanCanonRawText(cleaned);
@@ -8906,6 +9555,142 @@ ${factLines.join('\n')}
   static bool _isBaiduBaikeUrl(String url) {
     final domain = _domainFromUrl(url);
     return domain == 'baike.baidu.com' || domain == 'wapbaike.baidu.com';
+  }
+
+  static bool _isBandoriWikiUrl(String url) {
+    final domain = _domainFromUrl(url);
+    return domain == 'bandori.miraheze.org';
+  }
+
+  static bool _isLyricsPageUrl(String url) {
+    final domain = _domainFromUrl(url);
+    return domain == 'uta-net.com' ||
+        domain.endsWith('animesonglyrics.com') ||
+        domain == 'ikuina.com';
+  }
+
+  static String _extractLyricsPageReadableText(String html) {
+    final utaNetLyrics = _extractUtaNetLyricsText(html);
+    if (utaNetLyrics.isNotEmpty) return 'Lyrics $utaNetLyrics';
+
+    var text = html
+        .replaceAll(
+            RegExp(r'<script.*?</script>', dotAll: true, caseSensitive: false),
+            ' ')
+        .replaceAll(
+            RegExp(r'<style.*?</style>', dotAll: true, caseSensitive: false),
+            ' ')
+        .replaceAll(RegExp(r'<br\s*/?>', caseSensitive: false), '\n')
+        .replaceAll(
+            RegExp(r'</p>|</div>|</tr>|</li>|</h[1-6]>', caseSensitive: false),
+            '\n')
+        .replaceAll(RegExp(r'<[^>]+>'), ' ');
+    text = _decodeHtmlEntities(text);
+    text = _cleanCanonRawText(text).replaceAll(RegExp(r'\s+'), ' ').trim();
+    if (text.isEmpty) return '';
+
+    final japaneseSnippet = _firstJapaneseLyricSnippet(text);
+    if (japaneseSnippet.isNotEmpty) return 'Lyrics $japaneseSnippet';
+
+    final titleStart =
+        RegExp(r'[A-Za-z][A-Za-z0-9!☆_:\-\s]{1,40}').firstMatch(text)?.start;
+    if (titleStart == null) return '';
+    return 'Lyrics ${_shortenRunes(text.substring(titleStart), 2200)}';
+  }
+
+  static String _extractUtaNetLyricsText(String html) {
+    final match = RegExp(
+      r"""<[^>]+id=["']kashi_area["'][^>]*>(?<body>.*?)</[^>]+>""",
+      caseSensitive: false,
+      dotAll: true,
+    ).firstMatch(html);
+    if (match == null) return '';
+    var text = (match.namedGroup('body') ?? '')
+        .replaceAll(RegExp(r'<br\s*/?>', caseSensitive: false), '\n')
+        .replaceAll(RegExp(r'<[^>]+>'), ' ');
+    text = _decodeHtmlEntities(text);
+    text = text
+        .split('\n')
+        .map((line) => line.replaceAll(RegExp(r'\s+'), ' ').trim())
+        .where((line) => line.isNotEmpty)
+        .join(' / ');
+    if (text.runes.length < 24) return '';
+    if (_looksLikeBlockedPageContent(text) || _looksLikeGarbledText(text)) {
+      return '';
+    }
+    return _shortenRunes(text, 2200);
+  }
+
+  static String _extractBandoriWikiReadableText(
+    String html, {
+    String titleHint = '',
+  }) {
+    var pageTitle = titleHint.trim();
+    if (pageTitle.isEmpty) {
+      final titleMatch = RegExp(
+        r'<title>(.*?)</title>',
+        caseSensitive: false,
+        dotAll: true,
+      ).firstMatch(html);
+      pageTitle = (titleMatch?.group(1) ?? '')
+          .replaceAll(RegExp(r'\s*-\s*BanG Dream! Wiki.*$'), '')
+          .trim();
+    }
+    var text = html
+        .replaceAll(
+            RegExp(r'<script.*?</script>', dotAll: true, caseSensitive: false),
+            ' ')
+        .replaceAll(
+            RegExp(r'<style.*?</style>', dotAll: true, caseSensitive: false),
+            ' ')
+        .replaceAll(RegExp(r'<br\s*/?>', caseSensitive: false), '\n')
+        .replaceAll(
+            RegExp(r'</p>|</div>|</tr>|</li>|</h[1-6]>', caseSensitive: false),
+            '\n')
+        .replaceAll(RegExp(r'<[^>]+>'), ' ');
+    text = _decodeHtmlEntities(text);
+    text = _cleanCanonRawText(text).replaceAll(RegExp(r'\s+'), ' ').trim();
+    if (text.isEmpty) return '';
+
+    final pieces = <String>[];
+    final lyricsStart = text.indexOf('Lyrics');
+    if (lyricsStart >= 0) {
+      var lyricsEnd = text.length;
+      for (final marker in [
+        'Song Meta',
+        'References',
+        'Navigation',
+        'Categories',
+      ]) {
+        final index = text.indexOf(marker, lyricsStart + 1);
+        if (index >= 0 && index < lyricsEnd) lyricsEnd = index;
+      }
+      final lyrics = text.substring(lyricsStart, lyricsEnd).trim();
+      final japaneseSnippet = _firstJapaneseLyricSnippet(lyrics);
+      if (japaneseSnippet.isNotEmpty) {
+        pieces.add('Lyrics $japaneseSnippet');
+      } else if (lyrics.isNotEmpty) {
+        pieces.add(_shortenRunes(lyrics, 2200));
+      }
+    }
+
+    final titleStart = pageTitle.isEmpty ? -1 : text.indexOf(pageTitle);
+    if (pieces.isEmpty && titleStart >= 0) {
+      pieces.add(_shortenRunes(text.substring(titleStart), 1400));
+    }
+
+    if (pieces.isEmpty) return _shortenRunes(text, 3000);
+    return pieces.join(' ');
+  }
+
+  static String _decodeHtmlEntities(String text) {
+    return text
+        .replaceAll('&nbsp;', ' ')
+        .replaceAll('&amp;', '&')
+        .replaceAll('&quot;', '"')
+        .replaceAll('&#039;', "'")
+        .replaceAll('&lt;', '<')
+        .replaceAll('&gt;', '>');
   }
 
   static Uri _baiduBaikeReadableUri(Uri uri) {

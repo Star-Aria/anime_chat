@@ -46,3 +46,6 @@ app.*.map.json
 
 # API 密钥（不上传到 GitHub）
 lib/api_keys.dart
+
+# 本地音乐库音频体积较大，只提交曲库元数据与歌词文本
+/music/**/*.mp3

@@ -1216,12 +1216,12 @@ const List<TermNamePronunciation> termNamePronunciations = [
     },
   ),
   TermNamePronunciation(
-    chinese: 'Symbol II : 🜁',
-    japanese: 'Symbol II : 🜁',
+    chinese: 'Symbol II : Air',
+    japanese: 'Symbol II : Air',
     reading: 'シンボル ツー エア',
     aliases: {
       'Symbol II: 🜁': 'シンボル ツー エア',
-      'Symbol II : Air': 'シンボル ツー エア',
+      'Symbol II : 🜁': 'シンボル ツー エア',
       'Symbol II: Air': 'シンボル ツー エア',
     },
   ),
@@ -1236,12 +1236,12 @@ const List<TermNamePronunciation> termNamePronunciations = [
     },
   ),
   TermNamePronunciation(
-    chinese: 'Symbol IV : 🜃',
-    japanese: 'Symbol IV : 🜃',
+    chinese: 'Symbol IV : Earth',
+    japanese: 'Symbol IV : Earth',
     reading: 'シンボル フォー アース',
     aliases: {
       'Symbol IV: 🜃': 'シンボル フォー アース',
-      'Symbol IV : Earth': 'シンボル フォー アース',
+      'Symbol IV : 🜃': 'シンボル フォー アース',
       'Symbol IV: Earth': 'シンボル フォー アース',
     },
   ),
@@ -1335,6 +1335,14 @@ final Map<String, String> termPronunciationDictionary = {
     entry.chinese: entry.reading,
     for (final variant in entry.romanizedReadingVariants)
       variant: entry.reading,
+    ...entry.aliases,
+  },
+};
+
+final Map<String, String> characterPronunciationDictionary = {
+  for (final entry in characterNamePronunciations) ...{
+    entry.japanese: entry.reading,
+    entry.chinese: entry.reading,
     ...entry.aliases,
   },
 };

@@ -11,6 +11,7 @@ import 'character_config.dart';
 import 'storage_service.dart';
 import 'api_service.dart';
 import 'web_context_service.dart';
+import 'music_service.dart';
 import 'proactive_message_service.dart';
 import 'emotion_analyzer.dart';
 import 'character_settings_page.dart';
@@ -52,30 +53,54 @@ const FontWeight aiTranslationFontWeight = FontWeight.normal;
 
 const String userAvatarPath = r'assets\我的头像.jpg';
 
-final Map<String, String> pronunciationDict = namePronunciationDictionary;
-
 const bool enablePronunciationCorrection = true;
 const String pronunciationMode = 'replace';
 
-Map<String, String> _expandedPronunciationMap(Map<String, String> source) {
+Map<String, String> _expandedPronunciationMap(
+  Map<String, String> source, {
+  required bool allowSplitParts,
+}) {
   final expanded = <String, String>{};
   for (final entry in source.entries) {
+    if (!_isPronunciationKeySafe(entry.key)) continue;
     expanded[entry.key] = entry.value;
 
     final compactKey = entry.key.replaceAll(RegExp(r'[\s　]+'), '');
-    if (compactKey != entry.key) {
+    if (compactKey != entry.key && _isPronunciationKeySafe(compactKey)) {
       expanded[compactKey] = entry.value.replaceAll(RegExp(r'[\s　]+'), '');
     }
 
-    final wordParts = _splitNameLikeText(entry.key);
-    final pronunciationParts = _splitByNameSeparators(entry.value);
-    if (wordParts.length == pronunciationParts.length && wordParts.length > 1) {
-      for (int i = 0; i < wordParts.length; i++) {
-        expanded.putIfAbsent(wordParts[i], () => pronunciationParts[i]);
+    if (allowSplitParts) {
+      final wordParts = _splitNameLikeText(entry.key);
+      final pronunciationParts = _splitByNameSeparators(entry.value);
+      if (wordParts.length == pronunciationParts.length &&
+          wordParts.length > 1) {
+        for (int i = 0; i < wordParts.length; i++) {
+          if (!_isPronunciationPartKeySafe(wordParts[i])) continue;
+          expanded.putIfAbsent(wordParts[i], () => pronunciationParts[i]);
+        }
       }
     }
   }
   return expanded;
+}
+
+bool _isPronunciationKeySafe(String key) {
+  final trimmed = key.trim();
+  if (trimmed.isEmpty) return false;
+  return RegExp(r'[\p{L}\p{N}]', unicode: true).hasMatch(trimmed);
+}
+
+bool _isPronunciationPartKeySafe(String key) {
+  final trimmed = key.trim();
+  if (!_isPronunciationKeySafe(trimmed)) return false;
+
+  // Avoid global replacements for punctuation fragments and tiny Latin pieces
+  // produced by mixed-language song titles such as "Symbol II : Air".
+  if (RegExp(r'^[A-Za-z0-9]+$').hasMatch(trimmed) && trimmed.length < 3) {
+    return false;
+  }
+  return true;
 }
 
 List<String> _splitNameLikeText(String text) {
@@ -146,6 +171,8 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
 
   final AudioPlayer _audioPlayerPrimary = AudioPlayer();
   final AudioPlayer _audioPlayerSecondary = AudioPlayer();
+  final AudioPlayer _musicPlayer = AudioPlayer();
+  StreamSubscription<void>? _musicCompleteSubscription;
   bool _primaryIsActive = true;
   AudioPlayer get _activePlayer =>
       _primaryIsActive ? _audioPlayerPrimary : _audioPlayerSecondary;
@@ -155,6 +182,8 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
   String? _activeSessionId;
   bool _isLoading = false;
   bool _isPlaying = false;
+  bool _isMusicPlaying = false;
+  String? _currentPlayingMusicId;
   String? _characterAvatarPath;
   String? _backgroundImagePath;
 
@@ -367,6 +396,14 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
   void _initAudioPlayer() {
     _audioPlayerPrimary.setReleaseMode(ReleaseMode.release);
     _audioPlayerSecondary.setReleaseMode(ReleaseMode.release);
+    _musicPlayer.setReleaseMode(ReleaseMode.stop);
+    _musicCompleteSubscription = _musicPlayer.onPlayerComplete.listen((_) {
+      if (!mounted) return;
+      setState(() {
+        _isMusicPlaying = false;
+        _currentPlayingMusicId = null;
+      });
+    });
   }
 
   @override
@@ -374,6 +411,8 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
     ProactiveMessageService().unregisterActiveChat(widget.character.id);
     _audioPlayerPrimary.dispose();
     _audioPlayerSecondary.dispose();
+    _musicCompleteSubscription?.cancel();
+    _musicPlayer.dispose();
     _textController.dispose();
     _scrollController.dispose();
     _typingAnimationController.dispose();
@@ -640,6 +679,12 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
             : _messages;
     final recentMessages = StorageService.getRecentMessages(historyMessages);
 
+    final musicAttachment = await MusicService.pickAttachmentForRequest(
+      userText: userMessage,
+      character: widget.character,
+      conversationHistory: historyMessages,
+    );
+
     // 2. 再生成“现实/联网信息上下文”：
     //    WebContextService 会根据当前角色 id 决定能查什么。
     //    例如：
@@ -647,15 +692,43 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
     //    - 祥子：东京天气、日本/国际节日、流行语、BanG Dream 资料
     //    - 安迪：上海天气、中国/国际节日、经济、新闻、书影音等
     //    如果用户这句话不需要联网，它会返回空字符串，不影响正常聊天。
-    final webContext = await WebContextService.buildContext(
-      userMessage: userMessage,
-      characterId: widget.character.id,
-      characterName: widget.character.name,
-      conversationHistory: recentMessages,
+    final musicContext = musicAttachment == null
+        ? await MusicService.buildDiscussionContext(
+            userText: userMessage,
+            character: widget.character,
+          )
+        : MusicService.buildPromptContext(musicAttachment);
+    final localOnlyMusicDiscussion = musicAttachment == null &&
+        await MusicService.shouldUseLocalOnlyForDiscussion(
+          userText: userMessage,
+          character: widget.character,
+        );
+
+    //    分享本地曲库歌曲，以及聊已覆盖的 MyGO / Ave Mujica 歌曲时，
+    //    description、歌词和结构化标签已经足够，因此不触发联网搜索。
+    //    其他未被本地曲库覆盖的音乐问题仍走普通联网链路。
+    final webContext = musicAttachment != null || localOnlyMusicDiscussion
+        ? ''
+        : await WebContextService.buildContext(
+            userMessage: userMessage,
+            characterId: widget.character.id,
+            characterName: widget.character.name,
+            conversationHistory: recentMessages,
+          );
+    final responseContext = [
+      if (webContext.isNotEmpty) webContext,
+      if (musicContext.isNotEmpty) musicContext,
+    ].join('\n\n');
+    final lyricsTranslationReference =
+        await MusicService.buildTranslationLyricsReference(
+      userText: userMessage,
+      character: widget.character,
+      selectedAttachment: musicAttachment,
     );
-    if (webContext.isNotEmpty) {
-      debugPrint('本轮联网上下文:\n$webContext');
-      _currentTurnWebContext = webContext;
+
+    if (responseContext.isNotEmpty) {
+      debugPrint('本轮额外上下文:\n$responseContext');
+      _currentTurnWebContext = responseContext;
     } else {
       _currentTurnWebContext = null;
     }
@@ -668,10 +741,11 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
         timeContext: timeContext,
         // 把联网查到的内容塞进 system prompt，让角色用这些真实信息回答。
         // 注意：最终说话的还是 DeepSeek 角色，不是搜索服务直接回复用户。
-        webContext: webContext,
+        webContext: responseContext,
         imagePaths: imagePaths.isNotEmpty ? imagePaths : null,
         characterId: widget.character.id,
         characterLanguage: widget.character.language,
+        lyricsTranslationReference: lyricsTranslationReference,
       );
 
       final japaneseText = responseMap['japanese'] ?? '';
@@ -695,7 +769,11 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
         }
       }
 
-      await _sendAIMessage(japaneseText, chineseText);
+      await _sendAIMessage(
+        japaneseText,
+        chineseText,
+        musicAttachment: musicAttachment,
+      );
 
       // ========================================
       // 连续消息判定：AI 回复后有概率追加消息
@@ -723,7 +801,11 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
     await _processMessageQueue();
   }
 
-  Future<void> _sendAIMessage(String japanese, String chinese) async {
+  Future<void> _sendAIMessage(
+    String japanese,
+    String chinese, {
+    MusicAttachment? musicAttachment,
+  }) async {
     final isChineseChar = widget.character.language == 'zh';
 
     // 中文角色：中文是主内容（TTS 读中文）；日语角色：日语是主内容
@@ -751,6 +833,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
       timestamp: DateTime.now(),
       audioPath: audioPaths.isNotEmpty ? audioPaths.first : null,
       audioPaths: audioPaths.isNotEmpty ? audioPaths : null,
+      musicAttachment: musicAttachment,
     );
 
     if (mounted) {
@@ -970,6 +1053,62 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
     } else {
       await _playAudio(message);
     }
+  }
+
+  Future<void> _toggleMusicAttachment(MusicAttachment attachment) async {
+    if (_currentPlayingMusicId == attachment.id && _isMusicPlaying) {
+      await _stopMusic();
+      return;
+    }
+
+    await _stopAudio();
+    await _musicPlayer.stop();
+
+    final localPath = attachment.localAudioPath?.trim();
+    final previewUrl = attachment.previewUrl?.trim();
+
+    try {
+      Source? source;
+      if (localPath != null && localPath.isNotEmpty) {
+        final resolvedPath = AppPaths.resolve(localPath);
+        if (await File(resolvedPath).exists()) {
+          source = DeviceFileSource(resolvedPath);
+        } else {
+          debugPrint('音乐文件不存在，尝试预览链接：$resolvedPath');
+        }
+      }
+      if (source == null && previewUrl != null && previewUrl.isNotEmpty) {
+        source = UrlSource(previewUrl);
+      }
+      if (source == null) {
+        debugPrint('音乐附件没有可播放来源：${attachment.title}');
+        return;
+      }
+
+      await _musicPlayer.setVolume(1.0);
+      await _musicPlayer.play(source);
+      if (!mounted) return;
+      setState(() {
+        _isMusicPlaying = true;
+        _currentPlayingMusicId = attachment.id;
+      });
+    } catch (e) {
+      debugPrint('音乐播放失败：$e');
+      if (!mounted) return;
+      setState(() {
+        _isMusicPlaying = false;
+        _currentPlayingMusicId = null;
+      });
+    }
+  }
+
+  Future<void> _stopMusic() async {
+    await _musicPlayer.stop();
+    if (!mounted) return;
+    setState(() {
+      _isMusicPlaying = false;
+      _currentPlayingMusicId = null;
+    });
   }
 
   Future<void> _stopAudio() async {
@@ -1490,9 +1629,17 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
     // 2. 日语专有名词注音纠正（仅对日语角色生效，中文角色跳过）
     if (enablePronunciationCorrection && widget.character.language != 'zh') {
       final expandedPronunciations = <String, String>{
-        ..._expandedPronunciationMap(pronunciationDict),
+        ..._expandedPronunciationMap(
+          characterPronunciationDictionary,
+          allowSplitParts: true,
+        ),
+        ..._expandedPronunciationMap(
+          termPronunciationDictionary,
+          allowSplitParts: false,
+        ),
         ..._expandedPronunciationMap(
           widget.character.pronunciationOverrides ?? const <String, String>{},
+          allowSplitParts: false,
         ),
       };
       final pronunciationEntries = expandedPronunciations.entries.toList()
@@ -3508,6 +3655,15 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
                                   height: 1.5,
                                 ),
                               ),
+                          if (message.musicAttachment != null)
+                            Padding(
+                              padding: const EdgeInsets.only(top: 10),
+                              child: _buildMusicAttachmentCard(
+                                message.musicAttachment!,
+                                isUser,
+                                color,
+                              ),
+                            ),
                           if (!isUser)
                             Padding(
                               padding: const EdgeInsets.only(top: 8),
@@ -3567,6 +3723,123 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
         ),
       ],
     );
+  }
+
+  Widget _buildMusicAttachmentCard(
+    MusicAttachment attachment,
+    bool isUser,
+    Color accentColor,
+  ) {
+    final canPlay = _hasPlayableMusicSource(attachment);
+    final isCurrent =
+        _currentPlayingMusicId == attachment.id && _isMusicPlaying;
+    final subtitleParts = [
+      if (attachment.artist.trim().isNotEmpty) attachment.artist.trim(),
+      if (attachment.band.trim().isNotEmpty &&
+          attachment.band.trim() != attachment.artist.trim())
+        attachment.band.trim(),
+    ];
+    final subtitle = subtitleParts.join(' · ');
+
+    return Container(
+      constraints: const BoxConstraints(minWidth: 220, maxWidth: 320),
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: isUser
+            ? Colors.white.withValues(alpha: 0.18)
+            : Colors.white.withValues(alpha: 0.72),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(
+          color: isUser
+              ? Colors.white.withValues(alpha: 0.35)
+              : widget.character.aiBubbleBorderColor.withValues(alpha: 0.32),
+        ),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          InkWell(
+            onTap: canPlay ? () => _toggleMusicAttachment(attachment) : null,
+            borderRadius: BorderRadius.circular(22),
+            child: Container(
+              width: 42,
+              height: 42,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: canPlay
+                    ? accentColor.withValues(alpha: isUser ? 0.9 : 0.18)
+                    : Colors.grey.withValues(alpha: 0.18),
+              ),
+              child: Icon(
+                isCurrent ? Icons.pause : Icons.play_arrow,
+                color: canPlay
+                    ? (isUser ? Colors.white : accentColor)
+                    : Colors.grey[500],
+                size: 24,
+              ),
+            ),
+          ),
+          const SizedBox(width: 10),
+          Flexible(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  attachment.title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: isUser ? Colors.white : const Color(0xFF2D3142),
+                    fontWeight: FontWeight.w700,
+                    fontSize: 13,
+                  ),
+                ),
+                if (subtitle.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 2),
+                    child: Text(
+                      subtitle,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: isUser
+                            ? Colors.white.withValues(alpha: 0.82)
+                            : const Color(0xFF4C566A),
+                        fontSize: 11,
+                      ),
+                    ),
+                  ),
+                if (!canPlay)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 3),
+                    child: Text(
+                      '等待音频文件',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: isUser
+                            ? Colors.white.withValues(alpha: 0.70)
+                            : Colors.grey[600],
+                        fontSize: 10,
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  bool _hasPlayableMusicSource(MusicAttachment attachment) {
+    final previewUrl = attachment.previewUrl?.trim();
+    if (previewUrl != null && previewUrl.isNotEmpty) return true;
+
+    final localPath = attachment.localAudioPath?.trim();
+    if (localPath == null || localPath.isEmpty) return false;
+    return File(AppPaths.resolve(localPath)).existsSync();
   }
 
   Widget _buildPlayButton(Message message) {

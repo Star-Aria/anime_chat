@@ -1,9 +1,13 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'dart:convert';
+import 'dart:io';
 
 import 'package:anime_chat_app/character_config.dart';
 import 'package:anime_chat_app/api_service.dart';
 import 'package:anime_chat_app/emotion_analyzer.dart';
+import 'package:anime_chat_app/music_service.dart';
 import 'package:anime_chat_app/name_pronunciation.dart';
+import 'package:anime_chat_app/storage_service.dart';
 import 'package:anime_chat_app/web_context_service.dart';
 
 void main() {
@@ -22,6 +26,416 @@ void main() {
     expect(sentences, [
       '彼女がMyGO!!!!!のライブに誘ってくれたんです。',
     ]);
+  });
+
+  group('Music share trigger', () {
+    test('triggers only for explicit share or playback requests', () {
+      expect(
+        MusicService.isMusicShareRequest('请分享一首最近喜欢的你们乐队的歌'),
+        isTrue,
+      );
+      expect(
+        MusicService.isMusicShareRequest('能放一首mujica的歌给我听吗'),
+        isTrue,
+      );
+    });
+
+    test('does not attach audio for song opinion questions', () {
+      expect(
+        MusicService.isMusicShareRequest(
+          '祥祥，KILLKISS真的太燃了，我好喜欢！祥祥觉得你们的这首歌怎么样呢，你比较喜欢mujica的哪些歌呢',
+        ),
+        isFalse,
+      );
+      expect(
+        MusicService.isMusicShareRequest('你比较喜欢mujica的哪些歌呢？'),
+        isFalse,
+      );
+    });
+
+    test('prefers songs not already shared in the conversation', () async {
+      final catalog = await MusicService.loadCatalog();
+      final mujicaSongs =
+          catalog.where((item) => item.band == 'Ave Mujica').toList();
+      final remainingSong = mujicaSongs.last;
+      final history = mujicaSongs
+          .take(mujicaSongs.length - 1)
+          .map(
+            (song) => Message(
+              role: 'assistant',
+              content: '推荐过 ${song.title}',
+              timestamp: DateTime(2026),
+              musicAttachment: song,
+            ),
+          )
+          .toList();
+
+      final selected = await MusicService.pickAttachmentForRequest(
+        userText: '请分享一首你们乐队的歌',
+        character: CharacterConfig.getCharacterById('sakiko'),
+        conversationHistory: history,
+      );
+
+      expect(selected?.id, remainingSong.id);
+    });
+
+    test('still honors an explicitly requested song already shared', () async {
+      final catalog = await MusicService.loadCatalog();
+      final killkiss = catalog.firstWhere((item) => item.title == 'KiLLKiSS');
+      final history = [
+        Message(
+          role: 'assistant',
+          content: '推荐过 KiLLKiSS',
+          timestamp: DateTime(2026),
+          musicAttachment: killkiss,
+        ),
+      ];
+
+      final selected = await MusicService.pickAttachmentForRequest(
+        userText: '请再分享KiLLKiSS这首歌',
+        character: CharacterConfig.getCharacterById('sakiko'),
+        conversationHistory: history,
+      );
+
+      expect(selected?.id, killkiss.id);
+    });
+
+    test('allows repeats after every preferred-band song was shared', () async {
+      final catalog = await MusicService.loadCatalog();
+      final mujicaSongs =
+          catalog.where((item) => item.band == 'Ave Mujica').toList();
+      final history = mujicaSongs
+          .map(
+            (song) => Message(
+              role: 'assistant',
+              content: '推荐过 ${song.title}',
+              timestamp: DateTime(2026),
+              musicAttachment: song,
+            ),
+          )
+          .toList();
+
+      final selected = await MusicService.pickAttachmentForRequest(
+        userText: '请分享一首你们乐队的歌',
+        character: CharacterConfig.getCharacterById('sakiko'),
+        conversationHistory: history,
+      );
+
+      expect(selected, isNotNull);
+      expect(selected?.band, 'Ave Mujica');
+    });
+
+    test('matches catalog songs through pronunciation-table title forms',
+        () async {
+      expect(
+        await MusicService.mentionedCatalogTitleForTest('播放黑色生日'),
+        '黒のバースデイ',
+      );
+      expect(
+        await MusicService.mentionedCatalogTitleForTest(
+          '我想听Aoi Hitomi no Naka ni',
+        ),
+        '碧蓝眼瞳之中',
+      );
+      expect(
+        await MusicService.mentionedCatalogTitleForTest(
+          '分享Symbol II Air吧',
+        ),
+        'Symbol II : Air',
+      );
+      expect(
+        await MusicService.mentionedCatalogTitleForTest(
+          '播放Masquerade Rhapsody Request',
+        ),
+        'Mas?uerade Rhapsody Re?uest',
+      );
+      expect(
+        await MusicService.mentionedCatalogTitleForTest('随便分享一首Mujica的歌'),
+        isNull,
+      );
+    });
+
+    test('adds structured local music profile to prompt context', () {
+      final context = MusicService.buildPromptContext(
+        const MusicAttachment(
+          id: 'test_song',
+          title: 'Ether',
+          artist: 'Ave Mujica',
+          band: 'Ave Mujica',
+          description: '这首歌像逐渐被光和空气包围，安静但并不轻。',
+          lyrics: ['透明な空気に触れて', 'まだ名前のない光へ'],
+          moods: ['空灵', '壮大'],
+          sound: ['旋律抬升'],
+          themes: ['以太', '光'],
+          imagery: ['透明空气'],
+          recommendationAngles: ['适合安静分享'],
+        ),
+      );
+
+      expect(context, contains('氛围标签：空灵、壮大'));
+      expect(context, contains('听感要点：旋律抬升'));
+      expect(context, contains('主题素材：以太、光'));
+      expect(context, contains('【本地歌曲描述】'));
+      expect(context, contains('这首歌像逐渐被光和空气包围'));
+      expect(context, contains('【本地歌词】\n透明な空気に触れて\nまだ名前のない光へ'));
+      expect(
+        context,
+        contains('如果引用歌词，只能引用本地歌词中的日文原词或中文翻译'),
+      );
+      expect(context, contains('跳过歌词里的英文单词、英文短语和英文句子'));
+      expect(context, contains('歌名与专有名词不受此限制'));
+    });
+
+    test('adds local catalog boundaries for ordinary song discussion',
+        () async {
+      final context = await MusicService.buildDiscussionContext(
+        userText: '祥祥，KILLKISS真的太燃了，我好喜欢！祥祥觉得你们的这首歌怎么样呢，你比较喜欢mujica的哪些歌呢',
+        character: CharacterConfig.getCharacterById('sakiko'),
+      );
+
+      expect(context, contains('【本地曲库参考】'));
+      expect(context, contains('本轮用户是在聊音乐，不是请求播放或分享音频'));
+      expect(context, isNot(contains('【本轮音乐分享附件】')));
+      expect(context, contains('歌名：KiLLKiSS'));
+      expect(context, contains('Ave Mujica 本地曲库曲目'));
+      expect(context, contains('- KiLLKiSS'));
+      expect(context, contains('Symbol I'));
+      expect(context, contains('Symbol II'));
+      expect(context, contains('Symbol III'));
+      expect(context, contains('Symbol IV'));
+      expect(context, contains('不要只说《Symbol》'));
+      expect(
+        context,
+        contains('如果引用歌词，只能引用本地歌词中的日文原词或中文翻译'),
+      );
+      expect(context, contains('跳过歌词里的英文单词、英文短语和英文句子'));
+      expect(context, contains('歌名与专有名词不受此限制'));
+    });
+
+    test('passes only the current song bilingual lyrics to translation',
+        () async {
+      final reference = await MusicService.buildTranslationLyricsReference(
+        userText: '祥祥觉得KILLKISS这首歌怎么样？',
+        character: CharacterConfig.getCharacterById('sakiko'),
+      );
+
+      expect(reference, isNotNull);
+      expect(reference!['song_title'], 'KiLLKiSS');
+      final pairs = (reference['lyric_pairs'] as List).cast<Map>();
+      final referenceText = pairs
+          .expand((pair) => [pair['japanese'], pair['chinese']])
+          .join('\n');
+      expect(referenceText, contains('弄られて垂れ流す 音のない音'));
+      expect(referenceText, contains('在命运玩弄下发出无声之音'));
+      expect(referenceText, isNot(contains('can not')));
+      expect(referenceText, isNot(contains('KiLLKiSS judy')));
+
+      final protected =
+          ApiService.protectKnownLyricsForJapaneseTranslationForTest(
+        '我很喜欢“在命运玩弄下发出无声之音”这句。',
+        reference,
+      );
+      expect(protected['text'], contains('__JP_LYRIC_0__'));
+      expect(
+        protected['placeholders'],
+        containsPair('__JP_LYRIC_0__', '弄られて垂れ流す 音のない音'),
+      );
+    });
+
+    test('does not pass lyrics when no current song is identified', () async {
+      final reference = await MusicService.buildTranslationLyricsReference(
+        userText: '祥祥比较喜欢mujica的哪些歌？',
+        character: CharacterConfig.getCharacterById('sakiko'),
+      );
+
+      expect(reference, isNull);
+    });
+
+    test('all labeled bilingual lyrics provide translation references',
+        () async {
+      final catalog = await MusicService.loadCatalog();
+
+      for (final song in catalog.where((song) => song.lyrics.isNotEmpty)) {
+        final hasJapaneseHeading = song.lyrics.contains('【日文原词】');
+        final hasChineseHeading = song.lyrics.contains('【中文翻译】');
+        expect(
+          hasJapaneseHeading,
+          hasChineseHeading,
+          reason: '${song.title} 的双语标题不完整',
+        );
+        if (!hasJapaneseHeading) continue;
+
+        final reference = await MusicService.buildTranslationLyricsReference(
+          userText: song.title,
+          character: CharacterConfig.getCharacterById('sakiko'),
+          selectedAttachment: song,
+        );
+        expect(reference, isNotNull, reason: song.title);
+        expect(reference!['lyric_pairs'], isNotEmpty, reason: song.title);
+      }
+    });
+
+    test('uses local-only discussion for covered MyGO or Mujica songs',
+        () async {
+      final character = CharacterConfig.getCharacterById('sakiko');
+
+      expect(
+        await MusicService.shouldUseLocalOnlyForDiscussion(
+          userText: '祥祥，KILLKISS真的太燃了，我好喜欢！你比较喜欢mujica的哪些歌呢？',
+          character: character,
+        ),
+        isTrue,
+      );
+      expect(
+        await MusicService.shouldUseLocalOnlyForDiscussion(
+          userText: '祥祥，你觉得Roselia的歌怎么样？',
+          character: character,
+        ),
+        isFalse,
+      );
+      expect(
+        await MusicService.buildDiscussionContext(
+          userText: '祥祥，你觉得Roselia的歌怎么样？',
+          character: character,
+        ),
+        isEmpty,
+      );
+    });
+
+    test('catalog includes complete MyGO profiles and external lyrics paths',
+        () async {
+      final catalog = await MusicService.loadCatalog();
+      final titles = catalog.map((item) => item.title).toSet();
+      final mygoSongs =
+          catalog.where((item) => item.band == 'MyGO!!!!!').toList();
+
+      expect(mygoSongs, hasLength(36));
+      expect(
+        titles,
+        containsAll(['名无声', '猛独侵袭', 'DIVINE', '碧蓝眼瞳之中']),
+      );
+      final mygoProfileSignatures = <String>{};
+      for (final item in mygoSongs) {
+        expect(item.description?.trim(), isNotEmpty, reason: item.title);
+        expect(item.note?.trim(), isNotEmpty, reason: item.title);
+        expect(item.moods, isNotEmpty, reason: item.title);
+        expect(item.sound, isNotEmpty, reason: item.title);
+        expect(item.themes, isNotEmpty, reason: item.title);
+        expect(item.imagery, isNotEmpty, reason: item.title);
+        expect(item.recommendationAngles, isNotEmpty, reason: item.title);
+        mygoProfileSignatures.add(jsonEncode([
+          item.note,
+          item.moods,
+          item.sound,
+          item.themes,
+          item.imagery,
+          item.recommendationAngles,
+        ]));
+      }
+      expect(mygoProfileSignatures, hasLength(mygoSongs.length));
+      for (final item in catalog) {
+        expect(
+          item.lyricsPath?.trim(),
+          isNotEmpty,
+          reason: '${item.title} should declare a lyricsPath',
+        );
+        expect(
+          File(item.lyricsPath!).existsSync(),
+          isTrue,
+          reason: '${item.title} lyrics file should exist',
+        );
+      }
+      for (final title in ['名无声', '猛独侵袭', 'DIVINE', '碧蓝眼瞳之中']) {
+        final item = catalog.firstWhere((item) => item.title == title);
+        expect(item.lyrics, isA<List<String>>());
+        expect(item.moods, isNot(isEmpty),
+            reason: '$title moods should not be empty');
+        expect(item.sound, isNot(isEmpty),
+            reason: '$title sound should not be empty');
+        expect(item.themes, isNot(isEmpty),
+            reason: '$title themes should not be empty');
+        expect(item.imagery, isNot(isEmpty),
+            reason: '$title imagery should not be empty');
+        expect(
+          item.recommendationAngles,
+          isNot(isEmpty),
+          reason: '$title recommendationAngles should not be empty',
+        );
+        expect(
+          item.note,
+          isNot(anyOf(contains('等待补充'), contains('description 和 lyrics'))),
+          reason: '$title note should not expose catalog maintenance text',
+        );
+      }
+    });
+
+    test('catalog omits redundant embedded lyrics and source fields', () {
+      final decoded = jsonDecode(
+        File('music/music_catalog.json').readAsStringSync(),
+      ) as List<dynamic>;
+
+      for (final rawEntry in decoded) {
+        final entry = rawEntry as Map<String, dynamic>;
+        expect(entry, isNot(contains('lyrics')));
+        expect(entry, isNot(contains('sourceUrls')));
+        expect(entry, isNot(contains('sourceNotes')));
+      }
+    });
+
+    test('does not serialize loaded lyrics into chat messages', () {
+      const attachment = MusicAttachment(
+        id: 'serialization_test',
+        title: 'KiLLKiSS',
+        artist: 'Ave Mujica',
+        band: 'Ave Mujica',
+        lyricsPath: 'music/lyrics/ave_mujica_killkiss.txt',
+        lyrics: ['第一行', '第二行'],
+      );
+
+      final json = attachment.toJson();
+      expect(json, isNot(contains('lyrics')));
+      expect(json['lyricsPath'], 'music/lyrics/ave_mujica_killkiss.txt');
+    });
+
+    test('lyrics can be stored as editable lines and legacy text', () {
+      final attachment = MusicAttachment.fromJson({
+        'id': 'lyrics_test',
+        'title': '歌词测试',
+        'artist': 'Ave Mujica',
+        'band': 'Ave Mujica',
+        'lyrics': ['第一行', '第二行', '', '第四行'],
+      });
+      final legacyAttachment = MusicAttachment.fromJson({
+        'id': 'legacy_lyrics_test',
+        'title': '旧歌词测试',
+        'artist': 'Ave Mujica',
+        'band': 'Ave Mujica',
+        'lyrics': '旧第一行\n旧第二行',
+      });
+
+      expect(attachment.lyrics, ['第一行', '第二行', '', '第四行']);
+      expect(attachment.lyricsText, '第一行\n第二行\n\n第四行');
+      expect(legacyAttachment.lyrics, ['旧第一行', '旧第二行']);
+      expect(legacyAttachment.lyricsText, '旧第一行\n旧第二行');
+    });
+
+    test('loads lyrics from plain text files', () async {
+      final lyricsFile = File('music/lyrics/ave_mujica_killkiss.txt');
+      final original = await lyricsFile.readAsString();
+      await lyricsFile.writeAsString('  第一行歌词  \n第二行歌词\n\n第四行歌词\n');
+      try {
+        final catalog = await MusicService.loadCatalog();
+        final attachment =
+            catalog.firstWhere((item) => item.id == 'ave_mujica_killkiss');
+        final context = MusicService.buildPromptContext(attachment);
+
+        expect(attachment.lyrics, ['  第一行歌词', '第二行歌词', '', '第四行歌词']);
+        expect(attachment.lyricsText, '第一行歌词\n第二行歌词\n\n第四行歌词');
+        expect(context, contains('【本地歌词】\n第一行歌词\n第二行歌词\n\n第四行歌词'));
+      } finally {
+        await lyricsFile.writeAsString(original);
+      }
+    });
   });
 
   test('TTS input removes displayed action descriptions', () {
@@ -163,6 +577,27 @@ void main() {
     );
   });
 
+  test('Japanese replies use Japanese quotation punctuation', () {
+    expect(
+      ApiService.usesJapaneseQuotationPunctuationForTest(
+        '「壊れぬように」という歌詞と、『迷跡波』というアルバムです。',
+      ),
+      isTrue,
+    );
+    expect(
+      ApiService.usesJapaneseQuotationPunctuationForTest(
+        '最近は《Georgette Me, Georgette You》を聴いています。',
+      ),
+      isFalse,
+    );
+    expect(
+      ApiService.usesJapaneseQuotationPunctuationForTest(
+        '彼女は“もう一度始めましょう”と言いました。',
+      ),
+      isFalse,
+    );
+  });
+
   test('Character name registry resolves stage names to canonical identity',
       () {
     final lock = characterNameByJapaneseForm['LOCK'];
@@ -228,7 +663,7 @@ void main() {
     expect(termPronunciationDictionary['Crucifix X'], 'クルシフィックス キス');
     expect(termPronunciationDictionary['天球のMúsica'], 'そらのムジカ');
     expect(termPronunciationDictionary["'S/' The Way"], 'スラッシュ ザ ウェイ');
-    expect(termPronunciationDictionary['Symbol II : 🜁'], 'シンボル ツー エア');
+    expect(termPronunciationDictionary['Symbol II : Air'], 'シンボル ツー エア');
     expect(
       ApiService.applyJapaneseNameMappingsForTest(
         '黑色生日和天球的Música都很适合Ave Mujica。',
@@ -596,6 +1031,22 @@ void main() {
       expect(parsed, isNull);
     });
 
+    test('keeps protected lyric placeholders in their source sentence', () {
+      final parsed = ApiService.parseAlignedJapaneseTranslationsForTest(
+        sourceUnits: ['我喜欢“__JP_LYRIC_0__”这句。'],
+        placeholders: const {
+          '__JP_LYRIC_0__': '弄られて垂れ流す 音のない音',
+        },
+        response: '''
+{"translations":[
+  {"source_index":1,"text":"「__JP_LYRIC_0__」という一節が好きです。"}
+]}
+''',
+      );
+
+      expect(parsed, '「__JP_LYRIC_0__」という一節が好きです。');
+    });
+
     test('rejects an unsupported passive voice shift', () {
       final parsed = ApiService.parseAlignedJapaneseTranslationsForTest(
         sourceUnits: ['__JP_NAME_0__拒绝了邀请。'],
@@ -697,9 +1148,307 @@ void main() {
           .map((attempt) => attempt.substring(2))
           .toList();
 
+      expect(attempts.any((attempt) => attempt.startsWith('0:')), isTrue);
+      expect(attempts.any((attempt) => attempt.contains('zh.moegirl.org.cn')),
+          isTrue);
       expect(p1Queries, ['KILLKISS', 'AveMujica']);
       expect(p1Queries.any((query) => query.contains('KILLKISS Ave')), isFalse);
     });
+
+    test('keeps Moegirl P0 for non-music canon questions', () {
+      final attempts = WebContextService.doubaoCanonAttemptQueriesForTest(
+        userText: '灯喜欢什么动物？',
+        characterId: 'sakiko',
+        characterName: '丰川祥子',
+        searchTargets: const ['高松灯'],
+      );
+
+      expect(attempts.any((attempt) => attempt.startsWith('0:')), isTrue);
+      expect(attempts.any((attempt) => attempt.contains('zh.moegirl.org.cn')),
+          isTrue);
+    });
+
+    test('uses ordinary source target for music canon chat questions', () {
+      expect(
+        WebContextService.minimumDoubaoSourceTargetForTest(
+          userText: 'KILLKISS怎么样，你比较喜欢mujica的哪些歌？',
+          characterId: 'sakiko',
+          characterName: '丰川祥子',
+        ),
+        1,
+      );
+      expect(
+        WebContextService.minimumDoubaoSourceTargetForTest(
+          userText: '灯喜欢什么动物？',
+          characterId: 'sakiko',
+          characterName: '丰川祥子',
+        ),
+        1,
+      );
+
+      final oneSourceFacts = [
+        for (var i = 1; i <= 3; i++)
+          {
+            'text': '音乐事实$i',
+            'sourceTitle': '页面A',
+            'sourceUrl': 'https://example.com/a',
+            'sourceExcerpt': '音乐事实$i',
+          },
+      ];
+
+      expect(
+        WebContextService.doubaoFactsMeetStopConditionForTest(
+          facts: oneSourceFacts,
+          factLimit: 10,
+          minimumFactTarget: 3,
+          minimumSourceTarget: 1,
+        ),
+        isTrue,
+      );
+    });
+
+    test('keeps same-title facts from different web sources separate', () {
+      final lines = WebContextService.formatDoubaoFactsForTest(
+        maxFacts: 10,
+        facts: const [
+          {
+            'text': '音乐事实1',
+            'sourceTitle': 'KiLLKiSS',
+            'sourceUrl': 'https://example.com/a',
+            'sourceExcerpt': '音乐事实1',
+          },
+          {
+            'text': '音乐事实2',
+            'sourceTitle': 'KiLLKiSS',
+            'sourceUrl': 'https://example.com/b',
+            'sourceExcerpt': '音乐事实2',
+          },
+          {
+            'text': '音乐事实3',
+            'sourceTitle': 'Ave Mujica',
+            'sourceUrl': 'https://example.com/c',
+            'sourceExcerpt': '音乐事实3',
+          },
+        ],
+      );
+
+      expect(lines, hasLength(3));
+      expect(lines[0], contains('https://example.com/a'));
+      expect(lines[1], contains('https://example.com/b'));
+      expect(lines[2], contains('https://example.com/c'));
+    });
+
+    test('dedupes duplicate lyric excerpts across music sources', () {
+      final lines = WebContextService.formatDoubaoFactsForTest(
+        maxFacts: 10,
+        facts: const [
+          {
+            'text': '歌词页给出《KiLLKiSS》的日文歌词正文，可作为歌词主题和氛围参考',
+            'sourceTitle': 'KiLLKiSS - BanG Dream! Wiki',
+            'sourceUrl': 'https://bandori.miraheze.org/wiki/KiLLKiSS',
+            'sourceExcerpt':
+                '弄られて垂れ流す 音のない音 遍く 名前を捨てたのね あなたのモザイクが泣いてる can not deny',
+          },
+          {
+            'text': '歌词页给出《KiLLKiSS》的日文歌词正文，可作为歌词主题和氛围参考',
+            'sourceTitle': 'KiLLKiSS',
+            'sourceUrl':
+                'https://www.animesonglyrics.com/bang-dream-ave-mujica/killkiss',
+            'sourceExcerpt':
+                'Lyrics バージョン 弄られて垂れ流す 音のない音 あまねく 名前を捨てたのね あなたのモザイクが泣いてる',
+          },
+        ],
+      );
+
+      expect(lines, hasLength(1));
+      expect(lines.single, contains('歌词片段：'));
+      expect(lines.single, isNot(contains('can not deny')));
+      expect(lines.single, contains('bandori.miraheze.org'));
+    });
+
+    test('does not label Chinese interpretation as lyric excerpt', () {
+      final lines = WebContextService.formatDoubaoFactsForTest(
+        maxFacts: 10,
+        facts: const [
+          {
+            'text': '《KiLLKiSS》的歌词主题涉及孤独和挣扎中的自立',
+            'sourceTitle': 'KiLLKiSS',
+            'sourceUrl': 'https://wapbaike.baidu.com/item/KiLLKiSS/65216268',
+            'sourceExcerpt':
+                '它层层揭开那些无法磨灭的过往、人类与生俱来且无处可逃的孤独，以及那份在挣扎中被迫寻求自立、已然破碎的内心。',
+          },
+        ],
+      );
+
+      expect(lines.single, contains('原文证据：'));
+      expect(lines.single, isNot(contains('歌词片段：')));
+    });
+
+    test('keeps music catalog candidate label in fact context', () {
+      final lines = WebContextService.formatDoubaoFactsForTest(
+        maxFacts: 10,
+        facts: const [
+          {
+            'text': '资料页面列出的曲目候选：KiLLKiSS、Ether',
+            'sourceTitle': 'KiLLKiSS',
+            'sourceUrl': 'https://example.com/killkiss',
+            'sourceExcerpt': 'KiLLKiSS Ave Mujica Ether',
+          },
+        ],
+      );
+
+      expect(lines.single, contains('曲目候选：'));
+      expect(lines.single, contains('资料页面列出的曲目候选：KiLLKiSS、Ether'));
+      expect(lines.single, contains('原文证据：KiLLKiSS Ave Mujica Ether'));
+    });
+
+    test('music candidate extraction only keeps local catalog song titles', () {
+      expect(
+        WebContextService.musicTitleCandidatesForTest(
+          'BanG Dream Ave Mujica CRYCHIC Morfonica MyGO!!!!! 羽丘',
+        ),
+        ['Ave Mujica'],
+      );
+      expect(
+        WebContextService.musicTitleCandidatesForTest(
+          'KiLLKiSS Ave Mujica Ether',
+        ),
+        ['KiLLKiSS', 'Ave Mujica', 'Ether'],
+      );
+    });
+
+    test('extracts uta-net lyrics area and rejects challenge pages', () {
+      final readable = WebContextService.lyricsPageReadableTextForTest('''
+<html><body>
+<nav>作曲者名インデックス検索 レーベル名インデックス検索</nav>
+<div id="kashi_area">弄られて垂れ流す<br>音のない音<br>遍く 名前を捨てたのね</div>
+</body></html>
+''');
+
+      expect(readable, contains('弄られて垂れ流す'));
+      expect(readable, contains('音のない音'));
+      expect(readable, isNot(contains('インデックス検索')));
+      expect(
+        WebContextService.blockedPageContentForTest(
+          'Just a moment Enable JavaScript and cookies to continue cf_chl_',
+        ),
+        isTrue,
+      );
+    });
+
+    test('rejects music facts that only prove identity or catalog presence',
+        () {
+      const userText = '请查询 BanG Dream 作品内歌曲资料：歌名《KiLLKiSS》，所属乐队 Ave Mujica。';
+
+      expect(
+        WebContextService.usefulMusicCanonFactForTest(
+          userText: userText,
+          text: 'KiLLKiSS is a song by Ave Mujica',
+          sourceTitle: 'KiLLKiSS',
+          sourceUrl: 'https://example.com/song',
+          sourceExcerpt: 'KiLLKiSS is a song by Ave Mujica',
+        ),
+        isFalse,
+      );
+      expect(
+        WebContextService.usefulMusicCanonFactForTest(
+          userText: userText,
+          text: '资料页面列出的曲目包括 KiLLKiSS',
+          sourceTitle: 'Ave Mujica',
+          sourceUrl: 'https://example.com/band',
+          sourceExcerpt:
+              'Kuro no Birthday Ether KiLLKiSS Masquerade Rhapsody Request',
+        ),
+        isFalse,
+      );
+      expect(
+        WebContextService.usefulMusicCanonFactForTest(
+          userText: userText,
+          text: '歌词页给出《KiLLKiSS》的罗马音歌词正文',
+          sourceTitle: 'KiLLKiSS',
+          sourceUrl: 'https://example.com/killkiss',
+          sourceExcerpt:
+              'Lyrics Romaji English Kanji Masagurarete tare nagasu Oto no nai oto amaneku Namae suteta no ne',
+        ),
+        isFalse,
+      );
+      expect(
+        WebContextService.usefulMusicCanonFactForTest(
+          userText: userText,
+          text: '歌词页给出《KiLLKiSS》的歌词正文',
+          sourceTitle: 'KiLLKiSS',
+          sourceUrl: 'https://example.com/killkiss',
+          sourceExcerpt:
+              'Romaji Japanese Translation Masagurarete tarenagasu oto no nai oto Amaneku namae wo suteta no ne',
+        ),
+        isFalse,
+      );
+      expect(
+        WebContextService.usefulMusicCanonFactForTest(
+          userText: userText,
+          text: '《KiLLKiSS》附带商品和游戏收录信息',
+          sourceTitle: 'KiLLKiSS',
+          sourceUrl: 'https://zh.wikipedia.org/wiki/KiLLKiSS',
+          sourceExcerpt:
+              '演唱会“Veritas”全场影像的蓝光光盘，两版本首批出货皆随机附赠一张交换卡片，歌曲亦作为手机节奏游戏收录歌曲。',
+        ),
+        isFalse,
+      );
+      expect(
+        WebContextService.usefulMusicCanonFactForTest(
+          userText: userText,
+          text: '《KiLLKiSS》的 BPM 为 200',
+          sourceTitle: 'KiLLKiSS',
+          sourceUrl: 'https://bandori.fandom.com/wiki/KiLLKiSS',
+          sourceExcerpt: 'Beats per minute 200 BPM',
+        ),
+        isFalse,
+      );
+      expect(
+        WebContextService.usefulMusicCanonFactForTest(
+          userText: userText,
+          text: '歌词页给出《KiLLKiSS》的日文歌词正文，可作为歌词主题和氛围参考',
+          sourceTitle: 'KiLLKiSS',
+          sourceUrl: 'https://ikuina.com/lyrics/ave-mujica/killkiss-ave-mujica',
+          sourceExcerpt: 'Search for 歌詞検索 Ave Mujica KiLLKiSS – Ave Mujica',
+        ),
+        isFalse,
+      );
+      expect(
+        WebContextService.usefulMusicCanonFactForTest(
+          userText: userText,
+          text: '歌词页给出《KiLLKiSS》的日文歌词正文，可作为歌词主题和氛围参考',
+          sourceTitle: 'KiLLKiSS',
+          sourceUrl: 'https://example.com/killkiss',
+          sourceExcerpt: '弄られて垂れ流す 音のない音 遍く 名前を捨てたのね あなたのモザイクが泣いてる',
+        ),
+        isTrue,
+      );
+      expect(
+        WebContextService.usefulMusicCanonFactForTest(
+          userText: userText,
+          text: '《KiLLKiSS》拥有强烈的节奏感，保留了 Ave Mujica 乐队特有的强烈风格',
+          sourceTitle: 'KiLLKiSS',
+          sourceUrl: 'https://example.com/rich',
+          sourceExcerpt: '《KiLLKiSS》拥有强烈的节奏感，保留了Ave Mujica乐队特有的强烈风格',
+        ),
+        isTrue,
+      );
+    });
+
+    test(
+      'Bandori Wiki direct fetch debug',
+      () async {
+        final result =
+            await WebContextService.bandoriWikiFetchDebugForTest('KiLLKiSS');
+        // ignore: avoid_print
+        print(result);
+        expect(result['status'], '200');
+        expect(int.parse(result['cleanLength'] ?? '0'), greaterThan(160));
+        expect(result['preview'], contains('Lyrics'));
+      },
+      skip: !const bool.fromEnvironment('RUN_NETWORK_MUSIC_SOURCE_DEBUG'),
+    );
 
     test('closes the Doubao search budget after six calls', () {
       expect(
