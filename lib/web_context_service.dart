@@ -547,6 +547,7 @@ ${_recentHistoryForPlanner(conversationHistory)}
             ? _jsonString(decoded['query'])
             : null,
         category: _jsonString(decoded['category']) ?? 'none',
+        presentDayRoleplay: _jsonBool(decoded['present_day_roleplay']),
         answerMode: _answerModeAdaptive,
         answerRequirements: _jsonAnswerRequirements(
           decoded['answer_requirements'],
@@ -574,6 +575,7 @@ ${_recentHistoryForPlanner(conversationHistory)}
 如果用户说“最近、近期、现在、当前、今年、这两年”，必须按当前日期理解；除非用户明确写出某个年份，否则 query 里不要使用过去的年份。
 
 当前角色：${profile.characterName}
+当前角色所属乐队：${_currentCharacterBand(profile.characterId).isEmpty ? '（无固定乐队）' : _currentCharacterBand(profile.characterId)}
 角色联网范围：${profile.contextRule}
 
 请只输出一个 JSON 对象，不要输出 markdown，不要解释。
@@ -585,6 +587,7 @@ JSON 格式：
   "festival": true/false,
   "phenology": true/false,
   "web_search": true/false,
+  "present_day_roleplay": true/false,
   "category": "none/weather/festival/canon/slang/economy/current/general",
   "answer_requirements": [
     {
@@ -600,7 +603,7 @@ JSON 格式：
 判断原则：
 0. 判定优先级：角色不应知道的现实世界信息优先于搜索需求。若问题需要现实运营、商业日程或现实活动资料才能回答，则不要搜索；这类信息不能因为包含作品内人物、乐队或组织名而改判成 canon。
 1. 如果用户问“你那边外面怎么样、冷不冷、下雨了吗、热吗”等，即使没说天气，也应该 weather=true。
-2. 如果用户问今天、最近、假期、节日、生日氛围等，festival=true。
+2. 只有用户需要当前日历上的节日或行事信息时才设 festival=true。角色在闲聊中提到休假或自己的生活阶段，不等于用户要查节日日历。
 3. 如果用户问外面景色、季节感、花、树、发芽、落叶、红叶、樱花、紫藤、桂花、银杏等，phenology=true。单纯问“今天天气如何/冷不冷/热不热/下雨吗”时，weather=true 但 phenology=false。
 4. 如果用户提到角色经历、关系、过去事件、后来发展、某个角色“她/他/你”与其他人的关系，可能需要作品原作资料，web_search=true，category="canon"。
 5. 如果用户问网络流行语、梗、最近流行说法，web_search=true，category="slang"。
@@ -608,9 +611,9 @@ JSON 格式：
 7. 如果当前角色范围不允许某类搜索，也仍然按“用户意图”填写 category；程序之后会二次过滤。
 8. query 要写成适合搜索引擎的中文关键词，不要太长；原作搜索时 query 只是兜底描述，真正搜索对象必须写进 primary_objects / secondary_objects。
 9. 经济、新闻、政策类问题如果用户没有指定年份，query 必须包含当前年份 ${now.year} 和“最新/近期”等词。
-10. 如果用户只是以当前角色视角问近况、心情、日常趣事、身边有没有好玩的事、想闲聊或撒娇，没有要求核实具体剧情、现实日期、新闻或政策，web_search=false，category="none"。
+10. 先在语义上判断用户是在“邀请角色继续当下生活”，还是“核验作品中已经发生的事实”。前者是基于现有人设的角色扮演：present_day_roleplay=true、web_search=false、category="none"；后者才可以进入 canon。不要因为问句涉及角色的爱好、身边人或所属团体，就自动当成设定核验。
 11. 对二次元角色，现实中的三次元企划、商业运营或现实活动安排属于角色不应知道的信息，web_search=false，category="none"。如果用户明确问作品剧情中的事件经过，再按原作资料处理。不要把这类现实时间变动问题改写为“当前年份 + 近期 + 作品名”的搜索问项。
-12. 只要当前消息或最近对话涉及需要核实的作品内事实，宁可 web_search=true、category="canon"，不要让聊天模型凭记忆回答。作品内事实包括人物、人物关系、乐队/组织/学校/店铺/地点、事件、台词、口头禅、喜好、食物、身份、职位、集数、剧情和设定。
+12. 只有用户真正要求核实作品中已经确立的事实时，才应 web_search=true、category="canon"。作品人物、关系、团体、地点或爱好出现在对话中，只说明话题属于作品世界，不能单独证明用户在查证。本条不得覆盖第10条的当下角色扮演判定。
 13. 如果用户是在问番剧、动画、漫画、电影、电视剧、书影音、角色、剧情、设定、歌曲、乐队、作品感想或“我最近在看什么”，不要判成 slang；这类优先 general 或 canon。
 14. 如果用户是在辨认一句短的、口语化的、像网络热词/流行说法的表达，即使没有明确写“什么意思”，也可以判 slang。
 15. 如果当前消息出现新对象，query 必须围绕新对象，不要沿用最近对话里的旧对象。
@@ -619,6 +622,8 @@ JSON 格式：
 18. 原作搜索对象拆分规则：先解析用户真正询问的主要对象，再解析需要补充的次要对象；每个数组元素只能是一个干净对象名，不要把问题整句、作品名、感想、关系词或多个对象拼成一项。例如问“KiLLKiSS这首歌怎么样”时，主要对象是“KiLLKiSS”；问“灯喜欢什么动物”时，主要对象是“高松灯”；问“你当初在那田蜘蛛山如何支援”且当前角色就是被问者时，主要对象是当前角色。
 19. answer_requirements 只拆分用户实际需要回答的独立信息需求，不得在搜索前判断它是明确设定还是主观表达，也不要把寒暄、称呼或感想单独列成问项。
 20. direct_evidence_cues 只描述原文直接回答该问项时必须明确表达的关系或限定语，不得填写人物、招式、地点等答案，不得判断网页中是否存在答案。它用于读取网页后的命题核验；没有特殊限定时可以为空数组。
+21. present_day_roleplay 是对会话目的的整体语义判断，不得根据某个词是否出现来决定。
+22. 当前角色是 ${profile.characterName}。用户用泛称指代所属团体时，必须根据上面列出的当前角色归属进行语义消解，不得根据作品联网范围猜测。
 ''';
   }
 
@@ -757,6 +762,13 @@ JSON 格式：
 
     String? searchQuery = plan.searchQuery;
     var category = plan.category;
+    final suppressCanonForPresentDayRoleplay = plan.presentDayRoleplay;
+    if (suppressCanonForPresentDayRoleplay) {
+      // 当下日常近况是基于人设的角色扮演，不是对已发生剧情的查证。
+      // 这里是确定性门禁，避免规划模型看到“是否/乐队/爱好”就误开 canon 搜索。
+      searchQuery = null;
+      category = 'none';
+    }
     final isPlainWeatherQuestion =
         keywordWeather && !RegExp(r'新闻|台风|暴雨|预警|灾害|最近|近期').hasMatch(text);
     final entertainmentTopicPattern = RegExp(
@@ -817,20 +829,24 @@ JSON 格式：
       }
     }
 
-    final primarySearchObjects = category == 'canon'
-        ? _removeUnmentionedPlannerCharacterObjects(
-            plan.primarySearchObjects,
-            text,
-            profile,
-          )
-        : plan.primarySearchObjects;
-    final secondarySearchObjects = category == 'canon'
-        ? _removeUnmentionedPlannerCharacterObjects(
-            plan.secondarySearchObjects,
-            text,
-            profile,
-          )
-        : plan.secondarySearchObjects;
+    final primarySearchObjects = suppressCanonForPresentDayRoleplay
+        ? const <String>[]
+        : category == 'canon'
+            ? _removeUnmentionedPlannerCharacterObjects(
+                plan.primarySearchObjects,
+                text,
+                profile,
+              )
+            : plan.primarySearchObjects;
+    final secondarySearchObjects = suppressCanonForPresentDayRoleplay
+        ? const <String>[]
+        : category == 'canon'
+            ? _removeUnmentionedPlannerCharacterObjects(
+                plan.secondarySearchObjects,
+                text,
+                profile,
+              )
+            : plan.secondarySearchObjects;
 
     return _SearchPlan(
       includeWeather: includeWeather,
@@ -839,11 +855,25 @@ JSON 格式：
       includePhenology: includePhenology,
       searchQuery: searchQuery,
       category: category,
+      presentDayRoleplay: plan.presentDayRoleplay,
       answerMode: _answerModeAdaptive,
-      answerRequirements: plan.answerRequirements,
+      answerRequirements: suppressCanonForPresentDayRoleplay
+          ? const []
+          : plan.answerRequirements,
       primarySearchObjects: primarySearchObjects,
       secondarySearchObjects: secondarySearchObjects,
     );
+  }
+
+  static String _currentCharacterBand(String characterId) {
+    switch (characterId) {
+      case 'tomori':
+        return 'MyGO!!!!!';
+      case 'sakiko':
+        return 'Ave Mujica';
+      default:
+        return '';
+    }
   }
 
   static List<String> _removeUnmentionedPlannerCharacterObjects(
@@ -1280,7 +1310,29 @@ JSON 格式：
     final localPlan = allowLocalCanonRecovery
         ? _applyFollowUpRules(plan, text, profile, conversationHistory)
         : plan;
-    if (localPlan.hasAnyTask) return localPlan;
+    if (localPlan.hasAnyTask) {
+      if (localPlan.category == 'canon') {
+        final isPresentDayRoleplay = await _reviewPresentDayRoleplayWithModel(
+          text,
+          profile,
+          conversationHistory,
+          localPlan,
+        );
+        if (isPresentDayRoleplay == true) {
+          debugPrint('联网计划语义复核: 本轮是当下角色扮演，取消 canon/节日/网页任务');
+          return const _SearchPlan(
+            includeWeather: false,
+            weatherCity: null,
+            includeFestivals: false,
+            includePhenology: false,
+            searchQuery: null,
+            category: 'none',
+            presentDayRoleplay: true,
+          );
+        }
+      }
+      return localPlan;
+    }
     if (!allowLocalCanonRecovery) return localPlan;
 
     final guardPlan = await _buildCanonGuardPlanWithDeepSeek(
@@ -1296,6 +1348,70 @@ JSON 格式：
       debugPrint('原作事实守门员触发 canon 搜索: ${filteredPlan.searchQuery}');
     }
     return filteredPlan;
+  }
+
+  static Future<bool?> _reviewPresentDayRoleplayWithModel(
+    String text,
+    _WebProfile profile,
+    List<Message> conversationHistory,
+    _SearchPlan initialPlan,
+  ) async {
+    final result = await _postChatCompletions(
+      baseUrl: _arkChatBaseUrl,
+      apiKey: _doubaoTextApiKey,
+      model: _doubaoTextEndpoint,
+      messages: [
+        {
+          'role': 'system',
+          'content': '''
+你是联网计划的语义复核员。你不回答用户，只审查初始计划是否把角色扮演误判为事实查证。
+
+当前角色：${profile.characterName}
+当前角色所属乐队：${_currentCharacterBand(profile.characterId).isEmpty ? '（无固定乐队）' : _currentCharacterBand(profile.characterId)}
+
+核心边界：
+- 用户邀请角色根据已有人设，自然续写她此刻的生活、感受和身边状态，属于当下角色扮演，不需要外部事实。
+- 用户要求确认作品中已经发生的事件、稳定设定或关系，属于事实查证。
+- 判断对象是用户的会话目的，不是句子里出现了哪些名词。
+- “作品世界内的话题”不等于“要求查证作品事实”。
+
+只输出 JSON：
+{
+  "present_day_roleplay": true/false,
+  "requires_external_facts": true/false,
+  "reason": "用一句话说明会话目的"
+}
+''',
+        },
+        {
+          'role': 'user',
+          'content': '''
+最近对话：
+${_recentHistoryForPlanner(conversationHistory)}
+
+用户本轮原话：$text
+
+初始计划：category=${initialPlan.category}, query=${initialPlan.searchQuery ?? ''}
+''',
+        },
+      ],
+      providerName: '豆包/火山方舟搜索计划语义复核',
+      includeThinkingField: false,
+      maxTokens: 160,
+    );
+    if (result == null) return null;
+
+    final data = jsonDecode(utf8.decode(result.response.bodyBytes));
+    final content = data['choices']?[0]?['message']?['content'];
+    if (content is! String || content.trim().isEmpty) return null;
+    final jsonText = _extractJsonObject(content);
+    if (jsonText == null) return null;
+    final decoded = jsonDecode(jsonText);
+    if (decoded is! Map<String, dynamic>) return null;
+
+    final roleplay = _jsonBool(decoded['present_day_roleplay']);
+    final requiresFacts = _jsonBool(decoded['requires_external_facts']);
+    return roleplay && !requiresFacts;
   }
 
   static Future<_SearchPlan?> _buildCanonGuardPlanWithDeepSeek(
@@ -3608,6 +3724,49 @@ ${location.name}：数据源 Open-Meteo；天气数据时间 $currentTime；当�
       'includePhenology': plan.includePhenology,
       'searchQuery': plan.searchQuery ?? '',
       'category': plan.category,
+    };
+  }
+
+  @visibleForTesting
+  static Map<String, Object?> simulatedPlannerCanonSnapshotForTest({
+    required String userText,
+    required String characterId,
+    required String characterName,
+    List<String> primaryObjects = const [],
+    List<String> secondaryObjects = const [],
+    bool presentDayRoleplay = false,
+  }) {
+    final profile = _WebProfile.forCharacter(
+      characterId: characterId,
+      characterName: characterName,
+    );
+    final plan = _applyProfileRules(
+      _SearchPlan(
+        includeWeather: false,
+        weatherCity: null,
+        includeFestivals: false,
+        includePhenology: false,
+        searchQuery: userText,
+        category: 'canon',
+        presentDayRoleplay: presentDayRoleplay,
+        answerRequirements: [
+          _AnswerRequirement(text: userText),
+        ],
+        primarySearchObjects: primaryObjects,
+        secondarySearchObjects: secondaryObjects,
+      ),
+      userText,
+      profile,
+      allowImplicitCurrentAffairsSearch: false,
+    );
+
+    return {
+      'hasAnyTask': plan.hasAnyTask,
+      'searchQuery': plan.searchQuery ?? '',
+      'category': plan.category,
+      'answerRequirementCount': plan.answerRequirements.length,
+      'primaryObjects': plan.primarySearchObjects,
+      'secondaryObjects': plan.secondarySearchObjects,
     };
   }
 
@@ -10188,6 +10347,9 @@ class _SearchPlan {
   // 常见值：none / weather / festival / canon / slang / economy / current / general
   final String category;
 
+  // 由搜索规划模型对整句语义做出的判断，不由本地关键词推导。
+  final bool presentDayRoleplay;
+
   // strict_fact：最终结论必须由资料直接支持。
   // bounded_roleplay：资料限定真实候选，角色可在边界内自然表达主观选择。
   final String answerMode;
@@ -10205,6 +10367,7 @@ class _SearchPlan {
     required this.includePhenology,
     required this.searchQuery,
     required this.category,
+    this.presentDayRoleplay = false,
     this.answerMode = WebContextService._answerModeStrictFact,
     this.answerRequirements = const [],
     this.primarySearchObjects = const [],
@@ -10311,7 +10474,7 @@ class _WebProfile {
       return '【角色联网范围】只使用日本天气、大正时期已存在的日本民俗/季节行事和《鬼灭之刃》原作/剧情资料。天气查询地点只是现实数据参考，不代表原作角色所在地。';
     }
     if (seriesName == 'BanG Dream') {
-      return '【角色联网范围】使用东京天气、现代日本非政治节日/行事、国际节日、网络流行语、书影音和 BanG Dream/Ave Mujica 的作品内资料。不得使用现实企划、商业运营、现实活动安排或官方运营日程等三次元信息。';
+      return '【角色联网范围】使用东京天气、现代日本非政治节日/行事、国际节日、网络流行语、书影音和 BanG Dream 作品内资料。当用户只说“你们乐队”时，必须按当前角色的实际所属乐队理解，不得默认为 Ave Mujica。不得使用现实企划、商业运营、现实活动安排或官方运营日程等三次元信息。';
     }
     if (seriesName == '欢乐颂') {
       return '【角色联网范围】使用上海天气、中国节日、国际节日、经济金融、书影音、网络热点和《欢乐颂》相关资料。角色表达偏理性克制，对年轻人娱乐和二次元流行语不要默认她非常熟，但也不要把她写成完全不懂。';

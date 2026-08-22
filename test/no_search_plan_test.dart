@@ -31,6 +31,11 @@ void main() {
         question: '小祥，最近Mujica有演出安排吗',
       ),
       _PlanAuditCase(
+        characterId: 'tomori',
+        characterName: '高松灯',
+        question: '小灯也在放暑假吧，最近有收集小物件吗，或者乐队有什么活动吗？',
+      ),
+      _PlanAuditCase(
         characterId: 'andy',
         characterName: '安迪',
         question: '姐姐，我今天有点累，可以陪我聊会儿吗',
@@ -85,6 +90,22 @@ void main() {
         expect(plan['hasAnyTask'], isTrue, reason: '$plan');
       });
     }
+  });
+
+  test('overrides a mistaken canon plan for Tomori present-day chat', () {
+    final plan = WebContextService.simulatedPlannerCanonSnapshotForTest(
+      userText: '小灯也在放暑假吧，最近有收集小物件吗，或者乐队有什么活动吗？',
+      characterId: 'tomori',
+      characterName: '高松灯',
+      primaryObjects: const ['高松灯', 'AveMujica'],
+      presentDayRoleplay: true,
+    );
+
+    expect(plan['hasAnyTask'], isFalse, reason: '$plan');
+    expect(plan['category'], 'none', reason: '$plan');
+    expect(plan['searchQuery'], isEmpty, reason: '$plan');
+    expect(plan['answerRequirementCount'], 0, reason: '$plan');
+    expect(plan['primaryObjects'], isEmpty, reason: '$plan');
   });
 }
 

@@ -54,7 +54,99 @@ void main() {
     ]);
   });
 
+  test('Emotion parser accepts camelCase labels case-insensitively', () {
+    final emotions = EmotionAnalyzer.parseEmotionResponseForTest(
+      rawContent: '["vulnerableMonologue"]',
+      availableEmotions: const [
+        SpeechEmotion.neutral,
+        SpeechEmotion.vulnerableMonologue,
+      ],
+    );
+
+    expect(emotions, [SpeechEmotion.vulnerableMonologue]);
+  });
+
+  test('same-turn follow-up does not fabricate an empty user turn', () {
+    final messages = ApiService.appendCurrentUserTurnForTest(
+      isProactive: true,
+    );
+
+    expect(messages, hasLength(2));
+    expect(messages.first['role'], 'assistant');
+    expect(messages.last['role'], 'system');
+    expect(messages.last['content'], contains('最后一条 assistant 消息是你自己'));
+    expect(messages.last['content'], contains('用户此刻没有发言'));
+    expect(messages.where((message) => message['role'] == 'user'), isEmpty);
+  });
+
+  test('fixed Japanese call name does not receive a second honorific', () {
+    final normalized = ApiService.applyJapaneseNameMappingsForTest(
+      '小爱さんは、新しいアイデアがあるんです。',
+      characterId: 'tomori',
+    );
+
+    expect(normalized, 'あのちゃんは、新しいアイデアがあるんです。');
+  });
+
+  test('fixed character call names use complete-call placeholders', () {
+    final protected =
+        ApiService.protectMappedNamesForJapaneseTranslationForTest(
+      '小爱总是有很多新点子。',
+      characterId: 'tomori',
+    );
+
+    expect(protected['text'], '__JP_CALL_0__总是有很多新点子。');
+    expect(protected['placeholders'], containsPair('__JP_CALL_0__', 'あのちゃん'));
+  });
+
+  test('translation contract rejects honorific after a complete call name', () {
+    final parsed = ApiService.parseAlignedJapaneseTranslationsForTest(
+      sourceUnits: const ['__JP_CALL_0__总是有很多新点子。'],
+      placeholders: const {'__JP_CALL_0__': 'あのちゃん'},
+      response: '''
+{"translations":[{"source_index":1,"text":"__JP_CALL_0__さんは、いつも新しいアイデアがたくさんあるんです。"}]}
+''',
+    );
+
+    expect(parsed, isNull);
+  });
+
+  test(
+    'remote Tomori ordinary paragraph keeps low-affect labels sparse',
+    () async {
+      final character = CharacterConfig.getCharacterById('tomori');
+      final emotions = await EmotionAnalyzer.analyzeEmotions(
+        character: character,
+        sentences: const [
+          'うーん……最近川に行ったときに拾ったんだ。',
+          '見て、この形、小さな星みたいに見えない？',
+          'ただの普通の石だけど、水に流されてすごく滑らかで……触り心地がいいんだ。',
+          'バンドのことだけど、来月小さなライブがあって、最近新しい曲を練習してるんだ。',
+          '歌詞も書いてみたんだけど……まだ直してるところなんだ。',
+        ],
+      );
+
+      expect(emotions[4], SpeechEmotion.neutral);
+      expect(
+        emotions,
+        isNot(contains(SpeechEmotion.vulnerableMonologue)),
+      );
+      expect(emotions, isNot(contains(SpeechEmotion.depressed)));
+      expect(emotions, isNot(contains(SpeechEmotion.painfulCrying)));
+    },
+    skip: !const bool.fromEnvironment('RUN_TOMORI_EMOTION_PROBE'),
+  );
+
   group('Music share trigger', () {
+    test('does not combine vacation and band activity across clauses', () {
+      expect(
+        MusicService.isMusicShareRequest(
+          '小灯也在放暑假吧，最近有收集小物件吗，或者乐队有什么活动吗？',
+        ),
+        isFalse,
+      );
+    });
+
     test('triggers only for explicit share or playback requests', () {
       expect(
         MusicService.isMusicShareRequest('请分享一首最近喜欢的你们乐队的歌'),
@@ -708,6 +800,15 @@ void main() {
         '（そっと微笑む）そうですわね。(少し間を置く)大切なことですの。',
       ),
       'そうですわね。大切なことですの。',
+    );
+  });
+
+  test('TTS synthesis isolates repeated-ellipsis clauses in one request', () {
+    expect(
+      ApiService.prepareTtsSynthesisTextForTest(
+        'でも凛野ちゃんは……ちゃんと聞いてくれる……だから嬉しい。',
+      ),
+      'でも凛野ちゃんは…\nちゃんと聞いてくれる…\nだから嬉しい。',
     );
   });
 

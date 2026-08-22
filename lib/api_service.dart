@@ -521,6 +521,12 @@ class ApiService {
                   : '【本轮回复篇幅】用户本轮不是情绪倾诉。请用日常聊天篇幅回复，控制在3到6句左右。');
       systemBuffer.writeln();
       systemBuffer.write('''
+【对话身份与消息来源】
+- system 消息是规则和背景；user 消息才是用户说的话；assistant 消息是你自己之前说的话。
+- 严格区分“用户本轮提到的内容”和“你在历史回复中主动提到的内容”。
+- 不得把 assistant 历史里的歌曲、人物、经历或观点说成“你刚才提到/问起/说过”。
+- 第一人称“我”始终指当前角色；“你”始终指用户。不得交换双方身份。
+
 【中文原稿表达方式】
 - 这是会话气泡里的角色回答，不是资料总结、小说旁白或舞台剧脚本。
 - 先回应用户真正问的内容，再选少量最相关的细节和感受自然聊开；不要因为 facts 很多就逐条使用。
@@ -582,10 +588,16 @@ class ApiService {
               allowsBoundedRoleplay: allowsBoundedRoleplay,
             );
 
-      responseMessages.add(
-        proactiveInstruction != null
-            ? {'role': 'user', 'content': ''}
-            : {'role': 'user', 'content': currentUserContent},
+      // 同一轮连续发言时，历史最后一条已经是角色刚发出的 assistant 消息。
+      // 不能再伪造一条空 user 消息；否则模型会把空回合误解为用户沉默或拒绝回复。
+      _appendCurrentUserTurn(
+        responseMessages,
+        isProactive: proactiveInstruction != null,
+        content: currentUserContent,
+      );
+      _appendSameSpeakerContinuationControl(
+        responseMessages,
+        isProactive: proactiveInstruction != null,
       );
       final hasGroundingContext = webContext != null && webContext.isNotEmpty;
 
@@ -1136,7 +1148,7 @@ $responseShapeReminder
     final resolvedReferWavPath = AppPaths.resolve(referWavPath);
 
     for (int i = 0; i < segments.length; i++) {
-      final segment = segments[i].trim();
+      final segment = _prepareTtsSynthesisText(segments[i].trim());
       if (segment.isEmpty) continue;
 
       try {
@@ -1160,7 +1172,8 @@ $responseShapeReminder
             'split_bucket': true,
             // 使用传入的语速参数，不再硬编码 1.0
             'speed_factor': speedFactor,
-            'fragment_interval': 0.3,
+            // 同一次请求内的短语片段只保留很短的衔接静音。
+            'fragment_interval': 0.08,
             'seed': -1,
             'media_type': 'wav',
             'streaming_mode': false,
@@ -1236,6 +1249,53 @@ $responseShapeReminder
     }
   }
 
+  static void _appendCurrentUserTurn(
+    List<Map<String, String>> messages, {
+    required bool isProactive,
+    required String content,
+  }) {
+    if (!isProactive) {
+      messages.add({'role': 'user', 'content': content});
+    }
+  }
+
+  static void _appendSameSpeakerContinuationControl(
+    List<Map<String, String>> messages, {
+    required bool isProactive,
+  }) {
+    if (!isProactive) return;
+
+    // 放在对话历史之后，作为模型生成前最后看到的消息来源约束。
+    // 连续消息不是新一轮对话：历史末尾的 assistant 仍是当前角色自己。
+    messages.add({
+      'role': 'system',
+      'content': '【本次输出身份】这是当前角色在同一轮里的连续补充发言。'
+          '历史中最后一条 assistant 消息是你自己刚才说的话，不是用户的新消息；用户此刻没有发言。'
+          '继续以同一个角色、同一个第一人称补充自己的上一条内容，'
+          '不得站到用户立场评价、复述或追问自己刚才说过的内容。只输出角色接下来要说的话。',
+    });
+  }
+
+  @visibleForTesting
+  static List<Map<String, String>> appendCurrentUserTurnForTest({
+    required bool isProactive,
+    String content = 'test',
+  }) {
+    final messages = <Map<String, String>>[
+      {'role': 'assistant', 'content': 'previous'},
+    ];
+    _appendCurrentUserTurn(
+      messages,
+      isProactive: isProactive,
+      content: content,
+    );
+    _appendSameSpeakerContinuationControl(
+      messages,
+      isProactive: isProactive,
+    );
+    return messages;
+  }
+
   // ========================================
   // 语音文本预处理
   // ========================================
@@ -1263,6 +1323,21 @@ $responseShapeReminder
   @visibleForTesting
   static String stripActionDescriptionsForTest(String text) {
     return _stripActionDescriptions(text);
+  }
+
+  // GPT-SoVITS 的 cut0 仍会按换行形成独立推理片段。把连续省略号
+  // 作为短语边界，可以防止模型在一次长推理中提前收尾、吞掉后文；
+  // 单个省略号留在前一片段中，继续保留角色犹豫的语气。
+  static String _prepareTtsSynthesisText(String text) {
+    return text.replaceAllMapped(
+      RegExp(r'…{2,}'),
+      (_) => '…\n',
+    );
+  }
+
+  @visibleForTesting
+  static String prepareTtsSynthesisTextForTest(String text) {
+    return _prepareTtsSynthesisText(text);
   }
 
   static List<String> _splitTextIntoSegments(String text) {
@@ -1473,15 +1548,16 @@ $responseShapeReminder
       }
 
       if (_endsWithKnownHonorific(callName)) {
-        for (final suffix in _knownJapaneseHonorifics) {
-          if (callName.endsWith(suffix)) {
-            result = _replaceCallNameVariant(
-              result,
-              '$callName$suffix',
-              callName,
-              protectedFullNames,
-            );
-          }
+        // 指定称呼本身已经含有敬称时，翻译模型可能仍在占位符后追加
+        // 任意另一种敬称（例如「ちゃん」后又接「さん」）。无论追加的是
+        // 哪一种，都统一收敛到角色配置中唯一指定的称呼。
+        for (final appendedSuffix in _knownJapaneseHonorifics) {
+          result = _replaceCallNameVariant(
+            result,
+            '$callName$appendedSuffix',
+            callName,
+            protectedFullNames,
+          );
         }
       } else {
         for (final suffix in _knownJapaneseHonorifics) {
@@ -1594,7 +1670,13 @@ $responseShapeReminder
           japaneseCallName.isEmpty) {
         continue;
       }
-      nameMap[chineseCallName] = japaneseCallName;
+      if (!protectedText.contains(chineseCallName)) continue;
+      final placeholder = '__JP_CALL_${placeholders.length}__';
+      final replaced =
+          _replaceNameTerm(protectedText, chineseCallName, placeholder);
+      if (replaced == protectedText) continue;
+      protectedText = replaced;
+      placeholders[placeholder] = japaneseCallName;
     }
 
     for (final entry in _chineseToJapaneseNameMap().entries) {
@@ -2271,7 +2353,7 @@ $responseShapeReminder
               '2. 每个输入 source_index 必须对应一个译文，数量、顺序、source_index 必须完全一致；不要跨句移动、合并或拆分。\n'
               '3. text 里只能写日语。严禁保留中文原句、中文动作描写、中文标点说明或“翻译如下”等前置语。\n'
               '4. 如果原文包含中文括号动作，例如“（轻轻点头）”，必须翻成日语括号动作，例如“（そっと頷いて）”。\n'
-              '5. 原文里的 __JP_NAME_0__、__JP_LYRIC_0__、__JP_TITLE_0__ 这类占位符必须在同一个 source_index 的译文里原样保留，一个字符也不能改，不能移动到别的句子。\n'
+              '5. 原文里的 __JP_CALL_0__、__JP_NAME_0__、__JP_LYRIC_0__、__JP_TITLE_0__ 这类占位符必须在同一个 source_index 的译文里原样保留，一个字符也不能改，不能移动到别的句子。__JP_CALL_0__ 代表已经包含角色指定敬称的完整称呼，可以直接接は、が、を等助词，但严禁再接さん、ちゃん、くん、君、様等任何敬称。\n'
               '6. 事实范围、动作主体、对象、主动/被动、因果关系和完成程度必须保持一致。\n'
               '7. 必须包含平假名或片假名，写成日本语母语者日常会话里自然会说的句子。\n'
               '8. $genderHints'
@@ -2289,7 +2371,7 @@ $responseShapeReminder
               '2. 入力の各 source_index に対して翻訳を一つだけ出し、件数と順序を完全に一致させる。文を別の index に移動、結合、分割しない。\n'
               '3. text は日本語だけにし、中国語の語句、説明、注釈、前置きを残さない。\n'
               '4. 各文の事実範囲、動作主、対象、能動・受動、因果関係、完了の程度を変えない。自然な日本語にするための語順変更はよいが、誰が誰に何をしたかを変えない。\n'
-              '5. 元の文にある __JP_NAME_0__、__JP_LYRIC_0__、__JP_TITLE_0__ のような占位符は、その同じ index の訳文に一文字も変えず残す。別の文へ移さない。\n'
+              '5. 元の文にある __JP_CALL_0__、__JP_NAME_0__、__JP_LYRIC_0__、__JP_TITLE_0__ のような占位符は、その同じ index の訳文に一文字も変えず残す。別の文へ移さない。__JP_CALL_0__ はキャラクター指定の敬称まで含む完全な呼称である。は・が・を等の助詞は直結してよいが、さん・ちゃん・くん・君・様等の敬称を追加してはならない。\n'
               '6. 元のテキストに括弧書きの動作や表情がある場合は、削除せず自然な日本語にして括弧内に残す。\n'
               '7. 必ず平仮名または片仮名を含む自然な日本語にし、中国語の漢字語を字形だけで残さない。\n'
               '8. $genderHints'
@@ -2413,7 +2495,7 @@ $responseShapeReminder
     }
 
     final translatedUnits = <String>[];
-    final placeholderPattern = RegExp(r'__JP_(?:NAME|LYRIC|TITLE)_\d+__');
+    final placeholderPattern = RegExp(r'__JP_(?:CALL|NAME|LYRIC|TITLE)_\d+__');
     for (var i = 0; i < sourceUnits.length; i++) {
       final rawTranslation = translations[i];
       if (rawTranslation is! Map || rawTranslation['source_index'] != i + 1) {
@@ -2436,6 +2518,11 @@ $responseShapeReminder
       if (!_sameStringSet(expectedPlaceholders, actualPlaceholders)) {
         return _AlignedTranslationParseResult.invalid(
           '第 ${i + 1} 项的受保护占位符发生丢失或跨句移动',
+        );
+      }
+      if (_hasHonorificAfterCompleteCallPlaceholder(translatedText)) {
+        return _AlignedTranslationParseResult.invalid(
+          '第 ${i + 1} 项在完整角色称呼后重复添加了敬称',
         );
       }
       if (_containsUntranslatedSourceFragment(
@@ -2469,7 +2556,7 @@ $responseShapeReminder
   ) {
     const minimumFragmentLength = 6;
     final sourceWithoutPlaceholders = source.replaceAll(
-      RegExp(r'__JP_(?:NAME|LYRIC|TITLE)_\d+__'),
+      RegExp(r'__JP_(?:CALL|NAME|LYRIC|TITLE)_\d+__'),
       ' ',
     );
     for (final match in RegExp(r'[\u3400-\u4dbf\u4e00-\u9fff]+')
@@ -2504,6 +2591,14 @@ $responseShapeReminder
     return false;
   }
 
+  static bool _hasHonorificAfterCompleteCallPlaceholder(String text) {
+    final honorificPattern =
+        _knownJapaneseHonorifics.map(RegExp.escape).join('|');
+    return RegExp(
+      '__JP_CALL_\\d+__(?:$honorificPattern)',
+    ).hasMatch(text);
+  }
+
   @visibleForTesting
   static List<String> splitChineseTranslationUnitsForTest(String text) =>
       _splitChineseTranslationUnits(text);
@@ -2516,6 +2611,26 @@ $responseShapeReminder
     final protected = _protectKnownLyricsForJapaneseTranslation(
       text,
       lyricsTranslationReference,
+    );
+    return {
+      'text': protected.text,
+      'placeholders': protected.placeholders,
+    };
+  }
+
+  @visibleForTesting
+  static Map<String, dynamic> protectMappedNamesForJapaneseTranslationForTest(
+    String text, {
+    String? characterId,
+  }) {
+    final fixedCallNames = fixedCharacterCallNamesForCharacter(characterId);
+    final protected = _protectMappedNamesForJapaneseTranslation(
+      text,
+      fixedCharacterCallNames: fixedCallNames,
+      fixedChineseCallNames: _fixedCharacterChineseCallNames(
+        fixedCallNames,
+        characterId: characterId,
+      ),
     );
     return {
       'text': protected.text,

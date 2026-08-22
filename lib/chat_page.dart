@@ -929,7 +929,6 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
     });
 
     try {
-      final timeContext = _generateTimeContext();
       final recentMessages = StorageService.getRecentMessages(_messages);
       final webContext = _currentTurnWebContext;
       if (webContext != null && webContext.isNotEmpty) {
@@ -948,15 +947,19 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
           characterPersonality: _effectivePersonality,
           conversationHistory: recentMessages,
           userMessage: '',
-          timeContext: timeContext,
+          // 连续消息是同一轮的第二段发言，不传入“距离上次对话”上下文。
+          // 即使时间上下文写的是“刚刚”，也不应让模型把间隔当成话题。
+          timeContext: null,
           webContext: webContext,
           characterId: widget.character.id,
           characterLanguage: widget.character.language,
           knownSongTitles: _currentTurnKnownSongTitles,
-          proactiveInstruction: '你刚刚回复了对方的消息，现在你想再补充一句。\n'
-              '可以是对刚才话题的延伸、突然想到的相关事情、'
-              '或者一个轻松的追加评论。\n'
-              '说话方式和语气保持你的角色风格，自然地接上去，不要重复刚才说过的内容。\n');
+          proactiveInstruction: '【同一轮连续发言】\n'
+              '你的上一条消息刚刚才发出，现在是你主动把同一段话继续说完。\n'
+              '用户没有发送新消息，也尚未获得正常的回复时间；这不构成沉默、离开、拒绝或情绪变化。\n'
+              '只续接你上一条消息中已经在说的话题，可以补一个相关细节、感受或刚想到的内容。\n'
+              '不要对用户没有回复这件事作出任何解读，也不要改成新一轮对话。\n'
+              '保持角色语气，不要重复上一条已经说过的内容。\n');
 
       final japaneseText = responseMap['japanese'] ?? '';
       final chineseText = responseMap['chinese'] ?? '';

@@ -8,6 +8,22 @@ import 'package:anime_chat_app/character_config.dart';
 import 'package:anime_chat_app/web_context_service.dart';
 
 void main() {
+  test(
+    'remote Tomori present-day roleplay plan only',
+    () async {
+      final character = CharacterConfig.getCharacterById('tomori');
+      final result = await WebContextService.buildContextDetailed(
+        userMessage: '小灯也在放暑假吧，最近有收集小物件吗，或者乐队有什么活动吗？',
+        characterId: character.id,
+        characterName: character.name,
+      );
+
+      expect(result.trace.searchApiCalls, 0);
+      expect(result.context, isEmpty);
+    },
+    skip: !const bool.fromEnvironment('RUN_TOMORI_PLAN_PROBE'),
+  );
+
   test('remote no-search plan audit', () async {
     final cases = [
       _AuditCase(

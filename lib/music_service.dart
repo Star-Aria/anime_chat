@@ -27,27 +27,48 @@ class MusicService {
   }) {
     final text = userText.trim();
     if (text.isEmpty) return false;
-    final normalized = _normalizeMusicTitleForMatch(text);
+    final clauses = text
+        .split(RegExp(r'[，。！？；,!?;\n]+'))
+        .map((clause) => clause.trim())
+        .where((clause) => clause.isNotEmpty);
+
+    // 播放动作和歌曲对象必须在同一个语义分句内。这可以避免
+    // “在放暑假……乐队有什么活动吗”把“放”和“乐队”跨分句拼成点歌。
+    return clauses.any(
+      (clause) =>
+          _clauseHasMusicObject(clause, knownSongTitles) &&
+          _clauseHasShareIntent(clause),
+    );
+  }
+
+  static bool _clauseHasMusicObject(
+    String clause,
+    Iterable<String> knownSongTitles,
+  ) {
+    final normalized = _normalizeMusicTitleForMatch(clause);
     final mentionsKnownSong = knownSongTitles.any((title) {
       final normalizedTitle = _normalizeMusicTitleForMatch(title);
       return normalizedTitle.isNotEmpty && normalized.contains(normalizedTitle);
     });
-    final mentionsMusicKind = RegExp(
-      r'歌|歌曲|曲子|音乐|乐队|バンド|music|song|mygo|mujica|crychic',
+    if (mentionsKnownSong) return true;
+    return RegExp(
+      r'歌|歌曲|曲子|音乐|バンド|music|song|mygo|mujica|crychic',
       caseSensitive: false,
-    ).hasMatch(text);
-    if (!mentionsMusicKind && !mentionsKnownSong) return false;
+    ).hasMatch(clause);
+  }
 
-    final hasMusicRequestAction = RegExp(
-      r'来|放|播|听|分享|推荐|推|发',
+  static bool _clauseHasShareIntent(String clause) {
+    final hasDirectMusicAction = RegExp(
+      r'播放|分享|推荐|听听|放(?:一下|下|一首|首|歌|音乐|曲子)|'
+      r'听(?:一下|下|一首|首|歌|歌曲|音乐|曲子)|来(?:一)?首|发(?:一)?首',
       caseSensitive: false,
-    ).hasMatch(text);
-    if (!hasMusicRequestAction) return false;
+    ).hasMatch(clause);
+    if (!hasDirectMusicAction) return false;
 
     return RegExp(
-      r'请|想|要|能|可以|一起|一块|陪|首|一下|下|听听|吧|呗|嘛|吗|好不好|好吗',
+      r'请|想|要|能|可以|一起|一块|陪|给我|来|放|播|听|分享|推荐|发|吧|呗|嘛|吗|好不好|好吗',
       caseSensitive: false,
-    ).hasMatch(text);
+    ).hasMatch(clause);
   }
 
   static Future<MusicAttachment?> pickAttachmentForRequest({

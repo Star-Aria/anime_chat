@@ -122,7 +122,11 @@ class EmotionAnalyzer {
           '2. 有些角色说刻薄话时用的是平静语气，那就应该标 neutral\n'
           '3. 括号里的动作描述可以参考语气，但不是主体\n'
           '4. 如果一句话有多种可能，选最适合 TTS 朗读效果的那个\n'
-          '5. 严格只用上方列出的标签，不能发明新标签\n'
+          '5. neutral 是默认声线，其他标签是只在语气证据清晰时才使用的稀疏覆盖；不需要为了让一段话显得有变化而分配不同标签\n'
+          '6. 句子谈到某种情绪，不等于说话者正用该情绪说话。普通的关心、安慰和提醒不等于说话者悲伤；普通的停顿、思考和措辞不等于脆弱或压抑\n'
+          '7. 伤心、低沉、压抑、哭腔、脆弱等会明显改变声音质感的标签必须有强而直接的表达证据；只有轻微倾向或无法确定时一律使用 neutral\n'
+          '8. 同一段连续叙述在没有明确情绪转折时应保持声线连续，避免在一组 neutral 句子中突然插入一句强烈低落语气\n'
+          '9. 严格只用上方列出的标签，不能发明新标签\n'
           '\n'
           '输出格式（严格遵守，不得有任何额外内容）：\n'
           '- 只输出一个 JSON 数组，长度和输入句子数量完全相同\n'
@@ -231,9 +235,11 @@ class EmotionAnalyzer {
       final List<dynamic> parsed = jsonDecode(jsonStr) as List<dynamic>;
 
       // 构造"标签字符串 -> 枚举"映射表，只包含该角色支持的情绪
-      // 不在映射表里的标签查不到，会回退到 fallback
+      // 映射键和模型返回值都统一转为小写，避免驼峰标签
+      //（如 vulnerableMonologue）在小写后无法命中原枚举名。
+      // 不在映射表里的标签查不到，会回退到 fallback。
       final Map<String, SpeechEmotion> labelMap = {
-        for (final e in availableEmotions) e.name: e,
+        for (final e in availableEmotions) e.name.toLowerCase(): e,
       };
 
       final List<SpeechEmotion> result = [];
@@ -265,6 +271,24 @@ class EmotionAnalyzer {
       debugPrint('情绪分析解析失败: $e，回退到默认情绪');
       return defaults;
     }
+  }
+
+  @visibleForTesting
+  static List<SpeechEmotion> parseEmotionResponseForTest({
+    required String rawContent,
+    required List<SpeechEmotion> availableEmotions,
+  }) {
+    final fallback = availableEmotions.contains(SpeechEmotion.neutral)
+        ? SpeechEmotion.neutral
+        : availableEmotions.first;
+    return _parseEmotionResponse(
+      rawContent: rawContent,
+      expectedCount: 1,
+      availableEmotions: availableEmotions,
+      fallback: fallback,
+      defaults: [fallback],
+      sentences: const ['test'],
+    );
   }
 
   // ========================================
