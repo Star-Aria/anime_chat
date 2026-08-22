@@ -6,6 +6,7 @@ import 'package:anime_chat_app/character_config.dart';
 import 'package:anime_chat_app/api_service.dart';
 import 'package:anime_chat_app/emotion_analyzer.dart';
 import 'package:anime_chat_app/music_service.dart';
+import 'package:anime_chat_app/music_history_migration.dart';
 import 'package:anime_chat_app/name_pronunciation.dart';
 import 'package:anime_chat_app/storage_service.dart';
 import 'package:anime_chat_app/web_context_service.dart';
@@ -427,18 +428,83 @@ void main() {
       );
     });
 
+    test('migrates old music cards without rebuilding chat messages', () {
+      const currentSong = MusicAttachment(
+        id: 'ave_mujica_test_song',
+        title: '测试曲',
+        artist: 'Ave Mujica',
+        band: 'Ave Mujica',
+        localAudioPath: 'music/audio/current.mp3',
+        lyricsPath: 'music/lyrics/ave_mujica_test_song.txt',
+        timedLyricsPath: 'music/lyrics/ave_mujica_test_song.json',
+      );
+      final original = jsonEncode([
+        {
+          'role': 'assistant',
+          'content': '这是原来的聊天正文，不能改。',
+          'timestamp': '2026-08-17T12:34:56.000',
+          'audioPath': 'tts/original.wav',
+          'musicAttachment': {
+            'id': 'ave_mujica_test_song',
+            'title': '测试曲',
+            'artist': 'Ave Mujica',
+            'band': 'Ave Mujica',
+            'localAudioPath': 'music/audio/old.mp3',
+            'lyrics': ['过期歌词'],
+          },
+        },
+        {
+          'role': 'user',
+          'content': '普通消息也不能改。',
+          'timestamp': '2026-08-17T12:35:00.000',
+        },
+      ]);
+
+      final migrated = MusicHistoryMigration.migrateConversationJson(
+        original,
+        const [currentSong],
+      );
+      final messages = jsonDecode(migrated.json) as List<dynamic>;
+      final assistant = messages.first as Map<String, dynamic>;
+      final attachment = assistant['musicAttachment'] as Map<String, dynamic>;
+
+      expect(migrated.attachmentsUpdated, 1);
+      expect(assistant['content'], '这是原来的聊天正文，不能改。');
+      expect(assistant['timestamp'], '2026-08-17T12:34:56.000');
+      expect(assistant['audioPath'], 'tts/original.wav');
+      expect(messages[1]['content'], '普通消息也不能改。');
+      expect(attachment['localAudioPath'], 'music/audio/current.mp3');
+      expect(
+        attachment['timedLyricsPath'],
+        'music/lyrics/ave_mujica_test_song.json',
+      );
+      expect(attachment, isNot(contains('lyrics')));
+
+      final secondRun = MusicHistoryMigration.migrateConversationJson(
+        migrated.json,
+        const [currentSong],
+      );
+      expect(secondRun.attachmentsUpdated, 0);
+      expect(secondRun.json, migrated.json);
+    });
+
     test('keeps timed display lyrics separate from discussion lyrics',
         () async {
       final catalog = await MusicService.loadCatalog();
-      const expectedPaths = {
-        'ave_mujica_killkiss': 'ave_mujica_killkiss',
-        'ave_mujica_georgette': 'ave_mujica_georgette',
-        'ave_mujica_subarashiki_sekai': 'ave_mujica_subarashiki_sekai',
-      };
+      final timedLyricSongs = catalog
+          .where((song) => song.band == 'Ave Mujica' || song.band == 'MyGO!!!!!')
+          .toList();
+      expect(
+        timedLyricSongs.where((song) => song.band == 'Ave Mujica'),
+        hasLength(25),
+      );
+      expect(
+        timedLyricSongs.where((song) => song.band == 'MyGO!!!!!'),
+        hasLength(36),
+      );
 
-      for (final pathEntry in expectedPaths.entries) {
-        final song = catalog.firstWhere((item) => item.id == pathEntry.key);
-        final basename = pathEntry.value;
+      for (final song in timedLyricSongs) {
+        final basename = song.id;
         expect(song.lyricsPath, 'music/lyrics/$basename.txt');
         expect(song.timedLyricsPath, 'music/lyrics/$basename.json');
         expect(song.lyrics, isNotEmpty, reason: song.title);
@@ -456,13 +522,41 @@ void main() {
           (timedJson['tlyric'] as Map)['lyric'],
           contains(RegExp(r'\[\d')),
         );
-        if (song.id == 'ave_mujica_georgette') {
-          expect(
-            (timedJson['lrc'] as Map)['lyric'],
-            contains('[01:39.705]\n[01:46.700]'),
-            reason: '空时间戳必须保留为上一句的人声结束边界',
-          );
-        }
+        final lrcText = (timedJson['lrc'] as Map)['lyric'] as String;
+        final translatedText = (timedJson['tlyric'] as Map)['lyric'] as String;
+        final timestampPattern = RegExp(r'\[\d{1,2}:\d{2}(?:[.:]\d{1,3})?\]');
+        expect(
+          timestampPattern.allMatches(translatedText).map((match) => match[0]),
+          timestampPattern.allMatches(lrcText).map((match) => match[0]),
+          reason: '${song.title} 的日中时间戳必须逐行一致',
+        );
+        expect(
+          '$lrcText\n$translatedText',
+          isNot(matches(RegExp(
+            r'transUser|lyricUser|\[by:|(?:制作(?:人)?|作[词詞曲]|[编編]曲|词|詞|曲)\s*[:：]',
+          ))),
+          reason: '${song.title} 不应保留来源账户或制作信息',
+        );
+
+        final discussionLyrics = File(song.lyricsPath!).readAsStringSync();
+        final translationSections = discussionLyrics.split('【中文翻译】');
+        expect(translationSections, hasLength(2), reason: song.title);
+        final discussionJapanese = translationSections.first
+            .replaceFirst('【日文原词】', '')
+            .split(RegExp(r'\r?\n'))
+            .map((line) => line.trim())
+            .where((line) => line.isNotEmpty)
+            .toList();
+        final discussionTranslation = translationSections.last
+            .split(RegExp(r'\r?\n'))
+            .map((line) => line.trim())
+            .where((line) => line.isNotEmpty)
+            .toList();
+        expect(
+          discussionTranslation,
+          hasLength(discussionJapanese.length),
+          reason: '${song.title} 的日文原词与中文翻译必须逐行对应',
+        );
       }
     });
 

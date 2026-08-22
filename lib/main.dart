@@ -9,12 +9,24 @@ import 'chat_page.dart';
 import 'proactive_message_service.dart';
 import 'storage_service.dart';
 import 'path_service.dart';
+import 'music_history_migration.dart';
 
 // ========================================
 // 窗口大小配置
 // ========================================
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  final musicMigration = await MusicHistoryMigration.run();
+  if (musicMigration.attachmentsUpdated > 0 ||
+      musicMigration.conversationsSkipped > 0) {
+    debugPrint(
+      'Music history migration: '
+      '${musicMigration.attachmentsUpdated} attachment(s) in '
+      '${musicMigration.conversationsUpdated} conversation(s) updated; '
+      '${musicMigration.conversationsSkipped} conversation(s) skipped.',
+    );
+  }
 
   await windowManager.ensureInitialized();
 
