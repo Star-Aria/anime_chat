@@ -1,9 +1,11 @@
 import 'dart:ui';
 import 'dart:async';
+import 'dart:convert';
 import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:audioplayers/audioplayers.dart';
+import 'package:flutter_soloud/flutter_soloud.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:io';
@@ -171,8 +173,12 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
 
   final AudioPlayer _audioPlayerPrimary = AudioPlayer();
   final AudioPlayer _audioPlayerSecondary = AudioPlayer();
-  final AudioPlayer _musicPlayer = AudioPlayer();
-  StreamSubscription<void>? _musicCompleteSubscription;
+  final SoLoud _musicEngine = SoLoud.instance;
+  Future<void>? _musicEngineInitialization;
+  AudioSource? _musicSource;
+  SoundHandle? _musicHandle;
+  Timer? _musicPositionTimer;
+  final Map<String, Future<_MusicLyrics?>> _musicLyricsCache = {};
   bool _primaryIsActive = true;
   AudioPlayer get _activePlayer =>
       _primaryIsActive ? _audioPlayerPrimary : _audioPlayerSecondary;
@@ -184,6 +190,8 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
   bool _isPlaying = false;
   bool _isMusicPlaying = false;
   String? _currentPlayingMusicId;
+  Duration _musicPosition = Duration.zero;
+  Duration _musicDuration = Duration.zero;
   String? _characterAvatarPath;
   String? _backgroundImagePath;
 
@@ -231,6 +239,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
   // 那条连续消息仍然是在延续同一话题，也应该继续看到这一轮联网资料。
   // 每次用户发新消息时会清空，避免把上一轮话题的资料串到新问题里。
   String? _currentTurnWebContext;
+  List<String> _currentTurnKnownSongTitles = const [];
 
   final Map<Message, bool> _regeneratingAudio = {};
   Message? _currentPlayingMessage;
@@ -240,6 +249,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
 
   late AnimationController _typingAnimationController;
   late AnimationController _soundWaveController;
+  late AnimationController _musicVisualController;
 
   // 设置变量缓存
   String? _personalityOverride;
@@ -281,7 +291,14 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
   @override
   void initState() {
     super.initState();
+    _musicVisualController = AnimationController(
+      vsync: this,
+      duration: const Duration(seconds: 8),
+    );
     _initAudioPlayer();
+    unawaited(_ensureMusicEngine().catchError((Object error) {
+      debugPrint('音乐引擎初始化失败：$error');
+    }));
     _initializeChatSession();
     _switchModel();
     _loadCharacterAvatar();
@@ -396,14 +413,6 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
   void _initAudioPlayer() {
     _audioPlayerPrimary.setReleaseMode(ReleaseMode.release);
     _audioPlayerSecondary.setReleaseMode(ReleaseMode.release);
-    _musicPlayer.setReleaseMode(ReleaseMode.stop);
-    _musicCompleteSubscription = _musicPlayer.onPlayerComplete.listen((_) {
-      if (!mounted) return;
-      setState(() {
-        _isMusicPlaying = false;
-        _currentPlayingMusicId = null;
-      });
-    });
   }
 
   @override
@@ -411,12 +420,13 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
     ProactiveMessageService().unregisterActiveChat(widget.character.id);
     _audioPlayerPrimary.dispose();
     _audioPlayerSecondary.dispose();
-    _musicCompleteSubscription?.cancel();
-    _musicPlayer.dispose();
+    _musicPositionTimer?.cancel();
+    unawaited(_disposeMusicBackend());
     _textController.dispose();
     _scrollController.dispose();
     _typingAnimationController.dispose();
     _soundWaveController.dispose();
+    _musicVisualController.dispose();
     super.dispose();
   }
 
@@ -594,6 +604,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
 
     _consecutiveCount = 0;
     _currentTurnWebContext = null;
+    _currentTurnKnownSongTitles = const [];
 
     final imgLabel = imagePaths.length > 1
         ? '[图片×${imagePaths.length}]'
@@ -725,6 +736,12 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
       character: widget.character,
       selectedAttachment: musicAttachment,
     );
+    final knownSongTitles = musicContext.isEmpty
+        ? const <String>[]
+        : (await MusicService.loadCatalog())
+            .map((song) => song.title)
+            .toList(growable: false);
+    _currentTurnKnownSongTitles = knownSongTitles;
 
     if (responseContext.isNotEmpty) {
       debugPrint('本轮额外上下文:\n$responseContext');
@@ -746,6 +763,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
         characterId: widget.character.id,
         characterLanguage: widget.character.language,
         lyricsTranslationReference: lyricsTranslationReference,
+        knownSongTitles: knownSongTitles,
       );
 
       final japaneseText = responseMap['japanese'] ?? '';
@@ -930,6 +948,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
           webContext: webContext,
           characterId: widget.character.id,
           characterLanguage: widget.character.language,
+          knownSongTitles: _currentTurnKnownSongTitles,
           proactiveInstruction: '你刚刚回复了对方的消息，现在你想再补充一句。\n'
               '可以是对刚才话题的延伸、突然想到的相关事情、'
               '或者一个轻松的追加评论。\n'
@@ -1055,59 +1074,209 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
     }
   }
 
+  Future<void> _ensureMusicEngine() async {
+    if (_musicEngine.isInitialized) return;
+
+    final pendingInitialization = _musicEngineInitialization;
+    if (pendingInitialization != null) {
+      await pendingInitialization;
+      return;
+    }
+
+    final initialization = () async {
+      await _musicEngine.init(bufferSize: 512);
+    }();
+    _musicEngineInitialization = initialization;
+    try {
+      await initialization;
+    } finally {
+      if (!_musicEngine.isInitialized) {
+        _musicEngineInitialization = null;
+      }
+    }
+  }
+
+  void _startMusicPositionUpdates() {
+    _musicPositionTimer?.cancel();
+    _musicPositionTimer = Timer.periodic(
+      const Duration(milliseconds: 120),
+      (_) => _updateMusicPosition(),
+    );
+  }
+
+  void _updateMusicPosition() {
+    final handle = _musicHandle;
+    if (!_musicEngine.isInitialized || handle == null) return;
+
+    try {
+      if (!_musicEngine.getIsValidVoiceHandle(handle)) {
+        _finishMusicPlayback();
+        return;
+      }
+      final position = _musicEngine.getPosition(handle);
+      if (!mounted || position == _musicPosition) return;
+      setState(() => _musicPosition = position);
+    } catch (error) {
+      debugPrint('读取音乐播放进度失败：$error');
+    }
+  }
+
+  void _finishMusicPlayback() {
+    _musicPositionTimer?.cancel();
+    _musicPositionTimer = null;
+    _musicHandle = null;
+    _musicVisualController
+      ..stop()
+      ..reset();
+    if (!mounted) return;
+    setState(() {
+      _isMusicPlaying = false;
+      _currentPlayingMusicId = null;
+      _musicPosition = Duration.zero;
+      _musicDuration = Duration.zero;
+    });
+  }
+
+  Future<void> _disposeCurrentMusicSource() async {
+    _musicPositionTimer?.cancel();
+    _musicPositionTimer = null;
+    final handle = _musicHandle;
+    final source = _musicSource;
+    _musicHandle = null;
+    _musicSource = null;
+    if (!_musicEngine.isInitialized) return;
+    if (handle != null && _musicEngine.getIsValidVoiceHandle(handle)) {
+      await _musicEngine.stop(handle);
+    }
+    if (source != null) {
+      await _musicEngine.disposeSource(source);
+    }
+  }
+
+  Future<void> _disposeMusicBackend() async {
+    try {
+      await _disposeCurrentMusicSource();
+    } catch (error) {
+      debugPrint('释放音乐播放资源失败：$error');
+    }
+  }
+
   Future<void> _toggleMusicAttachment(MusicAttachment attachment) async {
-    if (_currentPlayingMusicId == attachment.id && _isMusicPlaying) {
-      await _stopMusic();
+    if (_currentPlayingMusicId == attachment.id) {
+      final handle = _musicHandle;
+      if (handle == null || !_musicEngine.isInitialized) return;
+      final shouldPause = _isMusicPlaying;
+      _musicEngine.setPause(handle, shouldPause);
+      if (shouldPause) {
+        _musicVisualController.stop();
+      } else {
+        _musicVisualController.repeat();
+      }
+      if (!mounted) return;
+      setState(() => _isMusicPlaying = !shouldPause);
       return;
     }
 
     await _stopAudio();
-    await _musicPlayer.stop();
+    await _disposeCurrentMusicSource();
+    _musicVisualController.stop();
+    _musicVisualController.reset();
+    if (mounted) {
+      setState(() {
+        _isMusicPlaying = false;
+        _currentPlayingMusicId = null;
+        _musicPosition = Duration.zero;
+        _musicDuration = Duration.zero;
+      });
+    }
 
     final localPath = attachment.localAudioPath?.trim();
     final previewUrl = attachment.previewUrl?.trim();
 
     try {
-      Source? source;
+      await _ensureMusicEngine();
+      AudioSource? source;
       if (localPath != null && localPath.isNotEmpty) {
         final resolvedPath = AppPaths.resolve(localPath);
         if (await File(resolvedPath).exists()) {
-          source = DeviceFileSource(resolvedPath);
+          source = await _musicEngine.loadFile(
+            resolvedPath,
+            mode: LoadMode.memory,
+          );
         } else {
           debugPrint('音乐文件不存在，尝试预览链接：$resolvedPath');
         }
       }
       if (source == null && previewUrl != null && previewUrl.isNotEmpty) {
-        source = UrlSource(previewUrl);
+        source = await _musicEngine.loadUrl(
+          previewUrl,
+          mode: LoadMode.memory,
+        );
       }
       if (source == null) {
         debugPrint('音乐附件没有可播放来源：${attachment.title}');
         return;
       }
+      if (!mounted) {
+        await _musicEngine.disposeSource(source);
+        return;
+      }
 
-      await _musicPlayer.setVolume(1.0);
-      await _musicPlayer.play(source);
-      if (!mounted) return;
+      _musicSource = source;
+      _musicHandle = _musicEngine.play(source, volume: 1);
+      final duration = _musicEngine.getLength(source);
       setState(() {
-        _isMusicPlaying = true;
         _currentPlayingMusicId = attachment.id;
+        _isMusicPlaying = true;
+        _musicPosition = Duration.zero;
+        _musicDuration = duration;
       });
+      _musicVisualController.repeat();
+      _startMusicPositionUpdates();
     } catch (e) {
       debugPrint('音乐播放失败：$e');
+      await _disposeMusicBackend();
+      _musicVisualController.stop();
+      _musicVisualController.reset();
       if (!mounted) return;
       setState(() {
         _isMusicPlaying = false;
         _currentPlayingMusicId = null;
+        _musicPosition = Duration.zero;
+        _musicDuration = Duration.zero;
       });
     }
   }
 
+  Future<void> _seekMusic(
+    MusicAttachment attachment,
+    double milliseconds,
+  ) async {
+    if (_currentPlayingMusicId != attachment.id ||
+        _musicDuration <= Duration.zero) {
+      return;
+    }
+    final target = Duration(
+      milliseconds:
+          milliseconds.round().clamp(0, _musicDuration.inMilliseconds),
+    );
+    final handle = _musicHandle;
+    if (handle == null || !_musicEngine.isInitialized) return;
+    _musicEngine.seek(handle, target);
+    if (!mounted) return;
+    setState(() => _musicPosition = target);
+  }
+
   Future<void> _stopMusic() async {
-    await _musicPlayer.stop();
+    await _disposeCurrentMusicSource();
+    _musicVisualController.stop();
+    _musicVisualController.reset();
     if (!mounted) return;
     setState(() {
       _isMusicPlaying = false;
       _currentPlayingMusicId = null;
+      _musicPosition = Duration.zero;
+      _musicDuration = Duration.zero;
     });
   }
 
@@ -1137,6 +1306,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
 
   Future<void> _playAudio(Message message) async {
     try {
+      await _stopMusic();
       await _audioPlayerPrimary.stop();
       await _audioPlayerSecondary.stop();
 
@@ -3731,8 +3901,8 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
     Color accentColor,
   ) {
     final canPlay = _hasPlayableMusicSource(attachment);
-    final isCurrent =
-        _currentPlayingMusicId == attachment.id && _isMusicPlaying;
+    final isSelected = _currentPlayingMusicId == attachment.id;
+    final isPlaying = isSelected && _isMusicPlaying;
     final subtitleParts = [
       if (attachment.artist.trim().isNotEmpty) attachment.artist.trim(),
       if (attachment.band.trim().isNotEmpty &&
@@ -3740,97 +3910,566 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
         attachment.band.trim(),
     ];
     final subtitle = subtitleParts.join(' · ');
+    final fallbackDuration = attachment.durationMs == null
+        ? Duration.zero
+        : Duration(milliseconds: attachment.durationMs!);
+    final duration = isSelected ? _musicDuration : fallbackDuration;
+    final position = isSelected ? _musicPosition : Duration.zero;
+    final hasDuration = duration > Duration.zero;
+    final maxMilliseconds =
+        hasDuration ? duration.inMilliseconds.toDouble() : 1.0;
+    final currentMilliseconds = position.inMilliseconds
+        .clamp(0, hasDuration ? duration.inMilliseconds : 0)
+        .toDouble();
+    final lyricsFuture = _loadMusicLyrics(attachment);
 
-    return Container(
-      constraints: const BoxConstraints(minWidth: 220, maxWidth: 320),
-      padding: const EdgeInsets.all(10),
-      decoration: BoxDecoration(
-        color: isUser
-            ? Colors.white.withValues(alpha: 0.18)
-            : Colors.white.withValues(alpha: 0.72),
+    return ConstrainedBox(
+      constraints: const BoxConstraints(minWidth: 280, maxWidth: 440),
+      child: ClipRRect(
         borderRadius: BorderRadius.circular(8),
-        border: Border.all(
-          color: isUser
-              ? Colors.white.withValues(alpha: 0.35)
-              : widget.character.aiBubbleBorderColor.withValues(alpha: 0.32),
-        ),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          InkWell(
-            onTap: canPlay ? () => _toggleMusicAttachment(attachment) : null,
-            borderRadius: BorderRadius.circular(22),
-            child: Container(
-              width: 42,
-              height: 42,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: canPlay
-                    ? accentColor.withValues(alpha: isUser ? 0.9 : 0.18)
-                    : Colors.grey.withValues(alpha: 0.18),
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+          child: AnimatedContainer(
+            width: 440,
+            height: 166,
+            duration: const Duration(milliseconds: 220),
+            curve: Curves.easeOutCubic,
+            padding: const EdgeInsets.fromLTRB(10, 9, 12, 9),
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [
+                  Colors.white.withValues(alpha: isUser ? 0.24 : 0.34),
+                  accentColor.withValues(alpha: isSelected ? 0.14 : 0.07),
+                ],
               ),
-              child: Icon(
-                isCurrent ? Icons.pause : Icons.play_arrow,
-                color: canPlay
-                    ? (isUser ? Colors.white : accentColor)
-                    : Colors.grey[500],
-                size: 24,
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(
+                color: isSelected
+                    ? accentColor.withValues(alpha: 0.42)
+                    : Colors.white.withValues(alpha: 0.48),
               ),
+              boxShadow: [
+                BoxShadow(
+                  color: accentColor.withValues(
+                    alpha: isSelected ? 0.14 : 0.06,
+                  ),
+                  blurRadius: isSelected ? 18 : 12,
+                  offset: const Offset(0, 4),
+                ),
+              ],
             ),
-          ),
-          const SizedBox(width: 10),
-          Flexible(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
+            child: Row(
               children: [
-                Text(
-                  attachment.title,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    color: isUser ? Colors.white : const Color(0xFF2D3142),
-                    fontWeight: FontWeight.w700,
-                    fontSize: 13,
+                _buildMusicVinyl(
+                  attachment: attachment,
+                  canPlay: canPlay,
+                  isPlaying: isPlaying,
+                  accentColor: accentColor,
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        attachment.title,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: Color(0xFF182033),
+                          fontWeight: FontWeight.w700,
+                          fontSize: 14,
+                          height: 1.2,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Row(
+                        children: [
+                          AnimatedSwitcher(
+                            duration: const Duration(milliseconds: 180),
+                            child: Icon(
+                              isPlaying
+                                  ? Icons.graphic_eq_rounded
+                                  : Icons.album_outlined,
+                              key: ValueKey(isPlaying),
+                              size: 13,
+                              color: isPlaying
+                                  ? accentColor
+                                  : const Color(0xFF64748B),
+                            ),
+                          ),
+                          const SizedBox(width: 5),
+                          Expanded(
+                            child: Text(
+                              canPlay ? subtitle : '音频不可用',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                color: canPlay
+                                    ? const Color(0xFF526078)
+                                    : const Color(0xFF94A3B8),
+                                fontSize: 11,
+                                height: 1.2,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 7),
+                      FutureBuilder<_MusicLyrics?>(
+                        future: lyricsFuture,
+                        builder: (context, snapshot) {
+                          final lyrics = snapshot.data;
+                          if (lyrics == null || lyrics.entries.isEmpty) {
+                            return const SizedBox(height: 48);
+                          }
+                          return _buildMusicLyricsViewport(
+                            lyrics: lyrics,
+                            position: position,
+                            duration: duration,
+                            accentColor: accentColor,
+                            active: isSelected,
+                          );
+                        },
+                      ),
+                      const Spacer(),
+                      SizedBox(
+                        height: 16,
+                        child: SliderTheme(
+                          data: SliderTheme.of(context).copyWith(
+                            trackHeight: 2.5,
+                            activeTrackColor: accentColor,
+                            inactiveTrackColor:
+                                Colors.white.withValues(alpha: 0.66),
+                            disabledActiveTrackColor:
+                                accentColor.withValues(alpha: 0.32),
+                            disabledInactiveTrackColor:
+                                Colors.white.withValues(alpha: 0.48),
+                            thumbColor: accentColor,
+                            overlayColor: accentColor.withValues(alpha: 0.10),
+                            thumbShape: const RoundSliderThumbShape(
+                              enabledThumbRadius: 4.5,
+                              disabledThumbRadius: 3.5,
+                            ),
+                            overlayShape: const RoundSliderOverlayShape(
+                              overlayRadius: 10,
+                            ),
+                          ),
+                          child: Slider(
+                            value: currentMilliseconds,
+                            max: maxMilliseconds,
+                            onChanged: isSelected && hasDuration
+                                ? (value) => _seekMusic(attachment, value)
+                                : null,
+                          ),
+                        ),
+                      ),
+                      Row(
+                        children: [
+                          Text(
+                            _formatMusicDuration(position),
+                            style: const TextStyle(
+                              color: Color(0xFF5B6880),
+                              fontSize: 10,
+                              fontFeatures: [FontFeature.tabularFigures()],
+                            ),
+                          ),
+                          const Spacer(),
+                          Text(
+                            hasDuration
+                                ? _formatMusicDuration(duration)
+                                : '--:--',
+                            style: const TextStyle(
+                              color: Color(0xFF5B6880),
+                              fontSize: 10,
+                              fontFeatures: [FontFeature.tabularFigures()],
+                            ),
+                          ),
+                          const SizedBox(width: 9),
+                          Tooltip(
+                            message: isPlaying ? '暂停' : '播放',
+                            child: Material(
+                              color: accentColor.withValues(alpha: 0.88),
+                              shape: const CircleBorder(),
+                              child: InkWell(
+                                customBorder: const CircleBorder(),
+                                onTap: canPlay
+                                    ? () => _toggleMusicAttachment(attachment)
+                                    : null,
+                                child: SizedBox(
+                                  width: 30,
+                                  height: 30,
+                                  child: Icon(
+                                    isPlaying
+                                        ? Icons.pause_rounded
+                                        : Icons.play_arrow_rounded,
+                                    color: Colors.white,
+                                    size: 20,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
                   ),
                 ),
-                if (subtitle.isNotEmpty)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 2),
-                    child: Text(
-                      subtitle,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        color: isUser
-                            ? Colors.white.withValues(alpha: 0.82)
-                            : const Color(0xFF4C566A),
-                        fontSize: 11,
-                      ),
-                    ),
-                  ),
-                if (!canPlay)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 3),
-                    child: Text(
-                      '等待音频文件',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        color: isUser
-                            ? Colors.white.withValues(alpha: 0.70)
-                            : Colors.grey[600],
-                        fontSize: 10,
-                      ),
-                    ),
-                  ),
               ],
             ),
           ),
-        ],
+        ),
       ),
     );
+  }
+
+  Widget _buildMusicVinyl({
+    required MusicAttachment attachment,
+    required bool canPlay,
+    required bool isPlaying,
+    required Color accentColor,
+  }) {
+    final disc = SizedBox(
+      width: 80,
+      height: 80,
+      child: CustomPaint(
+        painter: _VinylDiscPainter(accentColor: accentColor),
+        child: Center(
+          child: Container(
+            width: 57,
+            height: 57,
+            padding: const EdgeInsets.all(2),
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: Colors.white.withValues(alpha: 0.74),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.24),
+                  blurRadius: 8,
+                ),
+              ],
+            ),
+            child: ClipOval(
+              child: FutureBuilder<Uint8List?>(
+                future: MusicService.loadCoverBytes(attachment),
+                builder: (context, snapshot) {
+                  final bytes = snapshot.data;
+                  if (bytes != null && bytes.isNotEmpty) {
+                    return Image.memory(
+                      bytes,
+                      fit: BoxFit.cover,
+                      gaplessPlayback: true,
+                      filterQuality: FilterQuality.medium,
+                      errorBuilder: (_, __, ___) =>
+                          _buildMusicCoverPlaceholder(accentColor),
+                    );
+                  }
+                  return _buildMusicCoverPlaceholder(accentColor);
+                },
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    return SizedBox(
+      width: 112,
+      height: 112,
+      child: Tooltip(
+        message: isPlaying ? '暂停' : '播放',
+        child: Material(
+          color: Colors.transparent,
+          child: InkResponse(
+            radius: 56,
+            onTap: canPlay ? () => _toggleMusicAttachment(attachment) : null,
+            child: AnimatedBuilder(
+              animation: _musicVisualController,
+              child: disc,
+              builder: (context, child) {
+                return Stack(
+                  alignment: Alignment.center,
+                  children: [
+                    Container(
+                      width: 98,
+                      height: 98,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        border: Border.all(
+                          color: accentColor.withValues(
+                            alpha: isPlaying ? 0.34 : 0.18,
+                          ),
+                        ),
+                        boxShadow: [
+                          BoxShadow(
+                            color: accentColor.withValues(
+                              alpha: isPlaying ? 0.14 : 0.06,
+                            ),
+                            blurRadius: isPlaying ? 18 : 10,
+                          ),
+                        ],
+                      ),
+                    ),
+                    Transform.rotate(
+                      angle: _musicVisualController.value * 2 * pi,
+                      child: child,
+                    ),
+                    Container(
+                      width: 7,
+                      height: 7,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: const Color(0xFFEAF0F8),
+                        border: Border.all(
+                          color: const Color(0xFF20283A),
+                          width: 1.5,
+                        ),
+                      ),
+                    ),
+                  ],
+                );
+              },
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<_MusicLyrics?> _loadMusicLyrics(MusicAttachment attachment) {
+    final timedLyricsPath = _effectiveTimedLyricsPath(attachment);
+    if (timedLyricsPath != null && timedLyricsPath.isNotEmpty) {
+      final resolvedPath = AppPaths.resolve(timedLyricsPath);
+      return _musicLyricsCache.putIfAbsent('timed:$resolvedPath', () async {
+        try {
+          final file = File(resolvedPath);
+          if (await file.exists()) {
+            final decoded = jsonDecode(await file.readAsString());
+            if (decoded is Map<String, dynamic>) {
+              final timedLyrics = _MusicLyrics.fromNeteaseJson(decoded);
+              if (timedLyrics.entries.isNotEmpty) return timedLyrics;
+            }
+          }
+        } catch (error) {
+          debugPrint('读取网易云时间戳歌词失败：$error');
+        }
+        return _loadFallbackMusicLyrics(attachment);
+      });
+    }
+
+    return _loadFallbackMusicLyrics(attachment);
+  }
+
+  String? _effectiveTimedLyricsPath(MusicAttachment attachment) {
+    final configuredPath = attachment.timedLyricsPath?.trim();
+    if (configuredPath != null && configuredPath.isNotEmpty) {
+      return configuredPath;
+    }
+
+    // 旧聊天记录是在 timedLyricsPath 字段加入前保存的。它们仍保留
+    // lyricsPath，因此用同目录、同文件名的 JSON 自动升级显示链路。
+    final legacyLyricsPath = attachment.lyricsPath?.trim();
+    if (legacyLyricsPath == null || legacyLyricsPath.isEmpty) return null;
+    final extensionIndex = legacyLyricsPath.lastIndexOf('.');
+    if (extensionIndex <= legacyLyricsPath.lastIndexOf(RegExp(r'[\\/]'))) {
+      return null;
+    }
+    final candidatePath =
+        '${legacyLyricsPath.substring(0, extensionIndex)}.json';
+    return File(AppPaths.resolve(candidatePath)).existsSync()
+        ? candidatePath
+        : null;
+  }
+
+  Future<_MusicLyrics?> _loadFallbackMusicLyrics(
+    MusicAttachment attachment,
+  ) {
+    if (attachment.lyrics.isNotEmpty) {
+      final first = attachment.lyrics.first.hashCode;
+      final last = attachment.lyrics.last.hashCode;
+      final cacheKey =
+          'inline:${attachment.id}:${attachment.lyrics.length}:$first:$last';
+      return _musicLyricsCache.putIfAbsent(
+        cacheKey,
+        () async => _MusicLyrics.fromLines(attachment.lyrics),
+      );
+    }
+
+    final lyricsPath = attachment.lyricsPath?.trim();
+    if (lyricsPath == null || lyricsPath.isEmpty) {
+      return Future.value(null);
+    }
+    final resolvedPath = AppPaths.resolve(lyricsPath);
+    return _musicLyricsCache.putIfAbsent('path:$resolvedPath', () async {
+      final file = File(resolvedPath);
+      if (!await file.exists()) return null;
+      final text = await file.readAsString();
+      return _MusicLyrics.fromText(text);
+    });
+  }
+
+  Widget _buildMusicLyricsViewport({
+    required _MusicLyrics lyrics,
+    required Duration position,
+    required Duration duration,
+    required Color accentColor,
+    required bool active,
+  }) {
+    final activeIndex = lyrics.activeIndex(position, duration);
+    final previous = lyrics.entryAt(activeIndex - 1);
+    final current = lyrics.entryAt(activeIndex);
+    final next = lyrics.entryAt(activeIndex + 1);
+    final isPrelude = lyrics.timed && activeIndex < 0;
+    final currentLineProgress =
+        lyrics.entryProgress(activeIndex, position, duration);
+
+    return ClipRect(
+      child: SizedBox(
+        height: 48,
+        child: AnimatedSwitcher(
+          duration: const Duration(milliseconds: 260),
+          switchInCurve: Curves.easeOutCubic,
+          switchOutCurve: Curves.easeInCubic,
+          layoutBuilder: (currentChild, previousChildren) {
+            return Stack(
+              alignment: Alignment.centerLeft,
+              fit: StackFit.expand,
+              children: [
+                ...previousChildren,
+                if (currentChild != null) currentChild,
+              ],
+            );
+          },
+          transitionBuilder: (child, animation) {
+            return FadeTransition(
+              opacity: animation,
+              child: SlideTransition(
+                position: Tween<Offset>(
+                  begin: const Offset(0, 0.18),
+                  end: Offset.zero,
+                ).animate(animation),
+                child: child,
+              ),
+            );
+          },
+          child: SizedBox(
+            key: ValueKey(activeIndex),
+            width: double.infinity,
+            child: isPrelude
+                ? Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      active ? '♪  前奏' : '♪  准备播放',
+                      style: TextStyle(
+                        color: accentColor.withValues(alpha: 0.58),
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        letterSpacing: 0.6,
+                      ),
+                    ),
+                  )
+                : Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      _buildMusicLyricTextLine(
+                        previous?.primary ?? '',
+                        color: const Color(0xFF6B7890).withValues(alpha: 0.54),
+                        fontSize: 10,
+                        fontWeight: FontWeight.w500,
+                      ),
+                      const SizedBox(height: 2),
+                      _buildMusicLyricTextLine(
+                        current?.primary ?? '',
+                        color: active
+                            ? const Color(0xFF172033)
+                            : const Color(0xFF334155),
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                        scrollProgress: active ? currentLineProgress : null,
+                      ),
+                      if ((current?.secondary ?? '').isNotEmpty) ...[
+                        const SizedBox(height: 1),
+                        _buildMusicLyricTextLine(
+                          current!.secondary,
+                          color: accentColor.withValues(
+                            alpha: active ? 0.86 : 0.62,
+                          ),
+                          fontSize: 10,
+                          fontWeight: FontWeight.w500,
+                          scrollProgress: active ? currentLineProgress : null,
+                        ),
+                      ] else ...[
+                        const SizedBox(height: 2),
+                        _buildMusicLyricTextLine(
+                          next?.primary ?? '',
+                          color:
+                              const Color(0xFF6B7890).withValues(alpha: 0.54),
+                          fontSize: 10,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ],
+                    ],
+                  ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildMusicLyricTextLine(
+    String text, {
+    required Color color,
+    required double fontSize,
+    required FontWeight fontWeight,
+    double? scrollProgress,
+  }) {
+    final style = TextStyle(
+      color: color,
+      fontSize: fontSize,
+      fontWeight: fontWeight,
+      height: 1.1,
+    );
+
+    return SizedBox(
+      height: fontSize + 4,
+      width: double.infinity,
+      child: scrollProgress == null
+          ? Text(
+              text,
+              maxLines: 1,
+              overflow: TextOverflow.fade,
+              softWrap: false,
+              style: style,
+            )
+          : _MusicLyricMarquee(
+              text: text,
+              style: style,
+              // 每句开头和结尾各停留一小段时间，中间随播放
+              // 进度扫过 ScrollView 的真实可滚动范围。
+              progress: ((scrollProgress - 0.16) / 0.68).clamp(0.0, 1.0),
+            ),
+    );
+  }
+
+  Widget _buildMusicCoverPlaceholder(Color accentColor) {
+    return ColoredBox(
+      color: const Color(0xFFDCE6F1),
+      child: Icon(
+        Icons.album_rounded,
+        color: accentColor.withValues(alpha: 0.76),
+        size: 28,
+      ),
+    );
+  }
+
+  String _formatMusicDuration(Duration duration) {
+    final totalSeconds = max(0, duration.inSeconds);
+    final minutes = totalSeconds ~/ 60;
+    final seconds = totalSeconds % 60;
+    return '$minutes:${seconds.toString().padLeft(2, '0')}';
   }
 
   bool _hasPlayableMusicSource(MusicAttachment attachment) {
@@ -3885,6 +4524,77 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
   }
 }
 
+class _MusicLyricMarquee extends StatefulWidget {
+  final String text;
+  final TextStyle style;
+  final double progress;
+
+  const _MusicLyricMarquee({
+    required this.text,
+    required this.style,
+    required this.progress,
+  });
+
+  @override
+  State<_MusicLyricMarquee> createState() => _MusicLyricMarqueeState();
+}
+
+class _MusicLyricMarqueeState extends State<_MusicLyricMarquee> {
+  final ScrollController _controller = ScrollController();
+
+  @override
+  void initState() {
+    super.initState();
+    _schedulePositionUpdate(jump: true);
+  }
+
+  @override
+  void didUpdateWidget(_MusicLyricMarquee oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _schedulePositionUpdate(jump: oldWidget.text != widget.text);
+  }
+
+  void _schedulePositionUpdate({required bool jump}) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_controller.hasClients) return;
+      final target = _controller.position.maxScrollExtent *
+          widget.progress.clamp(0.0, 1.0);
+      if (jump) {
+        _controller.jumpTo(target);
+        return;
+      }
+      if ((_controller.offset - target).abs() < 0.25) return;
+      _controller.animateTo(
+        target,
+        duration: const Duration(milliseconds: 140),
+        curve: Curves.linear,
+      );
+    });
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SingleChildScrollView(
+      controller: _controller,
+      scrollDirection: Axis.horizontal,
+      physics: const NeverScrollableScrollPhysics(),
+      clipBehavior: Clip.hardEdge,
+      child: Text(
+        widget.text,
+        maxLines: 1,
+        softWrap: false,
+        style: widget.style,
+      ),
+    );
+  }
+}
+
 class _InputContextMenuLayoutDelegate extends SingleChildLayoutDelegate {
   final Offset anchor;
 
@@ -3910,6 +4620,357 @@ class _InputContextMenuLayoutDelegate extends SingleChildLayoutDelegate {
     return oldDelegate.anchor != anchor;
   }
 }
+
+class _VinylDiscPainter extends CustomPainter {
+  final Color accentColor;
+
+  const _VinylDiscPainter({required this.accentColor});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final center = Offset(size.width / 2, size.height / 2);
+    final radius = size.shortestSide / 2;
+    final bounds = Rect.fromCircle(center: center, radius: radius);
+    final basePaint = Paint()
+      ..shader = RadialGradient(
+        colors: [
+          accentColor.withValues(alpha: 0.48),
+          const Color(0xFF20283A),
+          const Color(0xFF0D1320),
+        ],
+        stops: const [0, 0.56, 1],
+      ).createShader(bounds);
+    canvas.drawCircle(center, radius, basePaint);
+
+    final groovePaint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 0.65;
+    for (var index = 0; index < 9; index++) {
+      final grooveRadius = radius * (0.42 + index * 0.065);
+      groovePaint.color = Colors.white.withValues(
+        alpha: index.isEven ? 0.13 : 0.07,
+      );
+      canvas.drawCircle(center, grooveRadius, groovePaint);
+    }
+
+    final sheenPaint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = radius * 0.12
+      ..strokeCap = StrokeCap.round
+      ..color = Colors.white.withValues(alpha: 0.09);
+    canvas.drawArc(
+      Rect.fromCircle(center: center, radius: radius * 0.78),
+      -1.32,
+      0.76,
+      false,
+      sheenPaint,
+    );
+  }
+
+  @override
+  bool shouldRepaint(_VinylDiscPainter oldDelegate) =>
+      oldDelegate.accentColor != accentColor;
+}
+
+class _MusicLyricEntry {
+  final String primary;
+  final String secondary;
+  final Duration? timestamp;
+  final Duration? endTimestamp;
+
+  const _MusicLyricEntry({
+    required this.primary,
+    this.secondary = '',
+    this.timestamp,
+    this.endTimestamp,
+  });
+}
+
+class _MusicLyrics {
+  final List<_MusicLyricEntry> entries;
+  final bool timed;
+
+  const _MusicLyrics({
+    required this.entries,
+    required this.timed,
+  });
+
+  factory _MusicLyrics.fromText(String text) {
+    final lines = text
+        .replaceAll('\r\n', '\n')
+        .replaceAll('\r', '\n')
+        .split('\n')
+        .map((line) => line.trimRight())
+        .toList(growable: false);
+    return _MusicLyrics.fromLines(lines);
+  }
+
+  factory _MusicLyrics.fromLines(List<String> lines) {
+    final timedEntries = _parseTimedLines(lines);
+    if (timedEntries.isNotEmpty) {
+      return _MusicLyrics(entries: timedEntries, timed: true);
+    }
+
+    final sectionedEntries = _parseSectionedLyrics(lines);
+    if (sectionedEntries.isNotEmpty) {
+      return _MusicLyrics(entries: sectionedEntries, timed: false);
+    }
+
+    final plainEntries = lines
+        .map((line) => line.trim())
+        .where((line) => line.isNotEmpty && !_isLyricHeading(line))
+        .map((line) => _MusicLyricEntry(primary: line))
+        .toList(growable: false);
+    return _MusicLyrics(entries: plainEntries, timed: false);
+  }
+
+  factory _MusicLyrics.fromNeteaseJson(Map<String, dynamic> json) {
+    final primaryLyrics = _neteaseLyricText(json['lrc']);
+    final translatedLyrics = _neteaseLyricText(json['tlyric']);
+    if (primaryLyrics.isEmpty) {
+      return const _MusicLyrics(entries: [], timed: true);
+    }
+
+    final primaryEntries = _parseTimedLines(
+      _normalizedLines(primaryLyrics),
+      skipCredits: true,
+    );
+    final translationsByTimestamp = <int, String>{};
+    for (final entry in _parseTimedLines(_normalizedLines(translatedLyrics))) {
+      final timestamp = entry.timestamp;
+      if (timestamp != null && entry.primary.isNotEmpty) {
+        translationsByTimestamp[timestamp.inMilliseconds] = entry.primary;
+      }
+    }
+
+    final entries = primaryEntries
+        .map(
+          (entry) => _MusicLyricEntry(
+            primary: entry.primary,
+            secondary:
+                translationsByTimestamp[entry.timestamp!.inMilliseconds] ?? '',
+            timestamp: entry.timestamp,
+            endTimestamp: entry.endTimestamp,
+          ),
+        )
+        .toList(growable: false);
+    return _MusicLyrics(entries: entries, timed: true);
+  }
+
+  static String _neteaseLyricText(dynamic section) {
+    if (section is! Map) return '';
+    final lyric = section['lyric'];
+    return lyric is String ? lyric : '';
+  }
+
+  static List<String> _normalizedLines(String text) => text
+      .replaceAll('\r\n', '\n')
+      .replaceAll('\r', '\n')
+      .split('\n')
+      .map((line) => line.trimRight())
+      .toList(growable: false);
+
+  int activeIndex(Duration position, Duration duration) {
+    if (entries.isEmpty) return 0;
+    if (timed) {
+      var index = -1;
+      for (var i = 0; i < entries.length; i++) {
+        final timestamp = entries[i].timestamp;
+        if (timestamp == null || timestamp > position) break;
+        index = i;
+      }
+      return index.clamp(-1, entries.length - 1).toInt();
+    }
+
+    if (duration <= Duration.zero) return 0;
+    final ratio =
+        position.inMilliseconds / max(1, duration.inMilliseconds).toDouble();
+    return (ratio * entries.length)
+        .floor()
+        .clamp(0, entries.length - 1)
+        .toInt();
+  }
+
+  double entryProgress(
+    int index,
+    Duration position,
+    Duration duration,
+  ) {
+    if (index < 0 || index >= entries.length) return 0;
+
+    int startMilliseconds;
+    int endMilliseconds;
+    if (timed) {
+      startMilliseconds = entries[index].timestamp?.inMilliseconds ?? 0;
+      final explicitEnd = entries[index].endTimestamp?.inMilliseconds;
+      final fallbackEnd = index + 1 < entries.length
+          ? entries[index + 1].timestamp?.inMilliseconds ??
+              duration.inMilliseconds
+          : duration.inMilliseconds;
+      if (explicitEnd != null) {
+        endMilliseconds = explicitEnd;
+      } else {
+        final repeatedLineDuration = _previousMatchingLineDuration(index);
+        endMilliseconds = repeatedLineDuration == null
+            ? fallbackEnd
+            : min(fallbackEnd, startMilliseconds + repeatedLineDuration);
+      }
+    } else {
+      final totalMilliseconds = max(1, duration.inMilliseconds);
+      startMilliseconds = (totalMilliseconds * index / entries.length).round();
+      endMilliseconds =
+          (totalMilliseconds * (index + 1) / entries.length).round();
+    }
+
+    final lineDuration = max(1, endMilliseconds - startMilliseconds);
+    return ((position.inMilliseconds - startMilliseconds) / lineDuration)
+        .clamp(0.0, 1.0)
+        .toDouble();
+  }
+
+  int? _previousMatchingLineDuration(int index) {
+    final current = entries[index];
+    for (var previousIndex = index - 1; previousIndex >= 0; previousIndex--) {
+      final previous = entries[previousIndex];
+      if (previous.primary != current.primary) continue;
+      final start = previous.timestamp?.inMilliseconds;
+      final end = previous.endTimestamp?.inMilliseconds;
+      if (start != null && end != null && end > start) {
+        return end - start;
+      }
+    }
+    return null;
+  }
+
+  _MusicLyricEntry? entryAt(int index) {
+    if (index < 0 || index >= entries.length) return null;
+    return entries[index];
+  }
+
+  static List<_MusicLyricEntry> _parseTimedLines(
+    List<String> lines, {
+    bool skipCredits = false,
+  }) {
+    final entries = <_MusicLyricEntry>[];
+    final timelineBoundaries = <Duration>[];
+    final timestampPattern = RegExp(r'\[(\d{1,2}):(\d{2})(?:[.:](\d{1,3}))?\]');
+    for (final rawLine in lines) {
+      final matches = timestampPattern.allMatches(rawLine).toList();
+      if (matches.isEmpty) continue;
+      final timestamps = matches.map(_durationFromTimestampMatch).toList();
+      timelineBoundaries.addAll(timestamps);
+      final text = rawLine.replaceAll(timestampPattern, '').trim();
+      if (text.isEmpty || _isLyricHeading(text)) continue;
+      if (skipCredits && _isSongCredit(text)) continue;
+      for (final timestamp in timestamps) {
+        entries.add(
+          _MusicLyricEntry(
+            primary: text,
+            timestamp: timestamp,
+          ),
+        );
+      }
+    }
+    entries.sort((a, b) => a.timestamp!.compareTo(b.timestamp!));
+    timelineBoundaries.sort();
+    return entries
+        .map(
+          (entry) => _MusicLyricEntry(
+            primary: entry.primary,
+            secondary: entry.secondary,
+            timestamp: entry.timestamp,
+            endTimestamp: timelineBoundaries.cast<Duration?>().firstWhere(
+                  (boundary) => boundary! > entry.timestamp!,
+                  orElse: () => null,
+                ),
+          ),
+        )
+        .toList(growable: false);
+  }
+
+  static Duration _durationFromTimestampMatch(RegExpMatch match) {
+    final minutes = int.tryParse(match.group(1) ?? '') ?? 0;
+    final seconds = int.tryParse(match.group(2) ?? '') ?? 0;
+    final fractionText = match.group(3) ?? '0';
+    return Duration(
+      minutes: minutes,
+      seconds: seconds,
+      milliseconds: _fractionToMilliseconds(fractionText),
+    );
+  }
+
+  static bool _isSongCredit(String text) => RegExp(
+        r'^(作词|作詞|作曲|编曲|編曲|词|詞|曲)\s*[:：]',
+        caseSensitive: false,
+      ).hasMatch(text);
+
+  static int _fractionToMilliseconds(String text) {
+    if (text.isEmpty) return 0;
+    final normalized =
+        text.length >= 3 ? text.substring(0, 3) : text.padRight(3, '0');
+    return int.tryParse(normalized) ?? 0;
+  }
+
+  static List<_MusicLyricEntry> _parseSectionedLyrics(List<String> lines) {
+    final primaryLines = <String>[];
+    final secondaryLines = <String>[];
+    var currentSection = _LyricSection.none;
+
+    for (final rawLine in lines) {
+      final line = rawLine.trim();
+      if (line.isEmpty) continue;
+      if (_isJapaneseHeading(line)) {
+        currentSection = _LyricSection.primary;
+        continue;
+      }
+      if (_isTranslationHeading(line)) {
+        currentSection = _LyricSection.secondary;
+        continue;
+      }
+      if (_isLyricHeading(line)) continue;
+
+      switch (currentSection) {
+        case _LyricSection.primary:
+          primaryLines.add(line);
+          break;
+        case _LyricSection.secondary:
+          secondaryLines.add(line);
+          break;
+        case _LyricSection.none:
+          break;
+      }
+    }
+
+    if (primaryLines.isEmpty && secondaryLines.isEmpty) return const [];
+    final count = max(primaryLines.length, secondaryLines.length);
+    final entries = <_MusicLyricEntry>[];
+    for (var index = 0; index < count; index++) {
+      final primary = index < primaryLines.length ? primaryLines[index] : '';
+      final secondary =
+          index < secondaryLines.length ? secondaryLines[index] : '';
+      final displayPrimary = primary.isNotEmpty ? primary : secondary;
+      if (displayPrimary.isEmpty) continue;
+      entries.add(
+        _MusicLyricEntry(
+          primary: displayPrimary,
+          secondary: primary.isNotEmpty ? secondary : '',
+        ),
+      );
+    }
+    return entries;
+  }
+
+  static bool _isJapaneseHeading(String line) =>
+      RegExp(r'^【\s*(日文原词|日文歌词|原词|歌词)\s*】$').hasMatch(line);
+
+  static bool _isTranslationHeading(String line) =>
+      RegExp(r'^【\s*(中文翻译|中文译文|翻译|译文)\s*】$').hasMatch(line);
+
+  static bool _isLyricHeading(String line) =>
+      RegExp(r'^【[^】]+】$').hasMatch(line);
+}
+
+enum _LyricSection { none, primary, secondary }
 
 class SoundWavePainter extends CustomPainter {
   final double animationValue;

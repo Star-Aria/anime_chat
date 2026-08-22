@@ -302,7 +302,7 @@ class EmotionAnalyzer {
         : RegExp(r'(?<=[。！？\n!?])');
 
     final List<String> sentences = [];
-    final parts = protected.text.split(splitPattern);
+    final parts = _splitAroundJapaneseQuotes(protected.text, splitPattern);
 
     for (final part in parts) {
       final trimmed = _restoreProtectedTokens(
@@ -318,6 +318,66 @@ class EmotionAnalyzer {
     if (sentences.isEmpty) return [cleaned];
 
     return sentences;
+  }
+
+  static List<String> _splitAroundJapaneseQuotes(
+    String text,
+    RegExp splitPattern,
+  ) {
+    final parts = <String>[];
+    var outsideStart = 0;
+    var searchStart = 0;
+
+    while (searchStart < text.length) {
+      final open = text.indexOf('「', searchStart);
+      if (open < 0) break;
+
+      final close = text.indexOf('」', open + 1);
+      if (close < 0) break;
+
+      _appendRegularSentenceParts(
+        text.substring(outsideStart, open),
+        splitPattern,
+        parts,
+      );
+
+      final quotedParts = <String>[];
+      _appendRegularSentenceParts(
+        text.substring(open + 1, close),
+        splitPattern,
+        quotedParts,
+      );
+      for (final quotedPart in quotedParts) {
+        parts.add('「$quotedPart」');
+      }
+
+      outsideStart = close + 1;
+      searchStart = close + 1;
+    }
+
+    _appendRegularSentenceParts(
+      text.substring(outsideStart),
+      splitPattern,
+      parts,
+    );
+    return parts;
+  }
+
+  static void _appendRegularSentenceParts(
+    String text,
+    RegExp splitPattern,
+    List<String> target,
+  ) {
+    for (final part in text.split(splitPattern)) {
+      final trimmed = part.trim();
+      if (trimmed.isEmpty) continue;
+
+      if (RegExp(r'^[。！？!?，；、]+$').hasMatch(trimmed) && target.isNotEmpty) {
+        target[target.length - 1] += trimmed;
+      } else {
+        target.add(trimmed);
+      }
+    }
   }
 
   static _ProtectedSentenceText _protectMyGoName(String text) {

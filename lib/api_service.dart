@@ -377,6 +377,7 @@ class ApiService {
     String? characterId,
     String characterLanguage = 'ja',
     Map<String, dynamic>? lyricsTranslationReference,
+    List<String> knownSongTitles = const [],
   }) async {
     try {
       String imageContext = '';
@@ -747,6 +748,7 @@ class ApiService {
           fixedChineseCallNames: fixedChineseCallNames,
           webContext: webContext,
           lyricsTranslationReference: lyricsTranslationReference,
+          knownSongTitles: knownSongTitles,
           isRetry: attempt > 1,
         );
         if (_isAcceptableJapaneseForCharacter(japaneseText, characterId)) {
@@ -2056,6 +2058,39 @@ $responseShapeReminder
     return !RegExp(r'[《》“”]').hasMatch(text);
   }
 
+  static String _normalizeJapaneseSongTitlePunctuation(
+    String text,
+    List<String> knownSongTitles,
+  ) {
+    var normalized = text;
+    final titles = knownSongTitles
+        .map((title) => title.trim())
+        .where((title) => title.isNotEmpty)
+        .toSet()
+        .toList()
+      ..sort((left, right) => right.length.compareTo(left.length));
+    const brackets = [
+      MapEntry('『', '』'),
+      MapEntry('《', '》'),
+      MapEntry('“', '”'),
+      MapEntry('"', '"'),
+    ];
+
+    for (final title in titles) {
+      final escapedTitle = RegExp.escape(title);
+      for (final bracket in brackets) {
+        normalized = normalized.replaceAllMapped(
+          RegExp(
+            '${RegExp.escape(bracket.key)}\\s*$escapedTitle\\s*${RegExp.escape(bracket.value)}',
+            caseSensitive: false,
+          ),
+          (_) => '「$title」',
+        );
+      }
+    }
+    return normalized;
+  }
+
   @visibleForTesting
   static bool isJapaneseTranslationStyleCompatible(
     String text,
@@ -2155,6 +2190,7 @@ $responseShapeReminder
     required Map<String, String> fixedChineseCallNames,
     required String? webContext,
     required Map<String, dynamic>? lyricsTranslationReference,
+    required List<String> knownSongTitles,
     required bool isRetry,
   }) async {
     try {
@@ -2281,6 +2317,10 @@ $responseShapeReminder
           result,
           fixedCharacterCallNames,
           fixedChineseCallNames,
+        );
+        result = _normalizeJapaneseSongTitlePunctuation(
+          result,
+          knownSongTitles,
         );
         return result.trim();
       } else {
@@ -2423,6 +2463,13 @@ $responseShapeReminder
   @visibleForTesting
   static bool usesJapaneseQuotationPunctuationForTest(String text) =>
       _usesJapaneseQuotationPunctuation(text);
+
+  @visibleForTesting
+  static String normalizeJapaneseSongTitlePunctuationForTest(
+    String text,
+    List<String> knownSongTitles,
+  ) =>
+      _normalizeJapaneseSongTitlePunctuation(text, knownSongTitles);
 
   @visibleForTesting
   static String? parseAlignedJapaneseTranslationsForTest({

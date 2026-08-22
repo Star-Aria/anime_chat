@@ -28,6 +28,31 @@ void main() {
     ]);
   });
 
+  test('Sentence splitter isolates and splits Japanese quotations', () {
+    final sentences = EmotionAnalyzer.splitSentences(
+      'この歌詞が好きです。「壊れぬように。壊さぬように」そう思います。',
+    );
+
+    expect(sentences, [
+      'この歌詞が好きです。',
+      '「壊れぬように。」',
+      '「壊さぬように」',
+      'そう思います。',
+    ]);
+  });
+
+  test('Sentence splitter isolates inline Japanese dialogue', () {
+    final sentences = EmotionAnalyzer.splitSentences(
+      '彼女は「MyGO!!!!!を続けたい」と言いました。',
+    );
+
+    expect(sentences, [
+      '彼女は',
+      '「MyGO!!!!!を続けたい」',
+      'と言いました。',
+    ]);
+  });
+
   group('Music share trigger', () {
     test('triggers only for explicit share or playback requests', () {
       expect(
@@ -389,12 +414,56 @@ void main() {
         artist: 'Ave Mujica',
         band: 'Ave Mujica',
         lyricsPath: 'music/lyrics/ave_mujica_killkiss.txt',
+        timedLyricsPath: 'music/lyrics/ave_mujica_killkiss.json',
         lyrics: ['第一行', '第二行'],
       );
 
       final json = attachment.toJson();
       expect(json, isNot(contains('lyrics')));
       expect(json['lyricsPath'], 'music/lyrics/ave_mujica_killkiss.txt');
+      expect(
+        json['timedLyricsPath'],
+        'music/lyrics/ave_mujica_killkiss.json',
+      );
+    });
+
+    test('keeps timed display lyrics separate from discussion lyrics',
+        () async {
+      final catalog = await MusicService.loadCatalog();
+      const expectedPaths = {
+        'ave_mujica_killkiss': 'ave_mujica_killkiss',
+        'ave_mujica_georgette': 'ave_mujica_georgette',
+        'ave_mujica_subarashiki_sekai': 'ave_mujica_subarashiki_sekai',
+      };
+
+      for (final pathEntry in expectedPaths.entries) {
+        final song = catalog.firstWhere((item) => item.id == pathEntry.key);
+        final basename = pathEntry.value;
+        expect(song.lyricsPath, 'music/lyrics/$basename.txt');
+        expect(song.timedLyricsPath, 'music/lyrics/$basename.json');
+        expect(song.lyrics, isNotEmpty, reason: song.title);
+
+        final timedJson = jsonDecode(
+          File(song.timedLyricsPath!).readAsStringSync(),
+        ) as Map<String, dynamic>;
+        expect(
+          timedJson.keys,
+          unorderedEquals(['lrc', 'tlyric']),
+          reason: song.title,
+        );
+        expect((timedJson['lrc'] as Map)['lyric'], contains(RegExp(r'\[\d')));
+        expect(
+          (timedJson['tlyric'] as Map)['lyric'],
+          contains(RegExp(r'\[\d')),
+        );
+        if (song.id == 'ave_mujica_georgette') {
+          expect(
+            (timedJson['lrc'] as Map)['lyric'],
+            contains('[01:39.705]\n[01:46.700]'),
+            reason: '空时间戳必须保留为上一句的人声结束边界',
+          );
+        }
+      }
     });
 
     test('lyrics can be stored as editable lines and legacy text', () {
@@ -434,6 +503,16 @@ void main() {
         expect(context, contains('【本地歌词】\n第一行歌词\n第二行歌词\n\n第四行歌词'));
       } finally {
         await lyricsFile.writeAsString(original);
+      }
+    });
+
+    test('loads embedded cover art from every local music file', () async {
+      final catalog = await MusicService.loadCatalog();
+
+      for (final song in catalog) {
+        final cover = await MusicService.loadCoverBytes(song);
+        expect(cover, isNotNull, reason: song.title);
+        expect(cover, isNotEmpty, reason: song.title);
       }
     });
   });
@@ -595,6 +674,22 @@ void main() {
         '彼女は“もう一度始めましょう”と言いました。',
       ),
       isFalse,
+    );
+  });
+
+  test('Japanese song titles use corner brackets without changing albums', () {
+    final normalized = ApiService.normalizeJapaneseSongTitlePunctuationForTest(
+      '次は『梵音打』です。アルバムは『迷跡波』です。',
+      const ['梵音打', '猛独侵袭'],
+    );
+
+    expect(normalized, '次は「梵音打」です。アルバムは『迷跡波』です。');
+    expect(
+      ApiService.normalizeJapaneseSongTitlePunctuationForTest(
+        '「迷うことに迷わないでいいよ」という歌詞です。',
+        const ['梵音打'],
+      ),
+      '「迷うことに迷わないでいいよ」という歌詞です。',
     );
   });
 

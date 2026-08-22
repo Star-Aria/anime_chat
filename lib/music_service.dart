@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
+import 'dart:typed_data';
 
 import 'character_config.dart';
 import 'name_pronunciation.dart';
@@ -17,6 +18,7 @@ class MusicService {
   };
 
   static final Random _random = Random();
+  static final Map<String, Future<Uint8List?>> _coverCache = {};
 
   static bool isMusicShareRequest(String userText) {
     final text = userText.trim();
@@ -100,6 +102,149 @@ class MusicService {
     } catch (_) {
       return const [];
     }
+  }
+
+  static Future<Uint8List?> loadCoverBytes(MusicAttachment attachment) {
+    final coverPath = attachment.coverPath?.trim() ?? '';
+    final audioPath = attachment.localAudioPath?.trim() ?? '';
+    final cacheKey = '$coverPath|$audioPath';
+    if (cacheKey == '|') return Future.value(null);
+
+    return _coverCache.putIfAbsent(
+      cacheKey,
+      () => _loadCoverBytes(coverPath: coverPath, audioPath: audioPath),
+    );
+  }
+
+  static Future<Uint8List?> _loadCoverBytes({
+    required String coverPath,
+    required String audioPath,
+  }) async {
+    if (coverPath.isNotEmpty) {
+      final coverFile = File(AppPaths.resolve(coverPath));
+      if (await coverFile.exists()) return coverFile.readAsBytes();
+    }
+
+    if (audioPath.isEmpty) return null;
+    final audioFile = File(AppPaths.resolve(audioPath));
+    if (!await audioFile.exists()) return null;
+    return _readEmbeddedId3Cover(audioFile);
+  }
+
+  static Future<Uint8List?> _readEmbeddedId3Cover(File audioFile) async {
+    RandomAccessFile? handle;
+    try {
+      handle = await audioFile.open();
+      final header = await handle.read(10);
+      if (header.length < 10 ||
+          header[0] != 0x49 ||
+          header[1] != 0x44 ||
+          header[2] != 0x33) {
+        return null;
+      }
+
+      final version = header[3];
+      if (version != 3 && version != 4) return null;
+      final tagSize = _readSynchsafeInt(header, 6);
+      if (tagSize <= 0) return null;
+
+      final tagBody = await handle.read(tagSize);
+      final tag = Uint8List(10 + tagBody.length)
+        ..setRange(0, 10, header)
+        ..setRange(10, 10 + tagBody.length, tagBody);
+      return _extractApicImage(tag, version, header[5]);
+    } catch (_) {
+      return null;
+    } finally {
+      await handle?.close();
+    }
+  }
+
+  static Uint8List? _extractApicImage(
+    Uint8List tag,
+    int version,
+    int tagFlags,
+  ) {
+    var offset = 10;
+    if ((tagFlags & 0x40) != 0 && offset + 4 <= tag.length) {
+      final extendedSize = version == 4
+          ? _readSynchsafeInt(tag, offset)
+          : _readBigEndianInt(tag, offset);
+      offset += version == 4 ? extendedSize : extendedSize + 4;
+    }
+
+    while (offset + 10 <= tag.length) {
+      final frameId = String.fromCharCodes(tag.sublist(offset, offset + 4));
+      if (!RegExp(r'^[A-Z0-9]{4}$').hasMatch(frameId)) break;
+
+      final frameSize = version == 4
+          ? _readSynchsafeInt(tag, offset + 4)
+          : _readBigEndianInt(tag, offset + 4);
+      final payloadStart = offset + 10;
+      final payloadEnd = payloadStart + frameSize;
+      if (frameSize <= 0 || payloadEnd > tag.length) break;
+
+      if (frameId == 'APIC') {
+        var payload = Uint8List.sublistView(tag, payloadStart, payloadEnd);
+        if ((tagFlags & 0x80) != 0) {
+          payload = _removeId3Unsynchronization(payload);
+        }
+        final imageStart = _findImageSignature(payload);
+        if (imageStart >= 0) {
+          return Uint8List.fromList(payload.sublist(imageStart));
+        }
+      }
+      offset = payloadEnd;
+    }
+    return null;
+  }
+
+  static int _findImageSignature(Uint8List bytes) {
+    const signatures = <List<int>>[
+      [0xFF, 0xD8, 0xFF],
+      [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A],
+    ];
+    for (var index = 0; index < bytes.length; index++) {
+      for (final signature in signatures) {
+        if (index + signature.length > bytes.length) continue;
+        var matches = true;
+        for (var i = 0; i < signature.length; i++) {
+          if (bytes[index + i] != signature[i]) {
+            matches = false;
+            break;
+          }
+        }
+        if (matches) return index;
+      }
+    }
+    return -1;
+  }
+
+  static Uint8List _removeId3Unsynchronization(Uint8List bytes) {
+    final restored = <int>[];
+    for (var i = 0; i < bytes.length; i++) {
+      restored.add(bytes[i]);
+      if (bytes[i] == 0xFF && i + 1 < bytes.length && bytes[i + 1] == 0x00) {
+        i++;
+      }
+    }
+    return Uint8List.fromList(restored);
+  }
+
+  static int _readSynchsafeInt(List<int> bytes, int offset) {
+    if (offset + 4 > bytes.length) return 0;
+    return ((bytes[offset] & 0x7F) << 21) |
+        ((bytes[offset + 1] & 0x7F) << 14) |
+        ((bytes[offset + 2] & 0x7F) << 7) |
+        (bytes[offset + 3] & 0x7F);
+  }
+
+  static int _readBigEndianInt(List<int> bytes, int offset) {
+    if (offset + 4 > bytes.length) return 0;
+    return (bytes[offset] << 24) |
+        (bytes[offset + 1] << 16) |
+        (bytes[offset + 2] << 8) |
+        bytes[offset + 3];
   }
 
   static MusicAttachment _loadLyricsFromPath(MusicAttachment attachment) {
