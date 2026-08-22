@@ -179,6 +179,10 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
   SoundHandle? _musicHandle;
   Timer? _musicPositionTimer;
   final Map<String, Future<_MusicLyrics?>> _musicLyricsCache = {};
+  final Map<String, Duration> _musicSeekPreviewPositions = {};
+  final Map<String, double> _musicSeekPreviewFractions = {};
+  final Map<String, Duration> _musicSavedPositions = {};
+  final Map<String, Duration> _musicKnownDurations = {};
   bool _primaryIsActive = true;
   AudioPlayer get _activePlayer =>
       _primaryIsActive ? _audioPlayerPrimary : _audioPlayerSecondary;
@@ -1115,13 +1119,18 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
       }
       final position = _musicEngine.getPosition(handle);
       if (!mounted || position == _musicPosition) return;
-      setState(() => _musicPosition = position);
+      setState(() {
+        _musicPosition = position;
+        final musicId = _currentPlayingMusicId;
+        if (musicId != null) _musicSavedPositions[musicId] = position;
+      });
     } catch (error) {
       debugPrint('读取音乐播放进度失败：$error');
     }
   }
 
   void _finishMusicPlayback() {
+    final finishedMusicId = _currentPlayingMusicId;
     _musicPositionTimer?.cancel();
     _musicPositionTimer = null;
     _musicHandle = null;
@@ -1130,6 +1139,9 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
       ..reset();
     if (!mounted) return;
     setState(() {
+      if (finishedMusicId != null) {
+        _musicSavedPositions[finishedMusicId] = Duration.zero;
+      }
       _isMusicPlaying = false;
       _currentPlayingMusicId = null;
       _musicPosition = Duration.zero;
@@ -1190,29 +1202,8 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
       });
     }
 
-    final localPath = attachment.localAudioPath?.trim();
-    final previewUrl = attachment.previewUrl?.trim();
-
     try {
-      await _ensureMusicEngine();
-      AudioSource? source;
-      if (localPath != null && localPath.isNotEmpty) {
-        final resolvedPath = AppPaths.resolve(localPath);
-        if (await File(resolvedPath).exists()) {
-          source = await _musicEngine.loadFile(
-            resolvedPath,
-            mode: LoadMode.memory,
-          );
-        } else {
-          debugPrint('音乐文件不存在，尝试预览链接：$resolvedPath');
-        }
-      }
-      if (source == null && previewUrl != null && previewUrl.isNotEmpty) {
-        source = await _musicEngine.loadUrl(
-          previewUrl,
-          mode: LoadMode.memory,
-        );
-      }
+      final source = await _loadMusicAttachmentSource(attachment);
       if (source == null) {
         debugPrint('音乐附件没有可播放来源：${attachment.title}');
         return;
@@ -1225,11 +1216,25 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
       _musicSource = source;
       _musicHandle = _musicEngine.play(source, volume: 1);
       final duration = _musicEngine.getLength(source);
+      final savedPosition =
+          _musicSavedPositions[attachment.id] ?? Duration.zero;
+      final resumedPosition = Duration(
+        milliseconds: savedPosition.inMilliseconds.clamp(
+          0,
+          duration.inMilliseconds,
+        ),
+      );
+      if (resumedPosition > Duration.zero) {
+        _musicEngine.seek(_musicHandle!, resumedPosition);
+      }
       setState(() {
         _currentPlayingMusicId = attachment.id;
         _isMusicPlaying = true;
-        _musicPosition = Duration.zero;
+        _musicPosition = resumedPosition;
         _musicDuration = duration;
+        _musicKnownDurations[attachment.id] = duration;
+        _musicSeekPreviewPositions.remove(attachment.id);
+        _musicSeekPreviewFractions.remove(attachment.id);
       });
       _musicVisualController.repeat();
       _startMusicPositionUpdates();
@@ -1250,12 +1255,39 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
 
   Future<void> _seekMusic(
     MusicAttachment attachment,
-    double milliseconds,
-  ) async {
-    if (_currentPlayingMusicId != attachment.id ||
-        _musicDuration <= Duration.zero) {
-      return;
+    double sliderValue, {
+    required bool normalized,
+  }) async {
+    if (_currentPlayingMusicId != attachment.id) {
+      await _stopAudio();
+      await _disposeCurrentMusicSource();
+      _musicVisualController
+        ..stop()
+        ..reset();
+      try {
+        final source = await _loadMusicAttachmentSource(attachment);
+        if (source == null) return;
+        if (!mounted) {
+          await _musicEngine.disposeSource(source);
+          return;
+        }
+        _musicSource = source;
+        _musicHandle = _musicEngine.play(source, volume: 1, paused: true);
+        _musicDuration = _musicEngine.getLength(source);
+        _musicKnownDurations[attachment.id] = _musicDuration;
+        _currentPlayingMusicId = attachment.id;
+        _isMusicPlaying = false;
+        _startMusicPositionUpdates();
+      } catch (error) {
+        debugPrint('首次拖动时加载音乐失败：$error');
+        await _disposeMusicBackend();
+        return;
+      }
     }
+    if (_musicDuration <= Duration.zero) return;
+    final milliseconds = normalized
+        ? sliderValue.clamp(0.0, 1.0) * _musicDuration.inMilliseconds
+        : sliderValue;
     final target = Duration(
       milliseconds:
           milliseconds.round().clamp(0, _musicDuration.inMilliseconds),
@@ -1264,7 +1296,31 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
     if (handle == null || !_musicEngine.isInitialized) return;
     _musicEngine.seek(handle, target);
     if (!mounted) return;
-    setState(() => _musicPosition = target);
+    setState(() {
+      _musicPosition = target;
+      _musicSavedPositions[attachment.id] = target;
+      _musicSeekPreviewPositions.remove(attachment.id);
+      _musicSeekPreviewFractions.remove(attachment.id);
+    });
+  }
+
+  Future<AudioSource?> _loadMusicAttachmentSource(
+    MusicAttachment attachment,
+  ) async {
+    await _ensureMusicEngine();
+    final localPath = attachment.localAudioPath?.trim();
+    if (localPath != null && localPath.isNotEmpty) {
+      final resolvedPath = AppPaths.resolve(localPath);
+      if (await File(resolvedPath).exists()) {
+        return _musicEngine.loadFile(resolvedPath, mode: LoadMode.memory);
+      }
+      debugPrint('音乐文件不存在，尝试预览链接：$resolvedPath');
+    }
+    final previewUrl = attachment.previewUrl?.trim();
+    if (previewUrl != null && previewUrl.isNotEmpty) {
+      return _musicEngine.loadUrl(previewUrl, mode: LoadMode.memory);
+    }
+    return null;
   }
 
   Future<void> _stopMusic() async {
@@ -3910,17 +3966,25 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
         attachment.band.trim(),
     ];
     final subtitle = subtitleParts.join(' · ');
-    final fallbackDuration = attachment.durationMs == null
-        ? Duration.zero
-        : Duration(milliseconds: attachment.durationMs!);
+    final fallbackDuration = _musicKnownDurations[attachment.id] ??
+        (attachment.durationMs == null
+            ? Duration.zero
+            : Duration(milliseconds: attachment.durationMs!));
     final duration = isSelected ? _musicDuration : fallbackDuration;
-    final position = isSelected ? _musicPosition : Duration.zero;
+    final position = isSelected
+        ? _musicPosition
+        : (_musicSeekPreviewPositions[attachment.id] ??
+            _musicSavedPositions[attachment.id] ??
+            Duration.zero);
     final hasDuration = duration > Duration.zero;
     final maxMilliseconds =
         hasDuration ? duration.inMilliseconds.toDouble() : 1.0;
     final currentMilliseconds = position.inMilliseconds
         .clamp(0, hasDuration ? duration.inMilliseconds : 0)
         .toDouble();
+    final sliderValue = hasDuration
+        ? currentMilliseconds
+        : (_musicSeekPreviewFractions[attachment.id] ?? 0.0);
     final lyricsFuture = _loadMusicLyrics(attachment);
 
     return ConstrainedBox(
@@ -3965,6 +4029,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
                 _buildMusicVinyl(
                   attachment: attachment,
                   canPlay: canPlay,
+                  isSelected: isSelected,
                   isPlaying: isPlaying,
                   accentColor: accentColor,
                 ),
@@ -3987,20 +4052,6 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
                       const SizedBox(height: 4),
                       Row(
                         children: [
-                          AnimatedSwitcher(
-                            duration: const Duration(milliseconds: 180),
-                            child: Icon(
-                              isPlaying
-                                  ? Icons.graphic_eq_rounded
-                                  : Icons.album_outlined,
-                              key: ValueKey(isPlaying),
-                              size: 13,
-                              color: isPlaying
-                                  ? accentColor
-                                  : const Color(0xFF64748B),
-                            ),
-                          ),
-                          const SizedBox(width: 5),
                           Expanded(
                             child: Text(
                               canPlay ? subtitle : '音频不可用',
@@ -4058,61 +4109,97 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
                             ),
                           ),
                           child: Slider(
-                            value: currentMilliseconds,
+                            value: sliderValue,
                             max: maxMilliseconds,
-                            onChanged: isSelected && hasDuration
-                                ? (value) => _seekMusic(attachment, value)
+                            onChanged: canPlay
+                                ? (value) {
+                                    setState(() {
+                                      if (hasDuration) {
+                                        _musicSeekPreviewPositions[
+                                            attachment.id] = Duration(
+                                          milliseconds: value.round(),
+                                        );
+                                      } else {
+                                        _musicSeekPreviewFractions[
+                                            attachment.id] = value;
+                                      }
+                                      if (isSelected && hasDuration) {
+                                        _musicPosition = Duration(
+                                          milliseconds: value.round(),
+                                        );
+                                      }
+                                    });
+                                  }
+                                : null,
+                            onChangeEnd: canPlay
+                                ? (value) => _seekMusic(
+                                      attachment,
+                                      value,
+                                      normalized: !hasDuration,
+                                    )
                                 : null,
                           ),
                         ),
                       ),
-                      Row(
-                        children: [
-                          Text(
-                            _formatMusicDuration(position),
-                            style: const TextStyle(
-                              color: Color(0xFF5B6880),
-                              fontSize: 10,
-                              fontFeatures: [FontFeature.tabularFigures()],
+                      SizedBox(
+                        height: 30,
+                        child: Stack(
+                          alignment: Alignment.center,
+                          children: [
+                            Align(
+                              alignment: Alignment.centerLeft,
+                              child: Text(
+                                _formatMusicDuration(position),
+                                style: const TextStyle(
+                                  color: Color(0xFF5B6880),
+                                  fontSize: 10,
+                                  fontFeatures: [
+                                    FontFeature.tabularFigures(),
+                                  ],
+                                ),
+                              ),
                             ),
-                          ),
-                          const Spacer(),
-                          Text(
-                            hasDuration
-                                ? _formatMusicDuration(duration)
-                                : '--:--',
-                            style: const TextStyle(
-                              color: Color(0xFF5B6880),
-                              fontSize: 10,
-                              fontFeatures: [FontFeature.tabularFigures()],
-                            ),
-                          ),
-                          const SizedBox(width: 9),
-                          Tooltip(
-                            message: isPlaying ? '暂停' : '播放',
-                            child: Material(
-                              color: accentColor.withValues(alpha: 0.88),
-                              shape: const CircleBorder(),
-                              child: InkWell(
-                                customBorder: const CircleBorder(),
-                                onTap: canPlay
-                                    ? () => _toggleMusicAttachment(attachment)
-                                    : null,
-                                child: SizedBox(
-                                  width: 30,
-                                  height: 30,
-                                  child: Icon(
-                                    isPlaying
-                                        ? Icons.pause_rounded
-                                        : Icons.play_arrow_rounded,
-                                    color: Colors.white,
-                                    size: 20,
+                            Tooltip(
+                              message: isPlaying ? '暂停' : '播放',
+                              child: Material(
+                                color: accentColor.withValues(alpha: 0.88),
+                                shape: const CircleBorder(),
+                                child: InkWell(
+                                  customBorder: const CircleBorder(),
+                                  onTap: canPlay
+                                      ? () => _toggleMusicAttachment(attachment)
+                                      : null,
+                                  child: SizedBox(
+                                    width: 30,
+                                    height: 30,
+                                    child: Icon(
+                                      isPlaying
+                                          ? Icons.pause_rounded
+                                          : Icons.play_arrow_rounded,
+                                      color: Colors.white,
+                                      size: 20,
+                                    ),
                                   ),
                                 ),
                               ),
                             ),
-                          ),
-                        ],
+                            Align(
+                              alignment: Alignment.centerRight,
+                              child: Text(
+                                hasDuration
+                                    ? _formatMusicDuration(duration)
+                                    : '--:--',
+                                style: const TextStyle(
+                                  color: Color(0xFF5B6880),
+                                  fontSize: 10,
+                                  fontFeatures: [
+                                    FontFeature.tabularFigures(),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
                     ],
                   ),
@@ -4128,6 +4215,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
   Widget _buildMusicVinyl({
     required MusicAttachment attachment,
     required bool canPlay,
+    required bool isSelected,
     required bool isPlaying,
     required Color accentColor,
   }) {
@@ -4175,6 +4263,35 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
       ),
     );
 
+    Widget vinylLayers(double angle) {
+      return Stack(
+        alignment: Alignment.center,
+        children: [
+          Container(
+            width: 98,
+            height: 98,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              border: Border.all(
+                color: accentColor.withValues(
+                  alpha: isPlaying ? 0.34 : 0.18,
+                ),
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: accentColor.withValues(
+                    alpha: isPlaying ? 0.14 : 0.06,
+                  ),
+                  blurRadius: isPlaying ? 18 : 10,
+                ),
+              ],
+            ),
+          ),
+          Transform.rotate(angle: angle, child: disc),
+        ],
+      );
+    }
+
     return SizedBox(
       width: 112,
       height: 112,
@@ -4185,53 +4302,14 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
           child: InkResponse(
             radius: 56,
             onTap: canPlay ? () => _toggleMusicAttachment(attachment) : null,
-            child: AnimatedBuilder(
-              animation: _musicVisualController,
-              child: disc,
-              builder: (context, child) {
-                return Stack(
-                  alignment: Alignment.center,
-                  children: [
-                    Container(
-                      width: 98,
-                      height: 98,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        border: Border.all(
-                          color: accentColor.withValues(
-                            alpha: isPlaying ? 0.34 : 0.18,
-                          ),
-                        ),
-                        boxShadow: [
-                          BoxShadow(
-                            color: accentColor.withValues(
-                              alpha: isPlaying ? 0.14 : 0.06,
-                            ),
-                            blurRadius: isPlaying ? 18 : 10,
-                          ),
-                        ],
-                      ),
+            child: isSelected
+                ? AnimatedBuilder(
+                    animation: _musicVisualController,
+                    builder: (context, _) => vinylLayers(
+                      _musicVisualController.value * 2 * pi,
                     ),
-                    Transform.rotate(
-                      angle: _musicVisualController.value * 2 * pi,
-                      child: child,
-                    ),
-                    Container(
-                      width: 7,
-                      height: 7,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: const Color(0xFFEAF0F8),
-                        border: Border.all(
-                          color: const Color(0xFF20283A),
-                          width: 1.5,
-                        ),
-                      ),
-                    ),
-                  ],
-                );
-              },
-            ),
+                  )
+                : vinylLayers(0),
           ),
         ),
       ),

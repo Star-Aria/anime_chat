@@ -64,6 +64,21 @@ void main() {
         MusicService.isMusicShareRequest('能放一首mujica的歌给我听吗'),
         isTrue,
       );
+      expect(MusicService.isMusicShareRequest('我们一起听歌吧'), isTrue);
+      expect(MusicService.isMusicShareRequest('陪我听听音乐好吗'), isTrue);
+      expect(MusicService.isMusicShareRequest('听歌的话就一起吧'), isTrue);
+      expect(
+        MusicService.isMusicShareRequest('祥祥，一起听下MyGO的《无路矢》吧'),
+        isTrue,
+      );
+      expect(
+        MusicService.isMusicShareRequest(
+          '来首《无路矢》吧',
+          knownSongTitles: const ['无路矢'],
+        ),
+        isTrue,
+      );
+      expect(MusicService.isMusicShareRequest('我们一起听他说完'), isFalse);
     });
 
     test('does not attach audio for song opinion questions', () {
@@ -77,6 +92,27 @@ void main() {
         MusicService.isMusicShareRequest('你比较喜欢mujica的哪些歌呢？'),
         isFalse,
       );
+    });
+
+    test('selects the requested song for a shared-listening message', () async {
+      final selected = await MusicService.pickAttachmentForRequest(
+        userText: '祥祥，一起听下MyGO的《无路矢》吧',
+        character: CharacterConfig.getCharacterById('sakiko'),
+      );
+
+      expect(selected?.title, '无路矢');
+      expect(selected?.band, 'MyGO!!!!!');
+    });
+
+    test('recognizes a concise request through the catalog song title',
+        () async {
+      final selected = await MusicService.pickAttachmentForRequest(
+        userText: '来首《无路矢》吧',
+        character: CharacterConfig.getCharacterById('sakiko'),
+      );
+
+      expect(selected?.title, '无路矢');
+      expect(selected?.band, 'MyGO!!!!!');
     });
 
     test('prefers songs not already shared in the conversation', () async {
@@ -206,7 +242,7 @@ void main() {
       expect(context, contains('【本地歌词】\n透明な空気に触れて\nまだ名前のない光へ'));
       expect(
         context,
-        contains('如果引用歌词，只能引用本地歌词中的日文原词或中文翻译'),
+        contains('如果引用歌词，只能引用提供的中文翻译'),
       );
       expect(context, contains('跳过歌词里的英文单词、英文短语和英文句子'));
       expect(context, contains('歌名与专有名词不受此限制'));
@@ -230,12 +266,59 @@ void main() {
       expect(context, contains('Symbol III'));
       expect(context, contains('Symbol IV'));
       expect(context, contains('不要只说《Symbol》'));
+      expect(context, contains('在命运玩弄下发出无声之音'));
+      expect(context, isNot(contains('弄られて垂れ流す 音のない音')));
+      expect(context, isNot(contains('【日文原词】')));
       expect(
         context,
-        contains('如果引用歌词，只能引用本地歌词中的日文原词或中文翻译'),
+        contains('如果引用歌词，只能引用提供的中文翻译'),
       );
       expect(context, contains('跳过歌词里的英文单词、英文短语和英文句子'));
       expect(context, contains('歌名与专有名词不受此限制'));
+    });
+
+    test('isolates Chinese lyrics from Japanese lyrics in response prompts',
+        () {
+      const attachment = MusicAttachment(
+        id: 'bilingual_test',
+        title: '无路矢',
+        artist: 'MyGO!!!!!',
+        band: 'MyGO!!!!!',
+        lyrics: [
+          '【日文原词】',
+          '生まれた地球にいるはずなのに',
+          '本当は僕だけが違う星から来たみたいなんだ',
+          '',
+          '【中文翻译】',
+          '明明就身处我所诞生的地球',
+          '好像只有我从截然不同的星球而来',
+        ],
+      );
+
+      final lyrics = MusicService.lyricsForChineseResponseForTest(attachment);
+      final context = MusicService.buildPromptContext(attachment);
+
+      expect(lyrics, contains('明明就身处我所诞生的地球'));
+      expect(lyrics, isNot(contains('生まれた地球')));
+      expect(context, contains('好像只有我从截然不同的星球而来'));
+      expect(context, isNot(contains('本当は僕だけが')));
+      expect(context, isNot(contains('【日文原词】')));
+    });
+
+    test('Japanese validation accepts kanji-heavy lyrics but rejects Chinese',
+        () {
+      expect(
+        ApiService.isCleanJapaneseForTtsForTest(
+          '歌詞の「生まれた地球にいるはずなのに、本当は僕だけが違う星から来たみたいなんだ」が心に残りますわ。',
+        ),
+        isTrue,
+      );
+      expect(
+        ApiService.isCleanJapaneseForTtsForTest(
+          '歌詞の「生まれた地球にいるはずなのに，可为何好像只有我違う星から来たみたいなんだ」が心に残りますわ。',
+        ),
+        isFalse,
+      );
     });
 
     test('passes only the current song bilingual lyrics to translation',
@@ -266,6 +349,13 @@ void main() {
         protected['placeholders'],
         containsPair('__JP_LYRIC_0__', '弄られて垂れ流す 音のない音'),
       );
+
+      final promptReference =
+          ApiService.japaneseLyricsReferenceForPromptForTest(reference);
+      final promptReferenceText = jsonEncode(promptReference);
+      expect(promptReferenceText, contains('弄られて垂れ流す 音のない音'));
+      expect(promptReferenceText, isNot(contains('在命运玩弄下发出无声之音')));
+      expect(promptReferenceText, isNot(contains('chinese')));
     });
 
     test('does not pass lyrics when no current song is identified', () async {
@@ -492,7 +582,8 @@ void main() {
         () async {
       final catalog = await MusicService.loadCatalog();
       final timedLyricSongs = catalog
-          .where((song) => song.band == 'Ave Mujica' || song.band == 'MyGO!!!!!')
+          .where(
+              (song) => song.band == 'Ave Mujica' || song.band == 'MyGO!!!!!')
           .toList();
       expect(
         timedLyricSongs.where((song) => song.band == 'Ave Mujica'),
@@ -1234,6 +1325,34 @@ void main() {
       );
 
       expect(parsed, '「__JP_LYRIC_0__」という一節が好きです。');
+    });
+
+    test('rejects a shared-kanji Chinese source fragment left untranslated',
+        () {
+      final parsed = ApiService.parseAlignedJapaneseTranslationsForTest(
+        sourceUnits: ['听到这段旋律，今日心情非常安定。'],
+        response: '''
+{"translations":[
+  {"source_index":1,"text":"この旋律を聴くと、今日心情非常安定です。"}
+]}
+''',
+      );
+
+      expect(parsed, isNull);
+    });
+
+    test('does not treat a protected song title as untranslated Chinese', () {
+      final parsed = ApiService.parseAlignedJapaneseTranslationsForTest(
+        sourceUnits: ['我想听__JP_TITLE_0__。'],
+        placeholders: const {'__JP_TITLE_0__': '一同歌唱一同奏响'},
+        response: '''
+{"translations":[
+  {"source_index":1,"text":"__JP_TITLE_0__を聴きたいです。"}
+]}
+''',
+      );
+
+      expect(parsed, '__JP_TITLE_0__を聴きたいです。');
     });
 
     test('rejects an unsupported passive voice shift', () {

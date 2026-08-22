@@ -1,7 +1,8 @@
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
-import 'dart:typed_data';
+
+import 'package:flutter/foundation.dart';
 
 import 'character_config.dart';
 import 'name_pronunciation.dart';
@@ -10,7 +11,7 @@ import 'storage_service.dart';
 
 class MusicService {
   static const String catalogPath = r'music\music_catalog.json';
-  static const String _lyricsQuotationRule = '如果引用歌词，只能引用本地歌词中的日文原词或中文翻译；'
+  static const String _lyricsQuotationRule = '如果引用歌词，只能引用提供的中文翻译；'
       '跳过歌词里的英文单词、英文短语和英文句子。歌名与专有名词不受此限制。';
   static const Set<String> _localOnlyDiscussionBands = {
     'Ave Mujica',
@@ -20,18 +21,33 @@ class MusicService {
   static final Random _random = Random();
   static final Map<String, Future<Uint8List?>> _coverCache = {};
 
-  static bool isMusicShareRequest(String userText) {
+  static bool isMusicShareRequest(
+    String userText, {
+    Iterable<String> knownSongTitles = const [],
+  }) {
     final text = userText.trim();
     if (text.isEmpty) return false;
-    final asksForShare = RegExp(
-      r'分享|推荐|推一首|来一首|发一首|放一首|听一首|想听|最近喜欢|你们乐队',
-      caseSensitive: false,
-    ).hasMatch(text);
-    final mentionsMusic = RegExp(
+    final normalized = _normalizeMusicTitleForMatch(text);
+    final mentionsKnownSong = knownSongTitles.any((title) {
+      final normalizedTitle = _normalizeMusicTitleForMatch(title);
+      return normalizedTitle.isNotEmpty && normalized.contains(normalizedTitle);
+    });
+    final mentionsMusicKind = RegExp(
       r'歌|歌曲|曲子|音乐|乐队|バンド|music|song|mygo|mujica|crychic',
       caseSensitive: false,
     ).hasMatch(text);
-    return asksForShare && mentionsMusic;
+    if (!mentionsMusicKind && !mentionsKnownSong) return false;
+
+    final hasMusicRequestAction = RegExp(
+      r'来|放|播|听|分享|推荐|推|发',
+      caseSensitive: false,
+    ).hasMatch(text);
+    if (!hasMusicRequestAction) return false;
+
+    return RegExp(
+      r'请|想|要|能|可以|一起|一块|陪|首|一下|下|听听|吧|呗|嘛|吗|好不好|好吗',
+      caseSensitive: false,
+    ).hasMatch(text);
   }
 
   static Future<MusicAttachment?> pickAttachmentForRequest({
@@ -39,10 +55,14 @@ class MusicService {
     required Character character,
     List<Message> conversationHistory = const [],
   }) async {
-    if (!isMusicShareRequest(userText)) return null;
-
     final catalog = await loadCatalog();
     if (catalog.isEmpty) return null;
+    if (!isMusicShareRequest(
+      userText,
+      knownSongTitles: catalog.map((song) => song.title),
+    )) {
+      return null;
+    }
 
     final preferredBand = _preferredBand(userText, character.id);
     final exactTitle = _titleMentionedInText(userText, catalog);
@@ -285,7 +305,7 @@ class MusicService {
         : '程序会在本条消息后附带歌曲卡片；如果本地音频暂未放入，卡片会先显示歌曲信息。';
     final note = attachment.note?.trim();
     final description = attachment.description?.trim();
-    final lyrics = attachment.lyricsText;
+    final lyrics = _lyricsForChineseResponse(attachment);
     final profileLines = _musicProfileLines(attachment);
     return '''
 【本轮音乐分享附件】
@@ -479,7 +499,7 @@ ${trackTitles.map((title) => '- $title').join('\n')}
   static String _discussionSongProfile(MusicAttachment attachment) {
     final note = attachment.note?.trim();
     final description = attachment.description?.trim();
-    final lyrics = attachment.lyricsText;
+    final lyrics = _lyricsForChineseResponse(attachment);
     final profileLines = _musicProfileLines(attachment);
     return '''
 用户提到的本地歌曲：
@@ -510,6 +530,24 @@ ${lyrics.isEmpty ? '' : '本地歌词：\n$lyrics'}
       line('推荐角度', attachment.recommendationAngles),
     ].where((line) => line.isNotEmpty).toList(growable: false);
   }
+
+  static String _lyricsForChineseResponse(MusicAttachment attachment) {
+    final lines = attachment.lyrics;
+    final japaneseMarker = lines.indexOf('【日文原词】');
+    final chineseMarker = lines.indexOf('【中文翻译】');
+    if (japaneseMarker < 0 || chineseMarker <= japaneseMarker) {
+      return attachment.lyricsText;
+    }
+    return lines
+        .sublist(chineseMarker + 1)
+        .map((line) => line.trimRight())
+        .join('\n')
+        .trim();
+  }
+
+  @visibleForTesting
+  static String lyricsForChineseResponseForTest(MusicAttachment attachment) =>
+      _lyricsForChineseResponse(attachment);
 
   static String _preferredBand(String userText, String characterId) {
     final normalized = userText.toLowerCase();

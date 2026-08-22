@@ -1662,6 +1662,30 @@ $responseShapeReminder
     );
   }
 
+  static _ProtectedTranslationText _protectKnownSongTitlesForTranslation(
+    String text,
+    List<String> knownSongTitles,
+  ) {
+    var protectedText = text;
+    final placeholders = <String, String>{};
+    final titles = knownSongTitles
+        .map((title) => title.trim())
+        .where((title) => title.isNotEmpty)
+        .toSet()
+        .toList()
+      ..sort((left, right) => right.length.compareTo(left.length));
+    for (final title in titles) {
+      if (!protectedText.contains(title)) continue;
+      final placeholder = '__JP_TITLE_${placeholders.length}__';
+      protectedText = protectedText.replaceAll(title, placeholder);
+      placeholders[placeholder] = title;
+    }
+    return _ProtectedTranslationText(
+      text: protectedText,
+      placeholders: placeholders,
+    );
+  }
+
   static String _restoreProtectedMappedNames(
     String text,
     Map<String, String> placeholders,
@@ -2045,6 +2069,10 @@ $responseShapeReminder
     return !_containsChineseResidueInJapanese(text);
   }
 
+  @visibleForTesting
+  static bool isCleanJapaneseForTtsForTest(String text) =>
+      _isCleanJapaneseForTts(text);
+
   static bool _isAcceptableJapaneseForCharacter(
     String text,
     String? characterId,
@@ -2132,20 +2160,7 @@ $responseShapeReminder
   }
 
   static bool _containsChineseResidueInJapanese(String text) {
-    if (_containsChineseOnlyParenthetical(text)) return true;
-    return _japaneseValidationClauses(text).any(_isStructurallyChineseClause);
-  }
-
-  static bool _containsChineseOnlyParenthetical(String text) {
-    final parentheticalPattern = RegExp(r'[（(]([^（）()]{1,40})[）)]');
-    for (final match in parentheticalPattern.allMatches(text)) {
-      final content = (match.group(1) ?? '').trim();
-      if (content.isEmpty) continue;
-      final kanaCount = _countPattern(content, RegExp(r'[\u3040-\u30ffー]'));
-      final hanCount = _countPattern(content, RegExp(r'[\u4e00-\u9fff]'));
-      if (kanaCount == 0 && hanCount >= 4) return true;
-    }
-    return false;
+    return _japaneseValidationClauses(text).any(_containsChineseFeatures);
   }
 
   static List<String> _japaneseValidationClauses(String text) {
@@ -2156,30 +2171,38 @@ $responseShapeReminder
         .toList();
   }
 
-  static bool _isStructurallyChineseClause(String clause) {
-    final kanaCount = _countPattern(clause, RegExp(r'[\u3040-\u30ffー]'));
-    final hanCount = _countPattern(clause, RegExp(r'[\u4e00-\u9fff]'));
-    if (hanCount == 0) return false;
+  static bool _containsChineseFeatures(String clause) {
+    // These simplified forms do not occur in normal Japanese orthography.
+    // Unlike a kana/kanji ratio, this remains safe for kanji-heavy lyrics,
+    // titles, names and short stage directions.
+    return RegExp(r'[这们吗话听见觉让从为还发应过边进远无头体开关经给样虽却]').hasMatch(clause);
+  }
 
-    if (kanaCount == 0 && hanCount >= 4) return true;
-
-    final meaningfulCount = kanaCount + hanCount;
-    if (meaningfulCount >= 12 && kanaCount / meaningfulCount < 0.18) {
-      return true;
+  static Map<String, dynamic>? _japaneseLyricsReferenceForPrompt(
+    Map<String, dynamic>? bilingualReference,
+  ) {
+    if (bilingualReference == null ||
+        bilingualReference['lyric_pairs'] is! List) {
+      return null;
     }
-
-    final firstKana = RegExp(r'[\u3040-\u30ffー]').firstMatch(clause);
-    if (firstKana == null) return false;
-
-    final leadingText = clause.substring(0, firstKana.start);
-    final leadingHanCount =
-        _countPattern(leadingText, RegExp(r'[\u4e00-\u9fff]'));
-    return leadingHanCount >= 7;
+    final japaneseLyrics = <String>[];
+    for (final pair in bilingualReference['lyric_pairs'] as List) {
+      if (pair is! Map) continue;
+      final japanese = '${pair['japanese'] ?? ''}'.trim();
+      if (japanese.isNotEmpty) japaneseLyrics.add(japanese);
+    }
+    if (japaneseLyrics.isEmpty) return null;
+    return {
+      'song_title': bilingualReference['song_title'],
+      'lyrics': japaneseLyrics,
+    };
   }
 
-  static int _countPattern(String text, RegExp pattern) {
-    return pattern.allMatches(text).length;
-  }
+  @visibleForTesting
+  static Map<String, dynamic>? japaneseLyricsReferenceForPromptForTest(
+    Map<String, dynamic>? bilingualReference,
+  ) =>
+      _japaneseLyricsReferenceForPrompt(bilingualReference);
 
   static Future<String> _translateChineseRoleResponseToJapanese(
     String chineseText, {
@@ -2205,16 +2228,23 @@ $responseShapeReminder
         fixedCharacterCallNames: fixedCharacterCallNames,
         fixedChineseCallNames: fixedChineseCallNames,
       );
+      final protectedTitles = _protectKnownSongTitlesForTranslation(
+        protectedNames.text,
+        knownSongTitles,
+      );
       final protectedText = _ProtectedTranslationText(
-        text: protectedNames.text,
+        text: protectedTitles.text,
         placeholders: {
           ...protectedLyrics.placeholders,
           ...protectedNames.placeholders,
+          ...protectedTitles.placeholders,
         },
       );
       final sourceUnits = _splitChineseTranslationUnits(protectedText.text);
       if (sourceUnits.isEmpty) return '';
       final genderHints = _genderHintsForTranslationPrompt(webContext);
+      final japaneseLyricsReference =
+          _japaneseLyricsReferenceForPrompt(lyricsTranslationReference);
       final retryInstruction = isRetry
           ? '前回の出力は、文対応・主語と目的語・能動と受動・日本語の純粋さ・キャラクターの話し方のいずれかの検査に通りませんでした。今回は原文の各文を一文ずつ照合し、関係を変えずに修正してください。\n'
           : '';
@@ -2223,13 +2253,13 @@ $responseShapeReminder
           for (var i = 0; i < sourceUnits.length; i++)
             {'source_index': i + 1, 'text': sourceUnits[i]},
         ],
-        if (lyricsTranslationReference != null)
-          'lyrics_translation_reference': lyricsTranslationReference,
+        if (japaneseLyricsReference != null)
+          'japanese_lyrics_reference': japaneseLyricsReference,
       });
-      final lyricsInstruction = lyricsTranslationReference == null
+      final lyricsInstruction = japaneseLyricsReference == null
           ? ''
-          : '歌词翻译规则：输入中的 lyrics_translation_reference 只属于当前歌曲。'
-              '当中文原文引用或明显转述其中的 chinese 译词时，必须采用同一 lyric_pair 的 japanese 日文原词，不能把中文歌词自由反译。'
+          : '歌词翻译规则：输入中的 japanese_lyrics_reference 只属于当前歌曲，且只包含日文原词。'
+              '当中文原文引用或明显转述歌词时，优先采用其中对应的日文原词，不能把歌词自由反译。'
               '__JP_LYRIC_0__ 这类歌词占位符必须原样保留在同一个 source_index。'
               '不得主动添加中文原文没有引用的歌词；不得引用含英文单词、短语或句子的歌词行。歌名和专有名词不受此限制。\n';
       final systemPrompt = isRetry
@@ -2241,7 +2271,7 @@ $responseShapeReminder
               '2. 每个输入 source_index 必须对应一个译文，数量、顺序、source_index 必须完全一致；不要跨句移动、合并或拆分。\n'
               '3. text 里只能写日语。严禁保留中文原句、中文动作描写、中文标点说明或“翻译如下”等前置语。\n'
               '4. 如果原文包含中文括号动作，例如“（轻轻点头）”，必须翻成日语括号动作，例如“（そっと頷いて）”。\n'
-              '5. 原文里的 __JP_NAME_0__、__JP_LYRIC_0__ 这类占位符必须在同一个 source_index 的译文里原样保留，一个字符也不能改，不能移动到别的句子。\n'
+              '5. 原文里的 __JP_NAME_0__、__JP_LYRIC_0__、__JP_TITLE_0__ 这类占位符必须在同一个 source_index 的译文里原样保留，一个字符也不能改，不能移动到别的句子。\n'
               '6. 事实范围、动作主体、对象、主动/被动、因果关系和完成程度必须保持一致。\n'
               '7. 必须包含平假名或片假名，写成日本语母语者日常会话里自然会说的句子。\n'
               '8. $genderHints'
@@ -2259,7 +2289,7 @@ $responseShapeReminder
               '2. 入力の各 source_index に対して翻訳を一つだけ出し、件数と順序を完全に一致させる。文を別の index に移動、結合、分割しない。\n'
               '3. text は日本語だけにし、中国語の語句、説明、注釈、前置きを残さない。\n'
               '4. 各文の事実範囲、動作主、対象、能動・受動、因果関係、完了の程度を変えない。自然な日本語にするための語順変更はよいが、誰が誰に何をしたかを変えない。\n'
-              '5. 元の文にある __JP_NAME_0__、__JP_LYRIC_0__ のような占位符は、その同じ index の訳文に一文字も変えず残す。別の文へ移さない。\n'
+              '5. 元の文にある __JP_NAME_0__、__JP_LYRIC_0__、__JP_TITLE_0__ のような占位符は、その同じ index の訳文に一文字も変えず残す。別の文へ移さない。\n'
               '6. 元のテキストに括弧書きの動作や表情がある場合は、削除せず自然な日本語にして括弧内に残す。\n'
               '7. 必ず平仮名または片仮名を含む自然な日本語にし、中国語の漢字語を字形だけで残さない。\n'
               '8. $genderHints'
@@ -2383,7 +2413,7 @@ $responseShapeReminder
     }
 
     final translatedUnits = <String>[];
-    final placeholderPattern = RegExp(r'__JP_(?:NAME|LYRIC)_\d+__');
+    final placeholderPattern = RegExp(r'__JP_(?:NAME|LYRIC|TITLE)_\d+__');
     for (var i = 0; i < sourceUnits.length; i++) {
       final rawTranslation = translations[i];
       if (rawTranslation is! Map || rawTranslation['source_index'] != i + 1) {
@@ -2408,6 +2438,14 @@ $responseShapeReminder
           '第 ${i + 1} 项的受保护占位符发生丢失或跨句移动',
         );
       }
+      if (_containsUntranslatedSourceFragment(
+        sourceUnits[i],
+        translatedText,
+      )) {
+        return _AlignedTranslationParseResult.invalid(
+          '第 ${i + 1} 项残留了中文原句片段',
+        );
+      }
       if (_hasPotentialPassiveVoiceShift(
         sourceUnits[i],
         translatedText,
@@ -2424,6 +2462,31 @@ $responseShapeReminder
 
   static bool _sameStringSet(Set<String> left, Set<String> right) =>
       left.length == right.length && left.containsAll(right);
+
+  static bool _containsUntranslatedSourceFragment(
+    String source,
+    String translation,
+  ) {
+    const minimumFragmentLength = 6;
+    final sourceWithoutPlaceholders = source.replaceAll(
+      RegExp(r'__JP_(?:NAME|LYRIC|TITLE)_\d+__'),
+      ' ',
+    );
+    for (final match in RegExp(r'[\u3400-\u4dbf\u4e00-\u9fff]+')
+        .allMatches(sourceWithoutPlaceholders)) {
+      final runes = match.group(0)!.runes.toList(growable: false);
+      if (runes.length < minimumFragmentLength) continue;
+      for (var start = 0;
+          start <= runes.length - minimumFragmentLength;
+          start++) {
+        final fragment = String.fromCharCodes(
+          runes.sublist(start, start + minimumFragmentLength),
+        );
+        if (translation.contains(fragment)) return true;
+      }
+    }
+    return false;
+  }
 
   static bool _hasPotentialPassiveVoiceShift(
     String source,

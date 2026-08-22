@@ -54,8 +54,23 @@ add_subdirectory("runner")
 
 
 # Generated plugin build rules, which manage building the plugins and adding
-# them to the application.
+# them to the application. flutter_soloud prints a long backend configuration
+# summary on every CMake configure; keep warnings/errors visible while hiding
+# those ordinary third-party status messages.
+set(_ANIME_CHAT_PREVIOUS_CMAKE_MESSAGE_LEVEL "${CMAKE_MESSAGE_LOG_LEVEL}")
+set(CMAKE_MESSAGE_LOG_LEVEL WARNING)
 include(flutter/generated_plugins.cmake)
+set(CMAKE_MESSAGE_LOG_LEVEL "${_ANIME_CHAT_PREVIOUS_CMAKE_MESSAGE_LEVEL}")
+unset(_ANIME_CHAT_PREVIOUS_CMAKE_MESSAGE_LEVEL)
+
+# Do not let warnings inside the vendored SoLoud/miniaudio/stb_vorbis sources
+# drown out warnings from this application's own Windows runner. LTCG also
+# makes incremental linking unavailable, so request the compatible mode
+# explicitly instead of letting MSVC emit LNK4075 on every native rebuild.
+if(TARGET flutter_soloud_plugin)
+  target_compile_options(flutter_soloud_plugin PRIVATE /w)
+  target_link_options(flutter_soloud_plugin PRIVATE /INCREMENTAL:NO)
+endif()
 
 
 # === Installation ===
