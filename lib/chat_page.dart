@@ -231,6 +231,8 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
 
   final List<Map<String, dynamic>> _userMessageQueue = [];
   bool _isProcessingQueue = false;
+  bool _showTypingIndicator = false;
+  int _typingIndicatorGeneration = 0;
 
   // 当前这轮对话中 AI 已经追加了几条连续消息
   // 每次用户发消息时重置为 0，每次 AI 成功追加一条就 +1，
@@ -672,7 +674,9 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
     setState(() {
       _isProcessingQueue = true;
       _isLoading = true;
+      _showTypingIndicator = false;
     });
+    _scheduleTypingIndicator();
 
     final item = _userMessageQueue.removeAt(0);
     final userMessage = (item['text'] as String?) ?? '';
@@ -818,6 +822,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
 
     setState(() {
       _isLoading = false;
+      _showTypingIndicator = false;
     });
 
     await _processMessageQueue();
@@ -864,6 +869,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
         // 消息已生成并加入列表，立即关闭"对方正在输入..."提示
         // 后续的音频播放不需要显示输入状态
         _isLoading = false;
+        _showTypingIndicator = false;
       });
     }
 
@@ -926,7 +932,9 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
 
     setState(() {
       _isLoading = true;
+      _showTypingIndicator = false;
     });
+    _scheduleTypingIndicator();
 
     try {
       final recentMessages = StorageService.getRecentMessages(_messages);
@@ -977,8 +985,22 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
     if (mounted) {
       setState(() {
         _isLoading = false;
+        _showTypingIndicator = false;
       });
     }
+  }
+
+  void _scheduleTypingIndicator() {
+    final generation = ++_typingIndicatorGeneration;
+    final delayMs = 1000 + Random().nextInt(1001);
+    unawaited(Future<void>.delayed(Duration(milliseconds: delayMs), () {
+      if (!mounted || !_isLoading || generation != _typingIndicatorGeneration) {
+        return;
+      }
+      setState(() {
+        _showTypingIndicator = true;
+      });
+    }));
   }
 
   // 追加消息和主回复之间的延迟时长（毫秒）
@@ -3586,7 +3608,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
                                             fontSize: 16,
                                             fontWeight: FontWeight.w600,
                                             color: Color(0xFF2D3142))),
-                                    if (_isLoading)
+                                    if (_showTypingIndicator)
                                       // AI 正在生成回复时的提示
                                       // 颜色可调：目前使用深灰色，和角色日文名的灰色保持统一风格
                                       const Text('对方正在输入...',

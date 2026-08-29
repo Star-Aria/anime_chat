@@ -40,6 +40,22 @@
         "${workspaceFolder}\\scripts\\safe_check.ps1"
       ],
       "problemMatcher": []
+    },
+    {
+      "label": "Run Windows (hide benign frame-time logs)",
+      "type": "shell",
+      "command": "powershell",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceFolder}\\scripts\\run_windows_filtered.ps1"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
     }
   ]
 }

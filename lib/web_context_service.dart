@@ -511,6 +511,7 @@ ${resolvedAnswerBasis == _answerBasisExplicitFact ? '''
 ${_recentHistoryForPlanner(conversationHistory)}
 
 用户刚发来的消息：$text
+${ApiService.userMentionIdentityContext(text)}
 ''',
         },
       ];
@@ -887,7 +888,8 @@ JSON 格式：
       '',
       profile,
     ).map((name) => name.replaceAll(RegExp(r'\s+'), '')).toSet();
-    if (_asksAboutCurrentCharacterInCanon(userText)) {
+    if (_asksAboutCurrentCharacterInCanon(userText) ||
+        _userMentionsCurrentCharacter(userText, profile)) {
       mentionedCharacters.add(
         profile.characterName.replaceAll(RegExp(r'\s+'), ''),
       );
@@ -931,7 +933,9 @@ JSON 格式：
       final matchedNames = _matchedCanonNamesForSearch(text, '', profile)
           .where((name) => name.trim() != profile.characterName.trim())
           .toList();
-      if (!_asksAboutCurrentCharacterInCanon(text) && matchedNames.isNotEmpty) {
+      if (!_asksAboutCurrentCharacterInCanon(text) &&
+          !_userMentionsCurrentCharacter(text, profile) &&
+          matchedNames.isNotEmpty) {
         trimmed = _dedupeSearchQueryTerms([
           profile.canonSearchPrefix,
           ...matchedNames.take(2),
@@ -3528,7 +3532,9 @@ ${location.name}：数据源 Open-Meteo；天气数据时间 $currentTime；当�
     if (compactQuestion.isEmpty) compactQuestion = query.trim();
 
     if (category == 'canon') {
-      final asksCurrentCharacter = _asksAboutCurrentCharacterInCanon(userText);
+      final asksCurrentCharacter =
+          _asksAboutCurrentCharacterInCanon(userText) ||
+              _userMentionsCurrentCharacter(userText, profile);
       final subjectText = asksCurrentCharacter
           ? _removeOtherCharacterNamesForCurrentSubjectQuery(
               query.trim().isEmpty ? compactQuestion : query,
@@ -3561,7 +3567,8 @@ ${location.name}：数据源 Open-Meteo；天气数据时间 $currentTime；当�
     _WebProfile profile,
   ) {
     final targets = <String>[];
-    final asksCurrentCharacter = _asksAboutCurrentCharacterInCanon(userText);
+    final asksCurrentCharacter = _asksAboutCurrentCharacterInCanon(userText) ||
+        _userMentionsCurrentCharacter(userText, profile);
     final matchedNames = _matchedCanonNamesForSearch(
       userText,
       query,
@@ -3802,6 +3809,9 @@ ${location.name}：数据源 Open-Meteo；天气数据时间 $currentTime；当�
         .trim();
     if (raw.isEmpty) return '';
 
+    final matchedNames = _matchedCanonNamesForSearch(raw, '', profile);
+    if (matchedNames.isNotEmpty) return matchedNames.first;
+
     if (RegExp(r'^[A-Za-z][A-Za-z0-9!☆_:\-\s]{2,}$').hasMatch(raw) &&
         raw.split(RegExp(r'\s+')).where((part) => part.isNotEmpty).length <=
             4) {
@@ -3811,9 +3821,6 @@ ${location.name}：数据源 Open-Meteo；天气数据时间 $currentTime；当�
     for (final title in _explicitCanonTitleTerms(raw, '')) {
       return title;
     }
-
-    final matchedNames = _matchedCanonNamesForSearch(raw, '', profile);
-    if (matchedNames.isNotEmpty) return matchedNames.first;
 
     final compact = raw.replaceAll(RegExp(r'\s+'), '');
     if (compact.length < 2) return '';
@@ -3858,10 +3865,10 @@ ${location.name}：数据源 Open-Meteo；天气数据时间 $currentTime；当�
     }
 
     final pronunciationAliases = _uniquePronunciationCharacterAliases();
-    final normalizedCorpus = ApiService.nameSearchMatchKey(corpus);
     for (final entry in pronunciationAliases.entries) {
       final aliasKey = ApiService.nameSearchMatchKey(entry.key);
-      if (aliasKey.isNotEmpty && normalizedCorpus.contains(aliasKey)) {
+      if (aliasKey.isNotEmpty &&
+          ApiService.textContainsIdentityAlias(corpus, entry.key)) {
         add(entry.value);
       }
     }
@@ -3871,7 +3878,8 @@ ${location.name}：数据源 Open-Meteo；天气数据时间 $currentTime；当�
     );
     for (final entry in characterSearchAliases.entries) {
       final aliasKey = ApiService.nameSearchMatchKey(entry.key);
-      if (aliasKey.isNotEmpty && normalizedCorpus.contains(aliasKey)) {
+      if (aliasKey.isNotEmpty &&
+          ApiService.textContainsIdentityAlias(corpus, entry.key)) {
         add(entry.value);
       }
     }
@@ -4011,6 +4019,7 @@ ${location.name}：数据源 Open-Meteo；天气数据时间 $currentTime；当�
     if (queries.isNotEmpty) return queries;
 
     final asksCurrentCharacter = _asksAboutCurrentCharacterInCanon(userText) ||
+        _userMentionsCurrentCharacter(userText, profile) ||
         _canonTextContainsTerm(originalQuery, profile.characterName) ||
         _canonTextContainsTerm(baseQuery, profile.characterName);
     if (asksCurrentCharacter) {
@@ -4050,6 +4059,16 @@ ${location.name}：数据源 Open-Meteo；天气数据时间 $currentTime；当�
     return RegExp(
       r'你当初|你自己|你本人|你们|你的|你比较|你好像|你喜欢|你常|关于你|和你|对你',
     ).hasMatch(userText);
+  }
+
+  static bool _userMentionsCurrentCharacter(
+    String userText,
+    _WebProfile profile,
+  ) {
+    final currentName = profile.characterName.replaceAll(RegExp(r'\s+'), '');
+    return ApiService.userMentionIdentities(userText).values.any(
+          (name) => name.replaceAll(RegExp(r'\s+'), '') == currentName,
+        );
   }
 
   static String _removeOtherCharacterNamesForCurrentSubjectQuery(

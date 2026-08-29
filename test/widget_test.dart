@@ -805,10 +805,14 @@ void main() {
 
   test('TTS synthesis isolates repeated-ellipsis clauses in one request', () {
     expect(
+      ApiService.prepareTtsSynthesisTextForTest('私も……幸せだよ。'),
+      '私も……幸せだよ。',
+    );
+    expect(
       ApiService.prepareTtsSynthesisTextForTest(
-        'でも凛野ちゃんは……ちゃんと聞いてくれる……だから嬉しい。',
+        'でも凛野ちゃんは……ちゃんと私の話を聞いてくれて、嬉しいって言ってくれる……だから、あなたに出会えて、本当によかったって思うの。',
       ),
-      'でも凛野ちゃんは…\nちゃんと聞いてくれる…\nだから嬉しい。',
+      'でも凛野ちゃんは…\nちゃんと私の話を聞いてくれて、嬉しいって言ってくれる…\nだから、あなたに出会えて、本当によかったって思うの。',
     );
   });
 
@@ -1223,6 +1227,58 @@ void main() {
       layerTargets.map((target) => target.replaceAll(RegExp(r'\s+'), '')),
       contains('和奏瑞依'),
     );
+  });
+
+  test('User mention aliases resolve identity without changing call names', () {
+    final identities = ApiService.userMentionIdentities(
+      'Saki酱和tomorin认识anon吗？',
+    );
+
+    expect(identities['saki']?.replaceAll(' ', ''), '丰川祥子');
+    expect(identities['tomorin']?.replaceAll(' ', ''), '高松灯');
+    expect(identities['anon']?.replaceAll(' ', ''), '千早爱音');
+    expect(ApiService.userMentionIdentities('anonymous user'), isEmpty);
+    for (final form in [
+      'saki酱',
+      'SAKIちゃん',
+      'Saki桑',
+      'saki chan',
+      'Saki SAN',
+    ]) {
+      expect(
+        ApiService.userMentionIdentities('$form最近怎么样？')
+            .values
+            .map((name) => name.replaceAll(' ', '')),
+        contains('丰川祥子'),
+        reason: '应识别用户称呼：$form',
+      );
+    }
+    expect(ApiService.userMentionIdentities('sakichan'), isEmpty);
+    expect(ApiService.userMentionIdentities('sakichannel'), isEmpty);
+    expect(
+      ApiService.normalizeKnownNamesForChineseText('祥祥最近怎么样？'),
+      '祥祥最近怎么样？',
+    );
+    expect(
+      ApiService.fixedCharacterCallNamesForCharacter('tomori')['丰川祥子'],
+      '祥ちゃん',
+    );
+  });
+
+  test('User mention aliases become canonical canon search targets', () {
+    final targets = WebContextService.canonSearchTargetsForTest(
+      userText: 'Saki酱和tomorin以前发生过什么？',
+      query: 'Saki tomorin 关系',
+      characterId: 'tomori',
+      characterName: '高松灯',
+    );
+    final compactTargets =
+        targets.map((target) => target.replaceAll(RegExp(r'\s+'), '')).toList();
+
+    expect(compactTargets, contains('丰川祥子'));
+    expect(compactTargets, contains('高松灯'));
+    expect(compactTargets, isNot(contains('Saki')));
+    expect(compactTargets, isNot(contains('tomorin')));
   });
 
   test('Character search aliases do not affect translation display', () {

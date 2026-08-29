@@ -64,6 +64,9 @@ class ApiService {
       _CharacterCallName('若叶睦', '小睦', '睦ちゃん'),
       _CharacterCallName('三角初华', '初华酱', '初華ちゃん'),
       _CharacterCallName('三角初音', '初华酱', '初華ちゃん'),
+      _CharacterCallName('八幡海铃', '海铃同学', '海鈴さん'),
+      _CharacterCallName('祐天寺若麦', '若麦同学', 'にゃむさん'),
+      _CharacterCallName('纯田真奈', '真奈同学', 'まなさん'),
     ],
     'shinobu': [
       _CharacterCallName('栗花落香奈乎', '香奈乎', 'カナヲ'),
@@ -198,11 +201,55 @@ class ApiService {
     }
 
     for (final entry in characterNamePronunciations) {
+      for (final alias in entry.userMentionAliases) {
+        add(alias, entry.chinese);
+      }
       for (final alias in entry.searchAliases) {
         add(alias, entry.chinese);
       }
     }
     return Map.unmodifiable(aliases);
+  }
+
+  static Map<String, String> userMentionIdentities(String text) {
+    final identities = <String, String>{};
+    for (final entry in characterNamePronunciations) {
+      for (final alias in entry.userMentionAliases) {
+        if (_textContainsIdentityAlias(text, alias)) {
+          identities.putIfAbsent(alias, () => entry.chinese);
+        }
+      }
+    }
+    return Map.unmodifiable(identities);
+  }
+
+  static String userMentionIdentityContext(String text) {
+    final identities = userMentionIdentities(text);
+    if (identities.isEmpty) return '';
+    return '【用户称呼身份解析】${identities.entries.map((entry) => '${entry.key}=${entry.value}').join('；')}。'
+        '这只说明用户指的是谁；不得照搬用户昵称，角色仍须使用自己设定的称呼。';
+  }
+
+  static bool textContainsIdentityAlias(String text, String alias) =>
+      _textContainsIdentityAlias(text, alias);
+
+  static bool _textContainsIdentityAlias(String text, String alias) {
+    final source = text.toLowerCase();
+    final target = alias.trim().toLowerCase();
+    if (target.isEmpty) return false;
+    var start = 0;
+    while (true) {
+      final index = source.indexOf(target, start);
+      if (index < 0) return false;
+      final end = index + target.length;
+      final latinAlias = RegExp(r'[a-z0-9]').hasMatch(target);
+      final leftIsLatin = index > 0 &&
+          RegExp(r'[a-z0-9]').hasMatch(source.substring(index - 1, index));
+      final rightIsLatin = end < source.length &&
+          RegExp(r'[a-z0-9]').hasMatch(source.substring(end, end + 1));
+      if (!latinAlias || (!leftIsLatin && !rightIsLatin)) return true;
+      start = end;
+    }
   }
 
   static Map<String, String> fixedCharacterCallNamesForCharacter(
@@ -407,6 +454,11 @@ class ApiService {
 
       final StringBuffer systemBuffer = StringBuffer();
       systemBuffer.write(characterPersonality);
+      final userMentionContext = userMentionIdentityContext(userMessage);
+      if (userMentionContext.isNotEmpty) {
+        systemBuffer.writeln();
+        systemBuffer.write(userMentionContext);
+      }
       final exactUserName = _extractExactUserName(characterPersonality);
       final translatedUserName =
           _extractTranslatedUserName(characterPersonality);
@@ -1173,7 +1225,7 @@ $responseShapeReminder
             // 使用传入的语速参数，不再硬编码 1.0
             'speed_factor': speedFactor,
             // 同一次请求内的短语片段只保留很短的衔接静音。
-            'fragment_interval': 0.08,
+            'fragment_interval': 0.3,
             'seed': -1,
             'media_type': 'wav',
             'streaming_mode': false,
@@ -1329,6 +1381,8 @@ $responseShapeReminder
   // 作为短语边界，可以防止模型在一次长推理中提前收尾、吞掉后文；
   // 单个省略号留在前一片段中，继续保留角色犹豫的语气。
   static String _prepareTtsSynthesisText(String text) {
+    // 短句保留原始省略号和一次性韵律，避免被切成急促的小碎句。
+    if (text.runes.length <= 50) return text;
     return text.replaceAllMapped(
       RegExp(r'…{2,}'),
       (_) => '…\n',

@@ -3,6 +3,10 @@ class CharacterNamePronunciation {
   final String japanese;
   final String reading;
   final List<String> chineseAliases;
+  // Nicknames/forms used by the user to refer to this person. They are only
+  // identity hints: do not rewrite the user's text, drive TTS, or change how
+  // the speaking character addresses this person.
+  final List<String> userMentionAliases;
   // Extra identity forms mapped to their TTS reading. Latin/code-name aliases
   // keep their display form during translation; CJK variants can still map to
   // the canonical Japanese spelling.
@@ -16,6 +20,7 @@ class CharacterNamePronunciation {
     required this.japanese,
     required this.reading,
     this.chineseAliases = const [],
+    this.userMentionAliases = const [],
     this.aliases = const {},
     this.searchAliases = const [],
   });
@@ -487,66 +492,78 @@ const List<CharacterNamePronunciation> characterNamePronunciations = [
     chinese: '丰川 祥子',
     japanese: '豊川 祥子',
     reading: 'とがわ さきこ',
+    userMentionAliases: ['saki', 'sakiko', '祥祥', '小祥'],
     aliases: {'Oblivionis': 'オブリビオニス'},
   ),
   CharacterNamePronunciation(
     chinese: '若叶 睦',
     japanese: '若葉 睦',
     reading: 'わかば むつみ',
+    userMentionAliases: ['mutsumi', 'mtm', '睦子米', '木子米', '小睦'],
     aliases: {'Mortis': 'モーティス'},
   ),
   CharacterNamePronunciation(
     chinese: '三角 初音',
     japanese: '三角 初音',
+    userMentionAliases: ['uika', 'hatsune'],
     reading: 'みすみ はつね',
   ),
   CharacterNamePronunciation(
     chinese: '三角 初华',
     japanese: '三角 初華',
     reading: 'みすみ ういか',
+    userMentionAliases: ['uika', 'hatsune'],
     aliases: {'Doloris': 'ドロリス'},
   ),
   CharacterNamePronunciation(
     chinese: '八幡 海铃',
     japanese: '八幡 海鈴',
     reading: 'やはた うみり',
+    userMentionAliases: ['umiri', 'umr', '乌咪铃', '乌米铃'],
     aliases: {'Timoris': 'ティモリス'},
   ),
   CharacterNamePronunciation(
     chinese: '祐天寺 若麦',
     japanese: '祐天寺 にゃむ',
     reading: 'ゆうてんじ にゃむ',
+    userMentionAliases: ['nyamu', 'nym', '喵梦', '喵姆', '大喵', '大喵老师', '大猫'],
     aliases: {'Amoris': 'アモーリス'},
   ),
   CharacterNamePronunciation(
     chinese: '高松 灯',
     japanese: '高松 燈',
     reading: 'たかまつ ともり',
+    userMentionAliases: ['tomori', 'tomorin', 'tmr', '灯灯', '小灯'],
   ),
   CharacterNamePronunciation(
     chinese: '千早 爱音',
     japanese: '千早 愛音',
     reading: 'ちはや あのん',
+    userMentionAliases: ['anon'],
   ),
   CharacterNamePronunciation(
     chinese: '长崎 爽世',
     japanese: '長崎 そよ',
     reading: 'ながさき そよ',
+    userMentionAliases: ['soyo', 'soyorin', '长崎素世', '素世', '爽世世', '素世世'],
   ),
   CharacterNamePronunciation(
     chinese: '椎名 立希',
     japanese: '椎名 立希',
     reading: 'しいな たき',
+    userMentionAliases: ['taki'],
   ),
   CharacterNamePronunciation(
     chinese: '要 乐奈',
     japanese: '要 楽奈',
     reading: 'かなめ らーな',
+    userMentionAliases: ['rana'],
   ),
   CharacterNamePronunciation(
     chinese: '纯田 真奈',
     japanese: '純田 まな',
     reading: 'すみた まな',
+    userMentionAliases: ['mana', '甜甜圈女士'],
   ),
   CharacterNamePronunciation(
     chinese: '户山 香澄',

@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 
 // ========================================
 // 情绪类型枚举
@@ -1574,21 +1574,23 @@ MyGO!!!!! 是现在仍然与你一起前进的人。
 ''',
       color: '77BBDD',
       settingsBgColors: const [
-        Color(0xFFF3F8FA), // 带蓝的雾白
-        Color(0xFFD9EEF5), // 浅空气蓝
-        Color(0xFFB9DFEC), // 柔和水蓝
-        Color(0xFFA9C7DE), // 灰蓝过渡
+        Color(0xFFF5FAFD), // 雾白蓝
+        Color(0xFFDDEEF8), // 柔和水蓝
+        Color(0xFFC1CFF1), // 偏蓝长春花紫
+        Color(0xFFB3C1EB), // 偏靛蓝紫
       ],
-      // 气泡使用与主题天空蓝不同的暖杏桃色，形成柔和的冷暖对比。
+      // 气泡以雾蓝为主体，只在末端加入少量淡紫作为层次。
       aiBubbleGradient: const [
-        Color.fromARGB(226, 255, 247, 235), // 暖奶油白
-        Color.fromARGB(220, 249, 225, 205), // 浅杏桃
-        Color.fromARGB(204, 238, 196, 175), // 柔和蜜桃
-        Color.fromARGB(188, 225, 178, 163), // 低饱和暖玫瑰
+        Color.fromARGB(220, 244, 250, 255), // 冷调珍珠白
+        Color.fromARGB(218, 228, 242, 251), // 浅雾蓝
+        Color.fromARGB(216, 211, 231, 246), // 柔和水蓝
+        Color.fromARGB(214, 198, 217, 243), // 清浅灰蓝
+        Color.fromARGB(212, 190, 207, 241), // 蓝紫过渡
+        Color.fromARGB(210, 183, 196, 238), // 偏蓝长春花紫
       ],
-      aiBubbleBorderColor: const Color.fromARGB(225, 197, 143, 120),
-      aiBubbleGlowColor: const Color.fromARGB(180, 240, 184, 157),
-      backgroundBlurSigma: 5.0,
+      aiBubbleBorderColor: const Color.fromARGB(225, 112, 145, 203),
+      aiBubbleGlowColor: const Color.fromARGB(170, 127, 173, 218),
+      backgroundBlurSigma: 2.0,
       backgroundOpacity: 0.70,
       proactiveContentInstruction:
           '可以聊练习、排练、舞台、乐队成员、演出准备、唱歌、写歌词、学校生活、观星、收集石头或创可贴或笔记本、生活中的见闻、回家路上的心情等等。\n'
