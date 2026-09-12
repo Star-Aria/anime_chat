@@ -70,6 +70,7 @@ class MusicAttachment {
   final String? description;
   final String? lyricsPath;
   final String? timedLyricsPath;
+  final bool appearedInAnimation;
   final List<String> lyrics;
   final List<String> moods;
   final List<String> sound;
@@ -91,6 +92,7 @@ class MusicAttachment {
     this.description,
     this.lyricsPath,
     this.timedLyricsPath,
+    this.appearedInAnimation = false,
     this.lyrics = const [],
     this.moods = const [],
     this.sound = const [],
@@ -123,6 +125,7 @@ class MusicAttachment {
       'description': description,
       'lyricsPath': lyricsPath,
       'timedLyricsPath': timedLyricsPath,
+      'appearedInAnimation': appearedInAnimation,
       'moods': moods,
       'sound': sound,
       'themes': themes,
@@ -146,6 +149,7 @@ class MusicAttachment {
       description: json['description'] as String?,
       lyricsPath: json['lyricsPath'] as String?,
       timedLyricsPath: json['timedLyricsPath'] as String?,
+      appearedInAnimation: json['appearedInAnimation'] as bool? ?? false,
       lyrics: _lyricsLinesFromJson(json['lyrics']),
       moods: _stringListFromJson(json['moods']),
       sound: _stringListFromJson(json['sound']),
@@ -170,6 +174,7 @@ class MusicAttachment {
       description: description,
       lyricsPath: lyricsPath,
       timedLyricsPath: timedLyricsPath,
+      appearedInAnimation: appearedInAnimation,
       lyrics: lyrics,
       moods: moods,
       sound: sound,

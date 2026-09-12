@@ -49,3 +49,6 @@ lib/api_keys.dart
 
 # 本地音乐库音频体积较大，只提交曲库元数据与歌词文本
 /music/**/*.mp3
+
+# Codex 本地会话记录体积很大，不纳入版本库
+old-codex-session.jsonl

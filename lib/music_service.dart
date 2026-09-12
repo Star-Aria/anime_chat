@@ -90,14 +90,42 @@ class MusicService {
     if (exactTitle != null) return exactTitle;
 
     final previouslyShared = _previouslySharedMusicKeys(conversationHistory);
-    final candidates = catalog
+    final bandCandidates = catalog
         .where((item) => _sameBand(item.band, preferredBand))
         .toList(growable: false);
+    final recentOrNew = _asksForRecentOrNewSong(userText);
+    final candidates = recentOrNew
+        ? bandCandidates
+            .where((item) => !item.appearedInAnimation)
+            .toList(growable: false)
+        : bandCandidates;
+    if (recentOrNew && candidates.isEmpty) {
+      debugPrint(
+        '音乐分享筛选：用户询问近期/新歌，但 ${preferredBand.isEmpty ? '当前乐队' : preferredBand} '
+        '没有可用的动画外曲目，跳过音乐卡片',
+      );
+      return null;
+    }
     if (candidates.isNotEmpty) {
+      if (recentOrNew) {
+        debugPrint('音乐分享筛选：已排除动画中出现过的曲目');
+      }
       return _pickPreferUnshared(candidates, previouslyShared);
     }
 
-    return _pickPreferUnshared(catalog, previouslyShared);
+    final fallbackCandidates = recentOrNew
+        ? catalog.where((item) => !item.appearedInAnimation).toList()
+        : catalog;
+    if (fallbackCandidates.isEmpty) return null;
+    return _pickPreferUnshared(fallbackCandidates, previouslyShared);
+  }
+
+  static bool _asksForRecentOrNewSong(String userText) {
+    return RegExp(
+      r'(最近|近期|这阵子|这段时间).*(排练|练习|创作|写歌|写曲|准备|录音)|'
+      r'(新歌|新曲|新作|刚写的歌|刚创作的歌|下一首歌|接下来.*歌)',
+      caseSensitive: false,
+    ).hasMatch(userText);
   }
 
   static Set<String> _previouslySharedMusicKeys(List<Message> history) {

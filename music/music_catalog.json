@@ -1,6 +1,7 @@
 [
   {
     "id": "ave_mujica_killkiss",
+    "appearedInAnimation": true,
     "title": "KiLLKiSS",
     "artist": "Ave Mujica",
     "band": "Ave Mujica",
@@ -49,6 +50,7 @@
   },
   {
     "id": "ave_mujica_ave_mujica",
+    "appearedInAnimation": true,
     "title": "Ave Mujica",
     "artist": "Ave Mujica",
     "band": "Ave Mujica",
@@ -81,6 +83,7 @@
   },
   {
     "id": "ave_mujica_hachibousei_dance",
+    "appearedInAnimation": true,
     "title": "八芒星ダンス",
     "artist": "Ave Mujica",
     "band": "Ave Mujica",
@@ -129,6 +132,7 @@
   },
   {
     "id": "ave_mujica_sora_no_musica",
+    "appearedInAnimation": true,
     "title": "天球(そら)のMúsica",
     "artist": "Ave Mujica",
     "band": "Ave Mujica",
@@ -145,6 +149,7 @@
   },
   {
     "id": "ave_mujica_kao",
+    "appearedInAnimation": true,
     "title": "顔",
     "artist": "Ave Mujica",
     "band": "Ave Mujica",
@@ -193,6 +198,7 @@
   },
   {
     "id": "ave_mujica_crucifix_x",
+    "appearedInAnimation": true,
     "title": "Crucifix X",
     "artist": "Ave Mujica",
     "band": "Ave Mujica",
@@ -225,6 +231,7 @@
   },
   {
     "id": "ave_mujica_georgette",
+    "appearedInAnimation": true,
     "title": "Georgette Me, Georgette You",
     "artist": "Ave Mujica",
     "band": "Ave Mujica",
@@ -241,6 +248,7 @@
   },
   {
     "id": "ave_mujica_imprisoned_xii",
+    "appearedInAnimation": true,
     "title": "Imprisoned XII",
     "artist": "Ave Mujica",
     "band": "Ave Mujica",
@@ -401,6 +409,7 @@
   },
   {
     "id": "mygo_haruhikage",
+    "appearedInAnimation": true,
     "title": "春日影",
     "artist": "MyGO!!!!!",
     "band": "MyGO!!!!!",
@@ -417,6 +426,7 @@
   },
   {
     "id": "mygo_mayoiuta",
+    "appearedInAnimation": true,
     "title": "迷星叫",
     "artist": "MyGO!!!!!",
     "band": "MyGO!!!!!",
@@ -433,6 +443,7 @@
   },
   {
     "id": "mygo_utakotoba",
+    "appearedInAnimation": true,
     "title": "诗超绊",
     "artist": "MyGO!!!!!",
     "band": "MyGO!!!!!",
@@ -513,6 +524,7 @@
   },
   {
     "id": "mygo_hitoshizuku",
+    "appearedInAnimation": true,
     "title": "壱雫空",
     "artist": "MyGO!!!!!",
     "band": "MyGO!!!!!",
@@ -529,6 +541,7 @@
   },
   {
     "id": "mygo_shiori",
+    "appearedInAnimation": true,
     "title": "栞",
     "artist": "MyGO!!!!!",
     "band": "MyGO!!!!!",
@@ -545,6 +558,7 @@
   },
   {
     "id": "mygo_tanebi",
+    "appearedInAnimation": true,
     "title": "焚音打",
     "artist": "MyGO!!!!!",
     "band": "MyGO!!!!!",
@@ -561,6 +575,7 @@
   },
   {
     "id": "mygo_hekiten_bansou",
+    "appearedInAnimation": true,
     "title": "碧天伴走",
     "artist": "MyGO!!!!!",
     "band": "MyGO!!!!!",
@@ -593,6 +608,7 @@
   },
   {
     "id": "mygo_melody",
+    "appearedInAnimation": true,
     "title": "迷路的日子",
     "artist": "MyGO!!!!!",
     "band": "MyGO!!!!!",
@@ -801,6 +817,7 @@
   },
   {
     "id": "mygo_ichijitsu_senshuu",
+    "appearedInAnimation": true,
     "title": "聿日笺秋",
     "artist": "MyGO!!!!!",
     "band": "MyGO!!!!!",

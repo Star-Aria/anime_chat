@@ -231,6 +231,9 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
 
   final List<Map<String, dynamic>> _userMessageQueue = [];
   bool _isProcessingQueue = false;
+  Map<String, dynamic>? _activeUserRequest;
+  int _responseGeneration = 0;
+  bool _queuePausedForRecall = false;
   bool _showTypingIndicator = false;
   int _typingIndicatorGeneration = 0;
 
@@ -632,7 +635,17 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
     _textController.clear();
     setState(() {
       _messages.add(userMessage);
-      _userMessageQueue.add({'text': text, 'imagePaths': imagePaths});
+      final request = {
+        'text': text,
+        'imagePaths': imagePaths,
+        'message': userMessage,
+      };
+      if (_queuePausedForRecall) {
+        _userMessageQueue.insert(0, request);
+        _queuePausedForRecall = false;
+      } else {
+        _userMessageQueue.add(request);
+      }
       _pendingImagePaths = [];
     });
 
@@ -647,6 +660,63 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
     if (!_isProcessingQueue) {
       _processMessageQueue();
     }
+  }
+
+  bool _isCurrentResponse(int generation) =>
+      mounted && generation == _responseGeneration;
+
+  bool _isActiveRequestMessage(Message message) {
+    final activeMessage = _activeUserRequest?['message'];
+    return _isLoading &&
+        activeMessage is Message &&
+        activeMessage.timestamp == message.timestamp &&
+        activeMessage.content == message.content;
+  }
+
+  Future<void> _recallActiveMessage() async {
+    final request = _activeUserRequest;
+    final activeMessage = request?['message'];
+    if (request == null ||
+        activeMessage is! Message ||
+        !_isActiveRequestMessage(activeMessage)) {
+      return;
+    }
+
+    final text = (request['text'] as String?) ?? '';
+    final imagePaths =
+        List<String>.from(request['imagePaths'] as List? ?? const []);
+
+    // 立即使正在等待的旧请求失效。即使网络请求稍后返回，也不能再
+    // 写入回复、继续 TTS 或触发连续消息。
+    _responseGeneration++;
+    _typingIndicatorGeneration++;
+
+    if (!mounted) return;
+    setState(() {
+      _messages.removeWhere(
+        (message) =>
+            message.timestamp == activeMessage.timestamp &&
+            message.content == activeMessage.content,
+      );
+      _activeUserRequest = null;
+      _isLoading = false;
+      _isProcessingQueue = false;
+      _showTypingIndicator = false;
+      _queuePausedForRecall = true;
+      _pendingImagePaths = imagePaths;
+    });
+    _textController.value = TextEditingValue(
+      text: text,
+      selection: TextSelection.collapsed(offset: text.length),
+    );
+
+    await StorageService.saveConversation(
+      widget.character.id,
+      _messages,
+      sessionId: _sessionId,
+    );
+    await _refreshChatSessions();
+    _scrollToBottom();
   }
 
   Future<void> _pickImage() async {
@@ -664,21 +734,23 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
   }
 
   Future<void> _processMessageQueue() async {
-    if (_userMessageQueue.isEmpty) {
+    if (_userMessageQueue.isEmpty || _queuePausedForRecall) {
       setState(() {
         _isProcessingQueue = false;
       });
       return;
     }
 
+    final item = _userMessageQueue.removeAt(0);
+    final responseGeneration = ++_responseGeneration;
     setState(() {
       _isProcessingQueue = true;
       _isLoading = true;
       _showTypingIndicator = false;
+      _activeUserRequest = item;
     });
     _scheduleTypingIndicator();
 
-    final item = _userMessageQueue.removeAt(0);
     final userMessage = (item['text'] as String?) ?? '';
     final imagePaths = List<String>.from(item['imagePaths'] as List? ?? []);
 
@@ -703,6 +775,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
       character: widget.character,
       conversationHistory: historyMessages,
     );
+    if (!_isCurrentResponse(responseGeneration)) return;
 
     // 2. 再生成“现实/联网信息上下文”：
     //    WebContextService 会根据当前角色 id 决定能查什么。
@@ -717,11 +790,13 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
             character: widget.character,
           )
         : MusicService.buildPromptContext(musicAttachment);
+    if (!_isCurrentResponse(responseGeneration)) return;
     final localOnlyMusicDiscussion = musicAttachment == null &&
         await MusicService.shouldUseLocalOnlyForDiscussion(
           userText: userMessage,
           character: widget.character,
         );
+    if (!_isCurrentResponse(responseGeneration)) return;
 
     //    分享本地曲库歌曲，以及聊已覆盖的 MyGO / Ave Mujica 歌曲时，
     //    description、歌词和结构化标签已经足够，因此不触发联网搜索。
@@ -734,6 +809,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
             characterName: widget.character.name,
             conversationHistory: recentMessages,
           );
+    if (!_isCurrentResponse(responseGeneration)) return;
     final responseContext = [
       if (webContext.isNotEmpty) webContext,
       if (musicContext.isNotEmpty) musicContext,
@@ -744,11 +820,13 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
       character: widget.character,
       selectedAttachment: musicAttachment,
     );
+    if (!_isCurrentResponse(responseGeneration)) return;
     final knownSongTitles = musicContext.isEmpty
         ? const <String>[]
         : (await MusicService.loadCatalog())
             .map((song) => song.title)
             .toList(growable: false);
+    if (!_isCurrentResponse(responseGeneration)) return;
     _currentTurnKnownSongTitles = knownSongTitles;
 
     if (responseContext.isNotEmpty) {
@@ -773,6 +851,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
         lyricsTranslationReference: lyricsTranslationReference,
         knownSongTitles: knownSongTitles,
       );
+      if (!_isCurrentResponse(responseGeneration)) return;
 
       final japaneseText = responseMap['japanese'] ?? '';
       final chineseText = responseMap['chinese'] ?? '';
@@ -799,7 +878,9 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
         japaneseText,
         chineseText,
         musicAttachment: musicAttachment,
+        isCanceled: () => !_isCurrentResponse(responseGeneration),
       );
+      if (!_isCurrentResponse(responseGeneration)) return;
 
       // ========================================
       // 连续消息判定：AI 回复后有概率追加消息
@@ -817,12 +898,15 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
         await _sendProactiveMessage('follow_up');
       }
     } catch (e) {
+      if (!_isCurrentResponse(responseGeneration)) return;
       debugPrint('生成回复时出错: $e');
     }
 
+    if (!_isCurrentResponse(responseGeneration)) return;
     setState(() {
       _isLoading = false;
       _showTypingIndicator = false;
+      _activeUserRequest = null;
     });
 
     await _processMessageQueue();
@@ -832,7 +916,9 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
     String japanese,
     String chinese, {
     MusicAttachment? musicAttachment,
+    bool Function()? isCanceled,
   }) async {
+    if (isCanceled?.call() == true) return;
     final isChineseChar = widget.character.language == 'zh';
 
     // 中文角色：中文是主内容（TTS 读中文）；日语角色：日语是主内容
@@ -852,7 +938,14 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
             : cleanPrimary);
 
     // 使用统一的情绪分析 + 逐句 TTS 方法生成音频（传入主内容）
-    final List<String> audioPaths = await _generateEmotionAudio(cleanPrimary);
+    final List<String> audioPaths = await _generateEmotionAudio(
+      cleanPrimary,
+      isCanceled: isCanceled,
+    );
+    if (isCanceled?.call() == true) {
+      await _deleteGeneratedAudioFiles(audioPaths);
+      return;
+    }
 
     final assistantMessage = Message(
       role: 'assistant',
@@ -870,6 +963,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
         // 后续的音频播放不需要显示输入状态
         _isLoading = false;
         _showTypingIndicator = false;
+        _activeUserRequest = null;
       });
     }
 
@@ -1001,6 +1095,38 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
         _showTypingIndicator = true;
       });
     }));
+  }
+
+  Widget _buildTypingStatus() {
+    const style = TextStyle(
+      fontSize: 12,
+      height: 1.15,
+      color: Color.fromARGB(255, 42, 42, 42),
+    );
+    return AnimatedBuilder(
+      animation: _typingAnimationController,
+      builder: (context, child) {
+        const dotCounts = [1, 2, 3, 2];
+        final phase =
+            (_typingAnimationController.value * dotCounts.length).floor() %
+                dotCounts.length;
+        return Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text('对方正在输入', style: style),
+            SizedBox(
+              width: 26,
+              child: Text(
+                '.' * dotCounts[phase],
+                style: style,
+                maxLines: 1,
+                softWrap: false,
+              ),
+            ),
+          ],
+        );
+      },
+    );
   }
 
   // 追加消息和主回复之间的延迟时长（毫秒）
@@ -1779,7 +1905,11 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
   // 返回：
   //   生成成功的音频文件路径列表，可能为空（全部失败时）
   //   调用方需要自行处理空列表的情况
-  Future<List<String>> _generateEmotionAudio(String text) async {
+  Future<List<String>> _generateEmotionAudio(
+    String text, {
+    bool Function()? isCanceled,
+  }) async {
+    if (isCanceled?.call() == true) return const [];
     final String lang = widget.character.language;
 
     // --- 第一步：分句（按角色语言选择合适的标点）---
@@ -1801,6 +1931,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
         character: widget.character,
         language: lang,
       );
+      if (isCanceled?.call() == true) return const [];
     } else {
       // 情绪分析关闭时，使用角色的默认情绪（优先 neutral）
       final fallback = widget.character.emotionAudioMap?.availableEmotions
@@ -1818,9 +1949,17 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
     final List<String> audioPaths = [];
 
     for (int i = 0; i < sentences.length; i++) {
+      if (isCanceled?.call() == true) {
+        await _deleteGeneratedAudioFiles(audioPaths);
+        return const [];
+      }
       final String sentence = sentences[i];
       final SpeechEmotion emotion = emotions[i];
       final referenceAudio = await _getValidReferenceAudio(emotion);
+      if (isCanceled?.call() == true) {
+        await _deleteGeneratedAudioFiles(audioPaths);
+        return const [];
+      }
 
       debugPrint(
           '句子 [$i] 情绪：${emotion.name}，参考音频：${referenceAudio.referWavPath}');
@@ -1838,6 +1977,11 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
         textLanguage: lang,
       );
 
+      if (isCanceled?.call() == true) {
+        await _deleteGeneratedAudioFiles([...audioPaths, ...generatedPaths]);
+        return const [];
+      }
+
       if (generatedPaths.isNotEmpty) {
         audioPaths.addAll(generatedPaths);
         debugPrint('句子 [$i] 音频生成成功：${generatedPaths.join(', ')}');
@@ -1847,6 +1991,18 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
     }
 
     return audioPaths;
+  }
+
+  Future<void> _deleteGeneratedAudioFiles(Iterable<String> paths) async {
+    for (final path in paths) {
+      final file = File(path);
+      if (!await file.exists()) continue;
+      try {
+        await file.delete();
+      } catch (e) {
+        debugPrint('清理已撤回消息的音频失败: $e');
+      }
+    }
   }
 
   Future<EmotionReferenceAudio> _getValidReferenceAudio(
@@ -2300,6 +2456,18 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
       color: Colors.white.withValues(alpha: 0.96),
       elevation: 12,
       items: [
+        if (_isActiveRequestMessage(message))
+          PopupMenuItem<String>(
+            value: 'recall',
+            height: 42,
+            child: Row(
+              children: [
+                Icon(Icons.undo, size: 18, color: Colors.grey[700]),
+                const SizedBox(width: 10),
+                const Text('撤回并编辑', style: TextStyle(fontSize: 14)),
+              ],
+            ),
+          ),
         PopupMenuItem<String>(
           value: 'copy',
           height: 42,
@@ -2311,22 +2479,25 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
             ],
           ),
         ),
-        PopupMenuItem<String>(
-          value: 'delete',
-          height: 42,
-          child: Row(
-            children: [
-              Icon(Icons.delete_outline, size: 18, color: Colors.red[400]),
-              const SizedBox(width: 10),
-              Text('删除消息',
-                  style: TextStyle(fontSize: 14, color: Colors.red[400])),
-            ],
+        if (!_isActiveRequestMessage(message))
+          PopupMenuItem<String>(
+            value: 'delete',
+            height: 42,
+            child: Row(
+              children: [
+                Icon(Icons.delete_outline, size: 18, color: Colors.red[400]),
+                const SizedBox(width: 10),
+                Text('删除消息',
+                    style: TextStyle(fontSize: 14, color: Colors.red[400])),
+              ],
+            ),
           ),
-        ),
       ],
     );
 
-    if (selected == 'copy') {
+    if (selected == 'recall') {
+      await _recallActiveMessage();
+    } else if (selected == 'copy') {
       await Clipboard.setData(ClipboardData(text: message.content));
     } else if (selected == 'delete') {
       await _deleteMessage(index);
@@ -3606,21 +3777,18 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
                                     Text(widget.character.name,
                                         style: const TextStyle(
                                             fontSize: 16,
+                                            height: 1.15,
                                             fontWeight: FontWeight.w600,
                                             color: Color(0xFF2D3142))),
                                     if (_showTypingIndicator)
                                       // AI 正在生成回复时的提示
-                                      // 颜色可调：目前使用深灰色，和角色日文名的灰色保持统一风格
-                                      const Text('对方正在输入...',
-                                          style: TextStyle(
-                                              fontSize: 12,
-                                              color: Color.fromARGB(
-                                                  255, 42, 42, 42)))
+                                      _buildTypingStatus()
                                     else
                                       // 正常状态显示角色日文名
                                       Text(widget.character.nameJp,
                                           style: TextStyle(
                                               fontSize: 12,
+                                              height: 1.15,
                                               fontFamily: 'Times New Roman',
                                               color: Colors.grey[600])),
                                   ],
