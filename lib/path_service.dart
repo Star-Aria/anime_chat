@@ -31,6 +31,16 @@ class AppPaths {
     return _join(_parentOf(_exeDir), normalized);
   }
 
+  // GPT-SoVITS 的本地安装目录。启动服务和模型路径解析共用这一路径，
+  // 避免在不同文件里各写一份容易失效的绝对路径。
+  static String get gptSovitsRoot => _legacyGptSovitsRoot;
+
+  static String get gptSovitsPython =>
+      _join(gptSovitsRoot, r'runtime\python.exe');
+
+  static String get gptSovitsFfmpeg =>
+      _join(gptSovitsRoot, r'runtime\ffmpeg.exe');
+
   static bool _isAbsolute(String path) =>
       RegExp(r'^[A-Za-z]:[\\/]').hasMatch(path) || path.startsWith(r'\\');
 

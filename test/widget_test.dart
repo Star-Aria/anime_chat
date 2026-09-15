@@ -54,6 +54,32 @@ void main() {
     ]);
   });
 
+  test('Chinese sentence splitter keeps comma clauses together', () {
+    final sentences = EmotionAnalyzer.splitSentences(
+      '刚下了一场雷雨，这会儿雨小一些了，但还在下。体感三十三度，湿度挺高的，闷闷的。你出门了吗？要是没带伞，我这里有。',
+      language: 'zh',
+    );
+
+    expect(sentences, [
+      '刚下了一场雷雨，这会儿雨小一些了，但还在下。',
+      '体感三十三度，湿度挺高的，闷闷的。',
+      '你出门了吗？',
+      '要是没带伞，我这里有。',
+    ]);
+  });
+
+  test('Chinese sentence splitter splits after a double em dash', () {
+    final sentences = EmotionAnalyzer.splitSentences(
+      '外部环境也不太平——地缘冲突、贸易壁垒这些东西，对出口和制造业都有影响。',
+      language: 'zh',
+    );
+
+    expect(sentences, [
+      '外部环境也不太平——',
+      '地缘冲突、贸易壁垒这些东西，对出口和制造业都有影响。',
+    ]);
+  });
+
   test('Emotion parser accepts camelCase labels case-insensitively', () {
     final emotions = EmotionAnalyzer.parseEmotionResponseForTest(
       rawContent: '["vulnerableMonologue"]',

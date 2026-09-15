@@ -319,11 +319,12 @@ class EmotionAnalyzer {
 
     final protected = _protectMyGoName(cleaned);
 
-    // 按句子结束符切分，lookbehind 保留标点在前面那句末尾
-    // 中文角色额外在逗号、分号处切分，使单句语音更自然
+    // 按真正的句末标点切分，lookbehind 保留标点在前面那句末尾。
+    // 中文双破折号表示明显的转折或补充，也作为一个完整分段点处理；
+    // 逗号和分号仍只表示句内停顿，避免产生大量过短的独立 TTS 请求。
     final RegExp splitPattern = language == 'zh'
-        ? RegExp(r'(?<=[。！？!?\n，；])')
-        : RegExp(r'(?<=[。！？\n!?])');
+        ? RegExp(r'(?<=[。！？!?\n])|(?<=——)')
+        : RegExp(r'(?<=[。！？!?\n])');
 
     final List<String> sentences = [];
     final parts = _splitAroundJapaneseQuotes(protected.text, splitPattern);

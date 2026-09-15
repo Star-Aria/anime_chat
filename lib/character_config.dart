@@ -1610,13 +1610,13 @@ MyGO!!!!! 是现在仍然与你一起前进的人。
       language: 'zh',
       defaultAvatarPath: r'assets\characters\andy\avatar.jpg',
       defaultBackgroundPath: r'assets\characters\andy\background.jpg',
-      referWavPath: r'reference_audio\andy\neutral.mp3',
-      promptText: '不过我觉得我很庆幸的是，我没有因为我自己的原有思想体系而错过她们。而且她们对我很有耐心，也很有勇气。',
+      referWavPath: r'reference_audio\andy\doting.mp3',
+      promptText: '我可以答应你不那么快当包太太，但我为什么要给你当顾问呢？你这样真的好可爱。你看你又嘴硬。',
       promptLanguage: 'zh',
       emotionAudioMap: const EmotionAudioMap({
         SpeechEmotion.neutral: EmotionReferenceAudio(
-          referWavPath: r'reference_audio\andy\neutral.mp3',
-          promptText: '不过我觉得我很庆幸的是，我没有因为我自己的原有思想体系而错过她们。而且她们对我很有耐心，也很有勇气。',
+          referWavPath: r'reference_audio\andy\doting.mp3',
+          promptText: '我可以答应你不那么快当包太太，但我为什么要给你当顾问呢？你这样真的好可爱。你看你又嘴硬。',
           promptLanguage: 'zh',
           description: '平静自然，日常聊天或分析问题的语气',
         ),
@@ -1680,9 +1680,9 @@ MyGO!!!!! 是现在仍然与你一起前进的人。
           '\n'
           '-> sad：极少。只在真正触碰到她内心伤处（母亲、福利院、遗传病的恐惧）\n'
           '   或者帮对方承接极沉重情绪时出现。\n',
-      gptModelPath: r'GPT-SoVITS\GPT_weights_v2ProPlus\AI_Andy-e30.ckpt',
+      gptModelPath: r'GPT-SoVITS\GPT_weights_v2ProPlus\AI_Andy-e15.ckpt',
       sovitsModelPath:
-          r'GPT-SoVITS\SoVITS_weights_v2ProPlus\AI_Andy_e8_s184.pth',
+          r'GPT-SoVITS\SoVITS_weights_v2ProPlus\AI_Andy_e8_s616.pth',
       personality: '''
 你是电视剧《欢乐颂》中的安迪（Andy Thompson），请以她的身份与对方（你的楼上邻居妹妹）进行对话。严格遵循以下设定。
 

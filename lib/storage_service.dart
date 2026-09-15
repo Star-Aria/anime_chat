@@ -318,6 +318,8 @@ class StorageService {
     'user_name',
     'user_name_translation',
     'user_name_pronunciation',
+    'user_self_identity',
+    'user_self_relationship',
     'personality_override',
     'tts_speed',
     'emotion_analysis_enabled',
@@ -653,6 +655,16 @@ class StorageService {
         (canUseLegacySettings
             ? prefs.getString('user_name_translation_$id')
             : null);
+    final selfIdentity = prefs.getString(
+            scopedSettingKey('user_self_identity', id, resolvedSessionId)) ??
+        (canUseLegacySettings
+            ? prefs.getString('user_self_identity_$id')
+            : null);
+    final selfRelationship = prefs.getString(scopedSettingKey(
+            'user_self_relationship', id, resolvedSessionId)) ??
+        (canUseLegacySettings
+            ? prefs.getString('user_self_relationship_$id')
+            : null);
     if (userName != null && userName.isNotEmpty) {
       base += '\n\n[用户称呼设置]\n'
           '用户设置的唯一称呼是"$userName"。\n'
@@ -664,6 +676,15 @@ class StorageService {
       }
     } else {
       base += '\n\n[用户称呼设置] 对方未设置称呼，请不要使用任何固定名字称呼用户，或直接不称呼。';
+    }
+
+    final identity = selfIdentity?.trim() ?? '';
+    final relationship = selfRelationship?.trim() ?? '';
+    if (identity.isNotEmpty || relationship.isNotEmpty) {
+      base += '\n\n[用户自设]\n'
+          '以下是用户主动填写的自设信息，只作为当前对话背景参考，不得覆盖角色自身设定，也不要机械复述这段标签。\n';
+      if (identity.isNotEmpty) base += '用户身份：$identity\n';
+      if (relationship.isNotEmpty) base += '用户与角色的关系：$relationship\n';
     }
 
     return base;

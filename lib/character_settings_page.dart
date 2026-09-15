@@ -50,6 +50,8 @@ class _CharacterSettingsPageState extends State<CharacterSettingsPage> {
   late TextEditingController _userNameController;
   late TextEditingController _userNameTranslationController;
   late TextEditingController _userNamePronunciationController;
+  late TextEditingController _selfIdentityController;
+  late TextEditingController _selfRelationshipController;
   late TextEditingController _personalityController;
   late TextEditingController _proactiveContentController;
 
@@ -76,6 +78,8 @@ class _CharacterSettingsPageState extends State<CharacterSettingsPage> {
     _userNameController = TextEditingController();
     _userNameTranslationController = TextEditingController();
     _userNamePronunciationController = TextEditingController();
+    _selfIdentityController = TextEditingController();
+    _selfRelationshipController = TextEditingController();
     _personalityController = TextEditingController();
     _proactiveContentController = TextEditingController();
     _loadSettings();
@@ -86,6 +90,8 @@ class _CharacterSettingsPageState extends State<CharacterSettingsPage> {
     _userNameController.dispose();
     _userNameTranslationController.dispose();
     _userNamePronunciationController.dispose();
+    _selfIdentityController.dispose();
+    _selfRelationshipController.dispose();
     _personalityController.dispose();
     _proactiveContentController.dispose();
     super.dispose();
@@ -110,6 +116,18 @@ class _CharacterSettingsPageState extends State<CharacterSettingsPage> {
         prefs.getString(_key('user_name_pronunciation')) ??
             (canUseLegacySettings
                 ? prefs.getString('user_name_pronunciation_$id')
+                : null) ??
+            '';
+    _selfIdentityController.text =
+        prefs.getString(_key('user_self_identity')) ??
+            (canUseLegacySettings
+                ? prefs.getString('user_self_identity_$id')
+                : null) ??
+            '';
+    _selfRelationshipController.text =
+        prefs.getString(_key('user_self_relationship')) ??
+            (canUseLegacySettings
+                ? prefs.getString('user_self_relationship_$id')
                 : null) ??
             '';
 
@@ -173,6 +191,8 @@ class _CharacterSettingsPageState extends State<CharacterSettingsPage> {
     _userNameController.addListener(_markUnsaved);
     _userNameTranslationController.addListener(_markUnsaved);
     _userNamePronunciationController.addListener(_markUnsaved);
+    _selfIdentityController.addListener(_markUnsaved);
+    _selfRelationshipController.addListener(_markUnsaved);
     _personalityController.addListener(_markUnsaved);
     _proactiveContentController.addListener(_markUnsaved);
   }
@@ -205,6 +225,20 @@ class _CharacterSettingsPageState extends State<CharacterSettingsPage> {
       await prefs.remove(_key('user_name_pronunciation'));
     } else {
       await prefs.setString(_key('user_name_pronunciation'), userPronunciation);
+    }
+
+    final selfIdentity = _selfIdentityController.text.trim();
+    if (selfIdentity.isEmpty) {
+      await prefs.remove(_key('user_self_identity'));
+    } else {
+      await prefs.setString(_key('user_self_identity'), selfIdentity);
+    }
+
+    final selfRelationship = _selfRelationshipController.text.trim();
+    if (selfRelationship.isEmpty) {
+      await prefs.remove(_key('user_self_relationship'));
+    } else {
+      await prefs.setString(_key('user_self_relationship'), selfRelationship);
     }
 
     final personalityText = _personalityController.text;
@@ -355,28 +389,55 @@ class _CharacterSettingsPageState extends State<CharacterSettingsPage> {
                         children: [
                           _buildSectionTitle('用户设置', Icons.person_outline),
                           _buildCard([
+                            _buildSubsectionTitle('用户称呼'),
                             _buildTextField(
                               controller: _userNameController,
                               label: '你的称呼 ',
-                              hint: '例如：凛野',
+                              hint: '填写希望使用的称呼',
                               helperText: '你希望AI称呼你使用的名字',
                               maxLines: 1,
+                              labelFontWeight: FontWeight.normal,
                             ),
                             const SizedBox(height: 16),
                             _buildTextField(
                               controller: _userNameTranslationController,
                               label: '中文翻译称呼 ',
-                              hint: '例如：凛野小姐 / 凛野同学 / 凛野酱',
+                              hint: '填写中文翻译中的称呼',
                               helperText: '只影响中文翻译显示。日文原文仍严格使用上面的称呼原文。',
                               maxLines: 1,
+                              labelFontWeight: FontWeight.normal,
                             ),
                             const SizedBox(height: 16),
                             _buildTextField(
                               controller: _userNamePronunciationController,
                               label: '你的称呼读音 ',
-                              hint: '请填写假名，例如：りんの',
+                              hint: '填写假名读音',
                               helperText: '如果不填，语音合成可能无法准确读出你的名字。',
                               maxLines: 1,
+                              labelFontWeight: FontWeight.normal,
+                            ),
+                            const SizedBox(height: 18),
+                            _buildSectionDivider(),
+                            _buildSubsectionTitle('自设（可选）'),
+                            const SizedBox(height: 2),
+                            _buildTextField(
+                              controller: _selfIdentityController,
+                              label: '你的身份',
+                              hint: '',
+                              helperText: '角色会据此理解你是谁；也可以不填写。',
+                              maxLines: 2,
+                              labelFontWeight: FontWeight.normal,
+                              useFangSong: true,
+                            ),
+                            const SizedBox(height: 16),
+                            _buildTextField(
+                              controller: _selfRelationshipController,
+                              label: '你和角色的关系',
+                              hint: '',
+                              helperText: '用于帮助角色把握和你的相处方式；也可以不填写。',
+                              maxLines: 2,
+                              labelFontWeight: FontWeight.normal,
+                              useFangSong: true,
                             ),
                           ]),
                           const SizedBox(height: 20),
@@ -897,6 +958,33 @@ class _CharacterSettingsPageState extends State<CharacterSettingsPage> {
     );
   }
 
+  Widget _buildSubsectionTitle(String title) {
+    return Padding(
+      padding: const EdgeInsets.only(left: 4, bottom: 10),
+      child: Text(
+        title,
+        style: const TextStyle(
+          fontFamily: settingsItemTitleFont,
+          fontSize: settingsItemTitleSize,
+          fontWeight: FontWeight.w600,
+          color: Color(0xFF2D3142),
+          letterSpacing: 0.2,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSectionDivider() {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      child: Divider(
+        height: 1,
+        thickness: 0.5,
+        color: Colors.black.withValues(alpha: 0.08),
+      ),
+    );
+  }
+
   // 构建雾面半透明白玻璃容器
   Widget _buildCard(List<Widget> children) {
     return ClipRRect(
@@ -937,6 +1025,7 @@ class _CharacterSettingsPageState extends State<CharacterSettingsPage> {
     required String hint,
     String? helperText,
     int maxLines = 1,
+    FontWeight labelFontWeight = FontWeight.w600,
     bool useFangSong = false,
   }) {
     final themeColor = Color(int.parse('0xFF${widget.character.color}'));
@@ -944,10 +1033,10 @@ class _CharacterSettingsPageState extends State<CharacterSettingsPage> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(label,
-            style: const TextStyle(
+            style: TextStyle(
                 fontFamily: settingsItemTitleFont,
                 fontSize: settingsItemTitleSize,
-                fontWeight: FontWeight.w600,
+                fontWeight: labelFontWeight,
                 color: Color(0xFF2D3142))), // 标签文字恢复深色
         const SizedBox(height: 6),
         TextField(

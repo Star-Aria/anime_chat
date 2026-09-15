@@ -8,6 +8,8 @@ import 'api_keys.dart';
 import 'grounding_contract.dart';
 import 'name_pronunciation.dart';
 import 'path_service.dart';
+import 'gpt_sovits_service.dart';
+import 'reference_audio_preprocessor.dart';
 
 class ApiService {
   static const String deepSeekApiKey = ApiKeys.deepseekApiKey;
@@ -25,6 +27,13 @@ class ApiService {
   static const String doubaoVisionApiKey = ApiKeys.doubaoVisionKey;
 
   static const String gptSovitsBaseUrl = 'http://127.0.0.1:9880';
+
+  // GPT-SoVITS 当前已加载的权重。服务进程重启后 generation 会改变，
+  // 即使路径没变也要重新发送切换请求。
+  static String? _loadedGptModelPath;
+  static String? _loadedSovitsModelPath;
+  static int? _loadedModelGeneration;
+  static Future<bool>? _modelSwitchTask;
 
   // ========================================
   // 中译日校验与重试参数（可调）
@@ -1193,11 +1202,32 @@ $responseShapeReminder
     // 范围 0.5（慢速）~ 2.0（快速），传递给 GPT-SoVITS 的 speed_factor 参数
     double speedFactor = 1.0,
     String textLanguage = 'ja',
+    String? gptModelPath,
+    String? sovitsModelPath,
   }) async {
+    if (!await GptSovitsService.ensureRunning()) {
+      debugPrint('GPT-SoVITS API 未就绪，跳过本次语音生成');
+      return [];
+    }
+
+    // TTS 生成前确认当前进程已经加载了本角色的最新权重，
+    // 防止 API 刚启动或重启时误用配置文件里的默认旧模型。
+    if (gptModelPath != null && sovitsModelPath != null) {
+      if (!await switchCharacterModel(
+        gptModelPath: gptModelPath,
+        sovitsModelPath: sovitsModelPath,
+      )) {
+        debugPrint('GPT-SoVITS 当前角色模型未加载，跳过本次语音生成');
+        return [];
+      }
+    }
+
     final cleanedText = _stripActionDescriptions(text);
     List<String> segments = _splitTextIntoSegments(cleanedText);
     List<String> audioPaths = [];
     final resolvedReferWavPath = AppPaths.resolve(referWavPath);
+    final preparedReferWavPath = await ReferenceAudioPreprocessor.shared
+        .prepareForTts(resolvedReferWavPath);
 
     for (int i = 0; i < segments.length; i++) {
       final segment = _prepareTtsSynthesisText(segments[i].trim());
@@ -1210,7 +1240,7 @@ $responseShapeReminder
             'Content-Type': 'application/json',
           },
           body: jsonEncode({
-            'ref_audio_path': resolvedReferWavPath,
+            'ref_audio_path': preparedReferWavPath,
             'prompt_text': promptText,
             'prompt_lang': promptLanguage,
             'text': segment,
@@ -1262,9 +1292,42 @@ $responseShapeReminder
     required String gptModelPath,
     required String sovitsModelPath,
   }) async {
+    final activeTask = _modelSwitchTask;
+    if (activeTask != null) return activeTask;
+
+    final task = _switchCharacterModel(
+      gptModelPath: gptModelPath,
+      sovitsModelPath: sovitsModelPath,
+    );
+    _modelSwitchTask = task;
+    task.whenComplete(() {
+      if (identical(_modelSwitchTask, task)) {
+        _modelSwitchTask = null;
+      }
+    });
+    return task;
+  }
+
+  static Future<bool> _switchCharacterModel({
+    required String gptModelPath,
+    required String sovitsModelPath,
+  }) async {
     try {
+      if (!await GptSovitsService.ensureRunning()) {
+        debugPrint('GPT-SoVITS API 未就绪，无法切换模型');
+        return false;
+      }
+
       final resolvedGptModelPath = AppPaths.resolve(gptModelPath);
       final resolvedSovitsModelPath = AppPaths.resolve(sovitsModelPath);
+
+      final generation = GptSovitsService.serviceGeneration;
+      if (_loadedGptModelPath == resolvedGptModelPath &&
+          _loadedSovitsModelPath == resolvedSovitsModelPath &&
+          _loadedModelGeneration == generation) {
+        return true;
+      }
+
       debugPrint('正在切换模型...');
       debugPrint('GPT 模型: $resolvedGptModelPath');
       debugPrint('SoVITS 模型: $resolvedSovitsModelPath');
@@ -1294,6 +1357,9 @@ $responseShapeReminder
       }
 
       debugPrint('模型切换成功');
+      _loadedGptModelPath = resolvedGptModelPath;
+      _loadedSovitsModelPath = resolvedSovitsModelPath;
+      _loadedModelGeneration = generation;
       return true;
     } catch (e) {
       debugPrint('切换模型失败: $e');

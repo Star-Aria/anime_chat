@@ -265,6 +265,8 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
   String? _userNameOverride;
   String? _userNameTranslationOverride;
   String? _userNamePronunciation; // 缓存用户的称呼读音
+  String? _selfIdentity;
+  String? _selfRelationship;
 
   bool _showOriginal = true; // 是否显示日文原文
   bool _showTranslation = true;
@@ -292,6 +294,15 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
       }
     } else {
       base += '\n\n[用户称呼设置] 对方未设置称呼，请不要使用任何固定名字称呼用户，或直接不称呼。';
+    }
+
+    final identity = _selfIdentity?.trim() ?? '';
+    final relationship = _selfRelationship?.trim() ?? '';
+    if (identity.isNotEmpty || relationship.isNotEmpty) {
+      base += '\n\n[用户自设]\n'
+          '以下是用户主动填写的自设信息，只作为当前对话背景参考，不得覆盖角色自身设定，也不要机械复述这段标签。\n';
+      if (identity.isNotEmpty) base += '用户身份：$identity\n';
+      if (relationship.isNotEmpty) base += '用户与角色的关系：$relationship\n';
     }
 
     return base;
@@ -355,6 +366,14 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
             (canUseLegacySettings
                 ? prefs.getString('user_name_pronunciation_$id')
                 : null);
+    final selfIdentity = prefs.getString(key('user_self_identity')) ??
+        (canUseLegacySettings
+            ? prefs.getString('user_self_identity_$id')
+            : null);
+    final selfRelationship = prefs.getString(key('user_self_relationship')) ??
+        (canUseLegacySettings
+            ? prefs.getString('user_self_relationship_$id')
+            : null);
 
     final showOriginal = prefs.getBool(key('show_original')) ??
         (canUseLegacySettings ? prefs.getBool('show_original_$id') : null) ??
@@ -390,6 +409,13 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
         _userNamePronunciation =
             (userNamePronunciation != null && userNamePronunciation.isNotEmpty)
                 ? userNamePronunciation
+                : null;
+        _selfIdentity = (selfIdentity != null && selfIdentity.trim().isNotEmpty)
+            ? selfIdentity.trim()
+            : null;
+        _selfRelationship =
+            (selfRelationship != null && selfRelationship.trim().isNotEmpty)
+                ? selfRelationship.trim()
                 : null;
         _showOriginal = showOriginal;
         _showTranslation = showTranslation;
@@ -1975,6 +2001,8 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
         promptLanguage: referenceAudio.promptLanguage,
         speedFactor: _ttsSpeed,
         textLanguage: lang,
+        gptModelPath: widget.character.gptModelPath,
+        sovitsModelPath: widget.character.sovitsModelPath,
       );
 
       if (isCanceled?.call() == true) {

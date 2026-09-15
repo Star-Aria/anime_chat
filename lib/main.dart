@@ -10,12 +10,17 @@ import 'proactive_message_service.dart';
 import 'storage_service.dart';
 import 'path_service.dart';
 import 'music_history_migration.dart';
+import 'gpt_sovits_service.dart';
 
 // ========================================
 // 窗口大小配置
 // ========================================
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // 启动前确认本机 TTS 服务可用。若用户已手动启动则直接复用，
+  // 未启动时自动拉起 GPT-SoVITS，避免首次聊天时模型切换请求抢跑。
+  await GptSovitsService.ensureRunning();
 
   final musicMigration = await MusicHistoryMigration.run();
   if (musicMigration.attachmentsUpdated > 0 ||
