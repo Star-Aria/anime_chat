@@ -1,0 +1,36 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import {fileURLToPath} from 'node:url';
+import assert from 'node:assert/strict';
+
+const here=path.dirname(fileURLToPath(import.meta.url));
+const qa=path.join(here,'qa-v4');
+const read=name=>JSON.parse(fs.readFileSync(path.join(qa,name),'utf8'));
+const evidence=read('brain-network-consistency.json');
+const previous=JSON.parse(fs.readFileSync(path.join(here,'qa-v3','brain-network-consistency.json'),'utf8'));
+const surface=read('surface-checks.json');
+const rig=read('full-frame-rig-audit.json');
+const video=read('video-validation.json');
+
+assert.deepEqual(evidence.network,previous.network,'Network definitions must stay unchanged');
+assert.equal(evidence.network.edges.length,9);
+assert.deepEqual(evidence.network.primaryPath,['temporal','thalamus','frontal']);
+const legendTypes=new Set(evidence.network.legend.map(item=>item.type));
+assert(evidence.network.edges.every(edge=>legendTypes.has(edge.type)));
+assert.equal(evidence.reportSource,'same renderer snapshot');
+assert.equal(evidence.capturedAt,13.65);
+assert.deepEqual(evidence.clinicalValues,{patient:'P0001',sex:'男',age:56,abnormalRegion:'颞叶',risk:'高风险',confidence:.87});
+assert.equal(rig.frames,1080);
+assert.equal(rig.maxDrift,0);
+assert(rig.allNodesParented && rig.sourceRing3D);
+assert(surface.every(frame=>frame.outsidePixels===0 && frame.maxAnchorDrift===0));
+const vertices=surface.map(frame=>frame.checks.find(node=>node.id==='temporal').vertex);
+assert.equal(new Set(vertices).size,1,'Temporal node must remain attached to one vertex');
+const sourceX=rig.sourcePixels.map(sample=>sample.pixel[0]);
+const travel=Math.max(...sourceX)-Math.min(...sourceX);
+assert(travel>10,'Node must actually move with the rotating brain');
+assert(video.checks_passed);
+assert(video.mean_brain_region_difference>0 && video.mean_eeg_region_difference>0);
+const report={checksPassed:true,decodedFrames:video.decoded_frames,maxWorldSpaceAnchorDrift:rig.maxDrift,temporalSurfaceVertex:vertices[0],sourceScreenTravelPixels:travel,sourceRingIs3D:rig.sourceRing3D,sampledFramesWithArrowPixelsOutsideCortex:surface.filter(frame=>frame.outsidePixels>0).length,networkUnchanged:true,edgeCount:9,reportSnapshotTime:evidence.capturedAt};
+fs.writeFileSync(path.join(qa,'v4-validation.json'),JSON.stringify(report,null,2));
+console.log(JSON.stringify(report,null,2));
