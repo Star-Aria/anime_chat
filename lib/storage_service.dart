@@ -238,6 +238,8 @@ class Message {
   final String? imagePath; // 用户发送的图片本地路径（单张兼容字段）
   final List<String>? imagePaths; // 用户一次性发送的多张图片路径列表
   final String? imageDescription; // 豆包视觉模型对图片的描述（发给 AI 时用，不显示给用户）
+  final String? stickerAssetPath; // 用户发送的内置表情包资源路径
+  final String? stickerTitle; // 表情包标题，仅用于让角色理解用户表达的含义
   final MusicAttachment? musicAttachment; // 聊天中分享的歌曲，不等同于角色 TTS 音频
 
   Message({
@@ -249,6 +251,8 @@ class Message {
     this.imagePath,
     this.imagePaths,
     this.imageDescription,
+    this.stickerAssetPath,
+    this.stickerTitle,
     this.musicAttachment,
   });
 
@@ -262,6 +266,8 @@ class Message {
       'imagePath': imagePath,
       'imagePaths': imagePaths,
       'imageDescription': imageDescription,
+      'stickerAssetPath': stickerAssetPath,
+      'stickerTitle': stickerTitle,
       'musicAttachment': musicAttachment?.toJson(),
     };
   }
@@ -280,6 +286,8 @@ class Message {
           ?.map((e) => e as String)
           .toList(),
       imageDescription: json['imageDescription'],
+      stickerAssetPath: json['stickerAssetPath'] as String?,
+      stickerTitle: json['stickerTitle'] as String?,
       musicAttachment: json['musicAttachment'] is Map<String, dynamic>
           ? MusicAttachment.fromJson(
               json['musicAttachment'] as Map<String, dynamic>)
@@ -296,6 +304,8 @@ class Message {
     String? imagePath,
     List<String>? imagePaths,
     String? imageDescription,
+    String? stickerAssetPath,
+    String? stickerTitle,
     MusicAttachment? musicAttachment,
   }) {
     return Message(
@@ -307,6 +317,8 @@ class Message {
       imagePath: imagePath ?? this.imagePath,
       imagePaths: imagePaths ?? this.imagePaths,
       imageDescription: imageDescription ?? this.imageDescription,
+      stickerAssetPath: stickerAssetPath ?? this.stickerAssetPath,
+      stickerTitle: stickerTitle ?? this.stickerTitle,
       musicAttachment: musicAttachment ?? this.musicAttachment,
     );
   }
@@ -560,6 +572,9 @@ class StorageService {
           ? messages.first
           : Message(role: 'user', content: '新的对话', timestamp: DateTime.now()),
     );
+    if (firstUser.stickerTitle?.trim().isNotEmpty == true) {
+      return '表情包：${firstUser.stickerTitle!.trim()}';
+    }
     final normalized = firstUser.content.replaceAll(RegExp(r'\s+'), ' ').trim();
     if (normalized.isEmpty) return '新的对话';
     return normalized.length > 18

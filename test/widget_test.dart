@@ -9,7 +9,10 @@ import 'package:anime_chat_app/music_service.dart';
 import 'package:anime_chat_app/music_history_migration.dart';
 import 'package:anime_chat_app/name_pronunciation.dart';
 import 'package:anime_chat_app/storage_service.dart';
+import 'package:anime_chat_app/sticker_catalog.dart';
 import 'package:anime_chat_app/web_context_service.dart';
+import 'package:anime_chat_app/http_retry.dart';
+import 'package:anime_chat_app/user_turn_batch.dart';
 
 void main() {
   test('Character config includes playable characters', () {
@@ -17,6 +20,324 @@ void main() {
     expect(
       CharacterConfig.characters.map((character) => character.id),
       contains('shinobu'),
+    );
+  });
+
+  test('TLS handshake failures are treated as transient network errors', () {
+    expect(
+      RetryingHttp.isTransientNetworkException(
+        HandshakeException('connection terminated during handshake'),
+      ),
+      isTrue,
+    );
+  });
+
+  test('A text followed by a sticker becomes one ordered user turn', () {
+    final batch = UserTurnBatch(const [
+      UserTurnPart(text: '今天有点累。'),
+      UserTurnPart(
+        text: '【用户发送了表情包】\n表达标签：抱抱',
+        isSticker: true,
+      ),
+    ]);
+
+    expect(batch.containsSticker, isTrue);
+    expect(batch.isStickerOnly, isFalse);
+    expect(batch.serviceQuery, '今天有点累。');
+    expect(batch.responsePrompt, contains('只回复一次，不要逐条分别作答'));
+    expect(
+      batch.responsePrompt.indexOf('今天有点累。'),
+      lessThan(batch.responsePrompt.indexOf('表达标签：抱抱')),
+    );
+  });
+
+  test('Consecutive stickers become one sticker-only user turn', () {
+    final batch = UserTurnBatch(const [
+      UserTurnPart(
+        text: '【用户发送了表情包】\n表达标签：点赞',
+        isSticker: true,
+      ),
+      UserTurnPart(
+        text: '【用户发送了表情包】\n表达标签：开心',
+        isSticker: true,
+      ),
+    ]);
+
+    expect(batch.containsSticker, isTrue);
+    expect(batch.isStickerOnly, isTrue);
+    expect(batch.serviceQuery, isEmpty);
+    expect(batch.responsePrompt, contains('表达标签：点赞'));
+    expect(batch.responsePrompt, contains('表达标签：开心'));
+  });
+
+  test('A single queued message keeps its original prompt unchanged', () {
+    final batch = UserTurnBatch(const [
+      UserTurnPart(text: '只发这一句。'),
+    ]);
+
+    expect(batch.responsePrompt, '只发这一句。');
+  });
+
+  test('Sticker catalog exposes titled GIF assets', () {
+    expect(StickerCatalog.all, hasLength(234));
+    expect(
+      StickerCatalog.all.map((sticker) => sticker.assetPath).toSet(),
+      hasLength(StickerCatalog.all.length),
+    );
+    for (final sticker in StickerCatalog.all) {
+      expect(sticker.characterName, isNotEmpty);
+      expect(sticker.title, isNotEmpty);
+      expect(sticker.fullTitle, '${sticker.characterName}·${sticker.title}');
+      expect(sticker.description, isNotEmpty);
+      expect(sticker.assetPath.toLowerCase(), endsWith('.gif'));
+      expect(File(sticker.assetPath).existsSync(), isTrue,
+          reason: '${sticker.title} 的 GIF 资源不存在');
+    }
+  });
+
+  test('Sticker candidates follow character, media, and series order', () {
+    final stickers = StickerCatalog.all;
+
+    // 同一角色先列完各系列静态表情，再列各系列动态表情。
+    expect(stickers[0].fullTitle, '高松灯·不要吵架');
+    expect(stickers[3].fullTitle, '高松灯·忧郁');
+    expect(stickers[4].fullTitle, '高松灯·哎呀');
+    expect(stickers[8].fullTitle, '高松灯·Y');
+    expect(stickers[9].fullTitle, '高松灯·端详');
+    expect(stickers[13].fullTitle, '高松灯·疑惑');
+    expect(stickers[14].fullTitle, '高松灯·鼓掌');
+    expect(stickers[17].fullTitle, '高松灯·emo');
+    expect(stickers[18].fullTitle, '高松灯·哭哭');
+    expect(stickers[19].fullTitle, '高松灯·摸摸');
+    expect(stickers[20].fullTitle, '高松灯·喘气');
+    expect(stickers[22].fullTitle, '高松灯·我会加油的');
+    expect(stickers[23].fullTitle, '千早爱音·不会吧？');
+    expect(stickers[45].fullTitle, '千早爱音·耶！');
+    expect(stickers[46].fullTitle, '长崎爽世·大哭');
+    expect(stickers[68].fullTitle, '长崎爽世·真情流露');
+    expect(stickers[69].fullTitle, '椎名立希·哈？');
+    expect(stickers[90].fullTitle, '椎名立希·吸果冻熬夜');
+    expect(stickers[91].fullTitle, '要乐奈·刚睡醒');
+    expect(stickers[113].fullTitle, '要乐奈·投喂');
+    expect(stickers[114].fullTitle, '丰川祥子·害怕');
+    expect(stickers[128].fullTitle, '丰川祥子·伸手');
+    expect(stickers[129].fullTitle, '若叶睦·诶');
+    expect(stickers[188].fullTitle, '祐天寺若麦·张望');
+    expect(stickers[189].fullTitle, '纯田真奈·分你一半');
+    expect(stickers[193].fullTitle, '熊猫·哭哭');
+    expect(stickers[194].fullTitle, '户山香澄·期待');
+    expect(stickers[233].fullTitle, '要乐奈·困');
+
+    expect(
+      stickers.sublist(0, 114).map((sticker) => sticker.characterName).toSet(),
+      {
+        '高松灯',
+        '千早爱音',
+        '长崎爽世',
+        '椎名立希',
+        '要乐奈',
+      },
+    );
+    expect(
+      stickers
+          .sublist(114, 189)
+          .map((sticker) => sticker.characterName)
+          .toSet(),
+      {
+        '丰川祥子',
+        '若叶睦',
+        '三角初华',
+        '八幡海铃',
+        '祐天寺若麦',
+      },
+    );
+    expect(
+      stickers.sublist(194).map((sticker) => sticker.characterName),
+      [
+        '户山香澄',
+        '市谷有咲',
+        '牛込里美',
+        '山吹沙绫',
+        '花园多惠',
+        '凑友希那',
+        '冰川纱夜',
+        '今井莉莎',
+        '宇田川亚子',
+        '白金燐子',
+        '美竹兰',
+        '青叶摩卡',
+        '宇田川巴',
+        '上原绯玛丽',
+        '羽泽鸫',
+        '丸山彩',
+        '白鹭千圣',
+        '冰川日菜',
+        '若宫伊芙',
+        '大和麻弥',
+        '弦卷心',
+        '濑田薰',
+        '北泽育美',
+        '松原花音',
+        '米歇尔',
+        '和奏瑞依',
+        '朝日六花',
+        '佐藤益木',
+        '鳰原令王那',
+        '珠手知由',
+        '仓田真白',
+        '二叶筑紫',
+        '桐谷透子',
+        '广町七深',
+        '八潮瑠唯',
+        '高松灯',
+        '千早爱音',
+        '长崎爽世',
+        '椎名立希',
+        '要乐奈',
+      ],
+    );
+  });
+
+  test('User-corrected sticker character ownership is preserved', () {
+    final suddenAppearance = StickerCatalog.all.singleWhere(
+      (sticker) => sticker.title == '突然出现',
+    );
+    final soaked = StickerCatalog.all.singleWhere(
+      (sticker) => sticker.title == '淋湿了',
+    );
+
+    expect(suddenAppearance.characterName, '椎名立希');
+    expect(
+      suddenAppearance.assetPath,
+      'assets/stickers/MyGO手游_静态_椎名立希_突然出现.gif',
+    );
+    expect(soaked.characterName, '三角初华');
+    expect(soaked.assetPath, 'assets/stickers/三角初华_淋湿了.gif');
+  });
+
+  test('Sticker catalog keeps static copies over same-series dynamic copies',
+      () {
+    final assetPaths = StickerCatalog.all.map((sticker) => sticker.assetPath);
+
+    expect(
+      assetPaths,
+      isNot(contains('assets/stickers/MyGO手游_动态_高松灯_哎呀.gif')),
+    );
+    expect(
+      assetPaths,
+      isNot(contains('assets/stickers/MyGO手游_动态_千早爱音_爱音东京.gif')),
+    );
+    expect(
+      assetPaths,
+      isNot(contains('assets/stickers/MyGO手游_动态_椎名立希_突然出现.gif')),
+    );
+    expect(
+      assetPaths,
+      isNot(contains('assets/stickers/MyGO手游_动态_要乐奈_被猫环绕.gif')),
+    );
+  });
+
+  test('Every sticker has a concrete unique visual description', () {
+    final descriptions = StickerCatalog.all
+        .map((sticker) => sticker.description.trim())
+        .toList();
+
+    expect(
+      descriptions.where(
+        (description) => description.contains('通过画面中的表情和动作表达'),
+      ),
+      isEmpty,
+    );
+    expect(descriptions.toSet(), hasLength(descriptions.length));
+  });
+
+  test('Sticker messages retain title and asset after serialization', () {
+    final sticker = StickerCatalog.all.firstWhere(
+      (sticker) => sticker.title == '抱抱',
+    );
+    final message = Message(
+      role: 'user',
+      content: StickerCatalog.userMessageContent(sticker),
+      timestamp: DateTime(2026, 9, 15, 20, 30),
+      stickerAssetPath: 'assets/stickers/抱抱.gif',
+      stickerTitle: sticker.fullTitle,
+    );
+
+    final restored = Message.fromJson(message.toJson());
+
+    expect(
+      restored.content,
+      startsWith(
+        '【用户发送了表情包】\n表达标签：抱抱\n画面人物：若叶睦',
+      ),
+    );
+    expect(restored.stickerTitle, '若叶睦·抱抱');
+    expect(restored.stickerAssetPath, 'assets/stickers/抱抱.gif');
+  });
+
+  test('Every sticker uses the same context-aware intent contract', () {
+    for (final sticker in StickerCatalog.all) {
+      final content = StickerCatalog.userMessageContent(sticker);
+
+      expect(content, contains('表达标签：${sticker.title}'));
+      expect(content, contains('画面人物：${sticker.characterName}'));
+      expect(content, contains('画面内容：${sticker.neutralVisualDescription}'));
+      expect(content, contains('默认把画面中的表情和动作理解为用户此刻'));
+      expect(content, contains('不代表用户必然在谈论她'));
+      expect(content, contains('只有此前对话的当前话题明确围绕该人物时'));
+      expect(content, contains('不要仅因为看到“画面人物”就在回复里点名她'));
+      expect(content, isNot(contains('标题：${sticker.fullTitle}')));
+    }
+  });
+
+  test(
+      'Sticker replies are not rejected by the generic assistant-question filter',
+      () {
+    const contextualReply = '你是有什么事想进来吗？';
+
+    expect(
+      ApiService.shouldRetryAssistantLikeGreetingQuestionForTest(
+        contextualReply,
+        isStickerTurn: false,
+      ),
+      isTrue,
+    );
+    expect(
+      ApiService.shouldRetryAssistantLikeGreetingQuestionForTest(
+        contextualReply,
+        isStickerTurn: true,
+      ),
+      isFalse,
+    );
+  });
+
+  test('Sticker replies retry intent confirmations but allow natural questions',
+      () {
+    const reply = '这一下很有气势。你是想让我也这样吗？要不要一起试试？';
+
+    expect(ApiService.shouldRetryStickerQuestionForTest(reply), isTrue);
+    expect(
+      ApiService.shouldRetryStickerQuestionForTest('你还好吗？'),
+      isFalse,
+    );
+    expect(
+      ApiService.shouldRetryStickerQuestionForTest('要不要我陪你？'),
+      isFalse,
+    );
+    expect(
+      ApiService.removeStickerIntentConfirmationSentencesForTest(reply),
+      '这一下很有气势。要不要一起试试？',
+    );
+  });
+
+  test('Configured Japanese user name is normalized in Chinese replies', () {
+    expect(
+      ApiService.normalizeConfiguredUserNameForChineseForTest(
+        '原称呼ちゃん，是想让我开门吗？',
+        exactUserName: '原称呼ちゃん',
+        translatedUserName: '中文称呼酱',
+      ),
+      '中文称呼酱，是想让我开门吗？',
     );
   });
 
@@ -90,6 +411,28 @@ void main() {
     );
 
     expect(emotions, [SpeechEmotion.vulnerableMonologue]);
+  });
+
+  test('Andy emotion guidance separates grave support from routine concern',
+      () {
+    final hint = CharacterConfig.getCharacterById('andy').emotionCharacterHint;
+
+    expect(hint, contains('严重突发事件'));
+    expect(hint, contains('确认当下安全'));
+    expect(hint, contains('具体行动建议仍用 neutral'));
+    expect(hint, contains('普通的关心、提醒和“注意身体”也不使用 sad'));
+  });
+
+  test('Emotion analysis receives the preceding user message as context', () {
+    final prompt = EmotionAnalyzer.buildUserPromptForTest(
+      precedingUserMessage: '学校里刚发生了一件很严重的事。',
+      sentences: const ['你现在安全吗？', '先找一个信任的人陪着你。'],
+    );
+
+    expect(prompt, contains('仅用于理解角色回复的语境'));
+    expect(prompt, contains('学校里刚发生了一件很严重的事。'));
+    expect(prompt, contains('0: 你现在安全吗？'));
+    expect(prompt, contains('1: 先找一个信任的人陪着你。'));
   });
 
   test('same-turn follow-up does not fabricate an empty user turn', () {
@@ -436,6 +779,18 @@ void main() {
           '歌詞の「生まれた地球にいるはずなのに，可为何好像只有我違う星から来たみたいなんだ」が心に残りますわ。',
         ),
         isFalse,
+      );
+    });
+
+    test('Japanese validation locates only the sentence with Chinese residue',
+        () {
+      expect(
+        ApiService.invalidJapaneseUnitIndexesForTest([
+          '……聞こえた。',
+          'その人はもう这句话を聞けない。',
+          '明日もここにいるよ。',
+        ]),
+        [1],
       );
     });
 
@@ -1442,6 +1797,118 @@ void main() {
   });
 
   group('Aligned Japanese translation contract', () {
+    test('ordered text array preserves names, quotes and paragraph boundaries',
+        () {
+      final texts = [
+        '__JP_NAME_0__が「こんにちは」と言った。',
+        '私は "大丈夫" と答えた。',
+        'そばにいるよ。',
+      ];
+      expect(
+        ApiService.parseAlignedJapaneseTranslationsForTest(
+          sourceUnits: ['__JP_NAME_0__说你好。', '我回答没事。', '我会陪着你。'],
+          response: jsonEncode({'translations': texts}),
+          placeholders: const {'__JP_NAME_0__': '燈'},
+          paragraphBreakAfter: const {1},
+        ),
+        '${texts[0]}${texts[1]}\n${texts[2]}',
+      );
+    });
+
+    test('ordered array rejects missing, extra, empty and non-text entries',
+        () {
+      for (final translations in <List<dynamic>>[
+        [],
+        ['一文目です。', '余分です。'],
+        [''],
+        [null],
+        [123],
+        [
+          {'source_index': 1, 'text': 123}
+        ],
+      ]) {
+        expect(
+          ApiService.parseAlignedJapaneseTranslationsForTest(
+            sourceUnits: ['第一句。'],
+            response: jsonEncode({'translations': translations}),
+          ),
+          isNull,
+          reason: '$translations',
+        );
+      }
+    });
+
+    test('ordered text array still enforces protected name ownership', () {
+      expect(
+        ApiService.parseAlignedJapaneseTranslationsForTest(
+          sourceUnits: ['__JP_NAME_0__来了。', '开始聊天。'],
+          response: jsonEncode({
+            'translations': ['来ました。', '__JP_NAME_0__と話します。']
+          }),
+          placeholders: const {'__JP_NAME_0__': '燈'},
+        ),
+        isNull,
+      );
+    });
+
+    test('ignores model line breaks and keeps only explicit paragraphs', () {
+      expect(
+        ApiService.normalizeResponseParagraphsForTest(
+          '第一句。\n第二句。\n第三句。',
+        ),
+        '第一句。第二句。第三句。',
+      );
+      expect(
+        ApiService.normalizeResponseParagraphsForTest(
+          '第一段第一句。\n第一段第二句。\n\n第二段。',
+        ),
+        '第一段第一句。第一段第二句。第二段。',
+      );
+      expect(
+        ApiService.normalizeResponseParagraphsForTest(
+          '第一段。【换段】第二段。',
+        ),
+        '第一段。\n第二段。',
+      );
+    });
+
+    test('collapses both languages when their paragraph counts differ', () {
+      final aligned = ApiService.alignBilingualParagraphsForTest(
+        japanese: '一文目。二文目。',
+        chinese: '第一句。\n第二句。',
+      );
+
+      expect(aligned['japanese'], '一文目。二文目。');
+      expect(aligned['chinese'], '第一句。第二句。');
+    });
+
+    test('restores the same paragraph boundary in Japanese translation', () {
+      final layout = ApiService.chineseTranslationLayoutForTest(
+        '第一段第一句。第一段第二句。\n第二段。',
+      );
+
+      expect(layout['units'], [
+        '第一段第一句。',
+        '第一段第二句。',
+        '第二段。',
+      ]);
+      expect(layout['paragraphBreakAfter'], {1});
+
+      final parsed = ApiService.parseAlignedJapaneseTranslationsForTest(
+        sourceUnits: layout['units']! as List<String>,
+        paragraphBreakAfter: layout['paragraphBreakAfter']! as Set<int>,
+        response: '''
+{"translations":[
+  {"source_index":1,"text":"一段目の一文目。"},
+  {"source_index":2,"text":"一段目の二文目。"},
+  {"source_index":3,"text":"二段目です。"}
+]}
+''',
+      );
+
+      expect(parsed, '一段目の一文目。一段目の二文目。\n二段目です。');
+    });
+
     test('keeps MyGO!!!!! inside one source sentence', () {
       expect(
         ApiService.splitChineseTranslationUnitsForTest(
@@ -1463,6 +1930,88 @@ void main() {
       );
 
       expect(parsed, '先に一つ目のことが起きました。その後、二つ目のことが起きました。');
+    });
+
+    test('recovers a complete JSON object wrapped in stray model text', () {
+      final parsed = ApiService.parseAlignedJapaneseTranslationsForTest(
+        sourceUnits: ['第一句。'],
+        response: '''
+翻訳結果です。
+{"translations":[{"source_index":1,"text":"一文目です。"}]}
+以上です。
+''',
+      );
+
+      expect(parsed, '一文目です。');
+    });
+
+    test('rejects a truncated translation JSON response', () {
+      final parsed = ApiService.parseAlignedJapaneseTranslationsForTest(
+        sourceUnits: ['第一句。'],
+        response: '{"translations":[{"source_index":1,"text":"一文目です。"}',
+      );
+
+      expect(parsed, isNull);
+    });
+
+    test('repairs stray index quotes in a complete twelve-sentence response',
+        () {
+      final sourceUnits = List.generate(12, (index) => '第${index + 1}句。');
+      sourceUnits[9] = '__JP_NAME_0__，现在很难受吧。';
+      final translatedUnits = List.generate(12, (index) => '${index + 1}文目です。');
+      translatedUnits[9] = '__JP_NAME_0__、今……つらいよね。';
+      translatedUnits[10] = '急にそんなことを聞いたら、わからなくなるよね。';
+      translatedUnits[11] = r'「\"source_index\":10\"」という文字です。';
+      final response = jsonEncode({
+        'translations': [
+          for (var i = 0; i < translatedUnits.length; i++)
+            {'source_index': i + 1, 'text': translatedUnits[i]},
+        ],
+      })
+          .replaceAll('"source_index":10,', '"source_index":10",')
+          .replaceAll('"source_index":11,', '"source_index":11",');
+
+      final parsed = ApiService.parseAlignedJapaneseTranslationsForTest(
+        sourceUnits: sourceUnits,
+        placeholders: const {'__JP_NAME_0__': '凛野ちゃん'},
+        paragraphBreakAfter: const {8},
+        response: response,
+      );
+      expect(parsed,
+          '${translatedUnits.take(9).join()}\n${translatedUnits.skip(9).join()}');
+    });
+
+    test('index syntax repair still rejects reordered indexes', () {
+      expect(
+        ApiService.parseAlignedJapaneseTranslationsForTest(
+          sourceUnits: ['第一句。', '第二句。'],
+          response: '{"translations":[{"source_index":2","text":"二文目です。"},'
+              '{"source_index":1","text":"一文目です。"}]}',
+        ),
+        isNull,
+      );
+    });
+
+    test('index syntax repair does not conceal missing placeholders', () {
+      expect(
+        ApiService.parseAlignedJapaneseTranslationsForTest(
+          sourceUnits: ['__JP_NAME_0__来了。'],
+          placeholders: const {'__JP_NAME_0__': '燈'},
+          response: '{"translations":[{"source_index":1","text":"来ました。"}]}',
+        ),
+        isNull,
+      );
+    });
+
+    test('index syntax repair cannot salvage a truncated response', () {
+      expect(
+        ApiService.parseAlignedJapaneseTranslationsForTest(
+          sourceUnits: ['第一句。', '第二句。'],
+          response: '{"translations":[{"source_index":1","text":"一文目です。"},'
+              '{"source_index":2,"text":"まだ',
+        ),
+        isNull,
+      );
     });
 
     test('rejects reordered source indexes', () {

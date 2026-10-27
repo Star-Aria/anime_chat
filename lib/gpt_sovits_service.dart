@@ -54,8 +54,13 @@ class GptSovitsService {
     final python = AppPaths.gptSovitsPython;
     final config = r'GPT_SoVITS/configs/tts_infer.yaml';
 
-    if (!Directory(root).existsSync() || !File(python).existsSync()) {
-      debugPrint('GPT-SoVITS 自动启动跳过：未找到安装目录 $root');
+    if (!Directory(root).existsSync() ||
+        !File(python).existsSync() ||
+        !File('$root/api_v2.py').existsSync() ||
+        !File('$root/$config').existsSync()) {
+      debugPrint('GPT-SoVITS 自动启动跳过：未找到完整安装目录 $root。'
+          '可在程序或项目目录创建 gpt_sovits_path.txt 指定位置，'
+          '或设置 GPT_SOVITS_ROOT 环境变量。');
       return false;
     }
 

@@ -9,7 +9,20 @@ import 'grounding_contract.dart';
 import 'name_pronunciation.dart';
 import 'path_service.dart';
 import 'gpt_sovits_service.dart';
+import 'http_retry.dart';
 import 'reference_audio_preprocessor.dart';
+
+class ApiRequestException implements Exception {
+  final String userMessage;
+  final Object? cause;
+
+  const ApiRequestException(this.userMessage, {this.cause});
+
+  @override
+  String toString() => cause == null
+      ? 'ApiRequestException: $userMessage'
+      : 'ApiRequestException: $userMessage ($cause)';
+}
 
 class ApiService {
   static const String deepSeekApiKey = ApiKeys.deepseekApiKey;
@@ -41,9 +54,7 @@ class ApiService {
   // _maxTranslationRetries：日语角色化翻译未通过本地门禁时最多尝试几次。
   //   网络抖动、API 偶发返回奇怪格式（如返回中文、返回空、返回带 markdown 的内容）时，
   //   会自动再调用一次翻译 API。为控制延迟和额度，当前最多尝试 2 次。
-  // _japaneseFallbackTextForCharacter：所有重试都失败后按角色语体兜底。
-  //   存在的意义是：宁可让 AI 随便说一句日语兜底，也绝不能把中文塞给 TTS（GPT-SoVITS）
-  //   导致语音乱掉、字幕也是中文。如果想换文案，改这里即可，但必须是纯日语。
+  // 重试耗尽时报告翻译错误，不用无关角色台词代替译文，也不送入 TTS。
   static const int _maxTranslationRetries = 2;
   static const String _japaneseQuotationPunctuationInstruction =
       '日本語の括弧は、曲名、歌詞の引用、人物の台詞の引用を「」で囲み、'
@@ -432,6 +443,8 @@ class ApiService {
     List<String>? imagePaths,
     String? characterId,
     String characterLanguage = 'ja',
+    bool? containsStickerInput,
+    bool? stickerOnlyInput,
     Map<String, dynamic>? lyricsTranslationReference,
     List<String> knownSongTitles = const [],
   }) async {
@@ -452,6 +465,10 @@ class ApiService {
         }
       }
 
+      final hasStickerInput =
+          containsStickerInput ?? userMessage.contains('【用户发送了表情包】');
+      final isStickerOnlyTurn =
+          stickerOnlyInput ?? userMessage.trimLeft().startsWith('【用户发送了表情包】');
       final isEmotionSupportTurn = _isEmotionSupportUserMessage(userMessage);
       final isRelationshipArcTurn = _isRelationshipArcQuestion(userMessage);
       final isEventProcessTurn = _isEventProcessQuestion(userMessage);
@@ -573,13 +590,15 @@ class ApiService {
 ''');
 
       systemBuffer.writeln();
-      systemBuffer.write(isEmotionSupportTurn
-          ? '【本轮回复篇幅】用户本轮明显在表达情绪困扰，可以适度写长，但不要为了显得体贴而重复同一层意思。'
-          : isRelationshipArcTurn
-              ? '【本轮回复篇幅】用户本轮在问关系变化。用4到7句讲清主要变化和感受，不要为了覆盖资料而继续展开。'
-              : isEventProcessTurn
-                  ? '【本轮回复篇幅】用户本轮在问事件经过或处理方式。用4到6句挑最相关的核心动作回答，不要从头到尾念资料。'
-                  : '【本轮回复篇幅】用户本轮不是情绪倾诉。请用日常聊天篇幅回复，控制在3到6句左右。');
+      systemBuffer.write(isStickerOnlyTurn
+          ? '【本轮回复篇幅】用户本轮发送的是表情包。用1到3句自然回应，第一句必须直接接住表情包表达的态度，不要自顾自开启新话题。'
+          : isEmotionSupportTurn
+              ? '【本轮回复篇幅】用户本轮明显在表达情绪困扰，可以适度写长，但不要为了显得体贴而重复同一层意思。'
+              : isRelationshipArcTurn
+                  ? '【本轮回复篇幅】用户本轮在问关系变化。用4到7句讲清主要变化和感受，不要为了覆盖资料而继续展开。'
+                  : isEventProcessTurn
+                      ? '【本轮回复篇幅】用户本轮在问事件经过或处理方式。用4到6句挑最相关的核心动作回答，不要从头到尾念资料。'
+                      : '【本轮回复篇幅】用户本轮不是情绪倾诉。请用日常聊天篇幅回复，控制在3到6句左右。');
       systemBuffer.writeln();
       systemBuffer.write('''
 【对话身份与消息来源】
@@ -587,11 +606,13 @@ class ApiService {
 - 严格区分“用户本轮提到的内容”和“你在历史回复中主动提到的内容”。
 - 不得把 assistant 历史里的歌曲、人物、经历或观点说成“你刚才提到/问起/说过”。
 - 第一人称“我”始终指当前角色；“你”始终指用户。不得交换双方身份。
+- user 消息中出现“【用户发送了表情包】”的内容，是用户对当前聊天作出的非文字回应。它可能与同一轮紧邻的文字或其他表情包共同表达一个意思，必须按发送顺序整体理解并只回复一次，不要逐条分别作答。默认把表情和动作理解为用户此刻借它表达的状态、态度或意图。“画面人物”只是素材身份，不是默认话题；只有上文当前正在谈论该人物时，才用她的身份理解这次回应。不要仅因素材里有她就在回复中点名。不必把表情包解释成唯一答案；有歧义时按最自然、最宽泛的情绪直接接住，不要把你的猜测改写成问句向用户确认“是不是这个意思”。必须承接此前对话，不得忽略表情包后自顾自开启新话题，也不要解释你读取了这些信息。
 
 【中文原稿表达方式】
 - 这是会话气泡里的角色回答，不是资料总结、小说旁白或舞台剧脚本。
 - 先回应用户真正问的内容，再选少量最相关的细节和感受自然聊开；不要因为 facts 很多就逐条使用。
 - 按适合翻成自然日语口语的短句节奏组织中文，不要写成过度铺陈、排比或抒情的中文网文腔。
+- 普通连续叙述不要每句换行。只有话题或表达层次确实需要另起自然段时，才在两段之间单独输出【换段】；普通换行或空行都不代表分段。
 - 动作或神态描写默认不必添加。如果它确实能表现当下情绪，整段最多保留一处简短的括号描写，不要连续穿插舞台指示。
 ''');
       systemBuffer.writeln();
@@ -662,8 +683,9 @@ class ApiService {
       );
       final hasGroundingContext = webContext != null && webContext.isNotEmpty;
 
-      final response = await http.post(
+      final response = await RetryingHttp.post(
         Uri.parse('$deepSeekBaseUrl/chat/completions'),
+        operation: '生成角色回复',
         headers: {
           'Authorization': 'Bearer $deepSeekApiKey',
           'Content-Type': 'application/json',
@@ -686,7 +708,9 @@ class ApiService {
       if (response.statusCode != 200) {
         debugPrint('DeepSeek API 错误: ${response.statusCode}');
         debugPrint('错误内容: ${response.body}');
-        return {'japanese': '申し訳ございません...', 'chinese': '抱歉，我现在无法回答...'};
+        throw ApiRequestException(
+          '回复服务暂时不可用（${response.statusCode}），请稍后重试。',
+        );
       }
 
       final responseData = jsonDecode(utf8.decode(response.bodyBytes));
@@ -718,9 +742,16 @@ class ApiService {
         );
       }
 
-      if (_containsAssistantLikeGreetingQuestion(rawResponseText)) {
+      final retriesAssistantLikeQuestion =
+          _shouldRetryAssistantLikeGreetingQuestion(
+        rawResponseText,
+        isStickerTurn: hasStickerInput,
+      );
+      final retriesStickerQuestion = hasStickerInput &&
+          _containsStickerIntentConfirmation(rawResponseText);
+      if (retriesAssistantLikeQuestion || retriesStickerQuestion) {
         debugPrint(
-          '检测到助手式客套问句，自动重试生成回复: '
+          '${retriesStickerQuestion ? '检测到表情包回复向用户反问确认，丢弃原回复并自动重试: ' : '检测到助手式客套问句，丢弃原回复并自动重试: '}'
           '${_logPreview(rawResponseText)}',
         );
         responseMessages.add({
@@ -729,12 +760,16 @@ class ApiService {
         });
         responseMessages.add({
           'role': 'user',
-          'content': '刚才的回复像客服或助手，并且包含"有什么事吗"这类禁句。'
-              '请用中文重新回答：自然回应我的上一句话，不要问我有什么事，不要说有什么需要帮助。',
+          'content': retriesStickerQuestion
+              ? '刚才的回复把你对表情包的解读变成了问句，要求用户确认你猜得对不对，显得不自然。'
+                  '请用中文重新回答同一个表情包：保留和上文的联系，按最自然、宽泛的情绪直接回应；可以有符合当前对话的自然问句，但不要询问你对用户意图的猜测是否正确，不增加新的具体解读。'
+              : '刚才的回复像客服或助手，并且包含"有什么事吗"这类禁句。'
+                  '请用中文重新回答：自然回应我的上一句话，不要问我有什么事，不要说有什么需要帮助。',
         });
 
-        final retryResponse = await http.post(
+        final retryResponse = await RetryingHttp.post(
           Uri.parse('$deepSeekBaseUrl/chat/completions'),
+          operation: retriesStickerQuestion ? '修正表情包确认问句' : '修正助手式问句',
           headers: {
             'Authorization': 'Bearer $deepSeekApiKey',
             'Content-Type': 'application/json',
@@ -758,17 +793,27 @@ class ApiService {
               retryData['choices'][0]['message']['content'] as String;
           final sanitizedRetryText =
               _sanitizeUserNameHonorifics(retryText, exactUserName);
-          if (!_containsAssistantLikeGreetingQuestion(sanitizedRetryText)) {
+          final retryStillInvalid = retriesStickerQuestion
+              ? _containsStickerIntentConfirmation(sanitizedRetryText)
+              : _containsAssistantLikeGreetingQuestion(sanitizedRetryText);
+          if (!retryStillInvalid) {
             rawResponseText = sanitizedRetryText;
           } else {
             debugPrint(
-              '重试结果仍包含助手式客套问句，使用日常寒暄兜底: '
+              '${retriesStickerQuestion ? '重试结果仍向用户提问，去除问句部分: ' : '重试结果仍包含助手式客套问句，使用日常寒暄兜底: '}'
               '${_logPreview(retryText)}',
             );
-            rawResponseText = _casualGreetingFallback('zh');
+            final statementOnly = retriesStickerQuestion
+                ? _removeStickerIntentConfirmationSentences(
+                    sanitizedRetryText,
+                  )
+                : '';
+            rawResponseText = statementOnly.isNotEmpty
+                ? statementOnly
+                : _casualGreetingFallback('zh');
           }
         } else {
-          debugPrint('助手式问句重试 API 错误: ${retryResponse.statusCode}');
+          debugPrint('回复问句重试 API 错误: ${retryResponse.statusCode}');
           debugPrint('错误内容: ${retryResponse.body}');
           rawResponseText = _casualGreetingFallback('zh');
         }
@@ -789,11 +834,17 @@ class ApiService {
       }
 
       rawResponseText = _applyFixedChineseCallNames(
-        rawResponseText,
+        _normalizeConfiguredUserNameForChinese(
+          rawResponseText,
+          exactUserName: exactUserName,
+          translatedUserName: translatedUserName,
+        ),
         fixedChineseCallNames,
       );
       rawResponseText = normalizeKnownNamesForChineseText(rawResponseText);
       rawResponseText = _normalizeChineseConversationWording(rawResponseText);
+      rawResponseText = _normalizeResponseParagraphs(rawResponseText);
+      debugPrint('最终采用的中文回复: ${_logPreview(rawResponseText)}');
 
       // ========================================
       // 中文角色：直接返回中文回复，跳过日语相关流程
@@ -810,48 +861,86 @@ class ApiService {
       }
 
       final chineseText = rawResponseText.trim();
-      String japaneseText = '';
-      for (var attempt = 1; attempt <= _maxTranslationRetries; attempt++) {
-        japaneseText = await _translateChineseRoleResponseToJapanese(
-          chineseText,
+      var translation = await _translateChineseRoleResponseToJapanese(
+        chineseText,
+        characterId: characterId,
+        exactUserName: exactUserName,
+        translatedUserName: translatedUserName,
+        fixedCharacterCallNames: fixedCharacterCallNames,
+        fixedChineseCallNames: fixedChineseCallNames,
+        webContext: webContext,
+        lyricsTranslationReference: lyricsTranslationReference,
+        knownSongTitles: knownSongTitles,
+        isRetry: false,
+      );
+      var japaneseText = translation.text;
+      if (!_isAcceptableJapaneseForCharacter(japaneseText, characterId)) {
+        _logJapaneseTranslationValidationFailure(
+          attempt: 1,
+          translation: translation,
           characterId: characterId,
-          exactUserName: exactUserName,
-          translatedUserName: translatedUserName,
-          fixedCharacterCallNames: fixedCharacterCallNames,
-          fixedChineseCallNames: fixedChineseCallNames,
-          webContext: webContext,
-          lyricsTranslationReference: lyricsTranslationReference,
-          knownSongTitles: knownSongTitles,
-          isRetry: attempt > 1,
         );
-        if (_isAcceptableJapaneseForCharacter(japaneseText, characterId)) {
-          break;
+
+        final invalidUnitIndexes = _invalidJapaneseUnitIndexes(
+          translation.units,
+        );
+        final canRepairOnlyInvalidUnits = translation.isValid &&
+            invalidUnitIndexes.isNotEmpty &&
+            isJapaneseStyleCompatible(japaneseText, characterId) &&
+            isJapaneseTranslationStyleCompatible(japaneseText, characterId);
+
+        if (canRepairOnlyInvalidUnits) {
+          translation = await _repairJapaneseTranslationUnits(
+            translation,
+            invalidUnitIndexes: invalidUnitIndexes,
+            characterId: characterId,
+          );
+        } else {
+          translation = await _translateChineseRoleResponseToJapanese(
+            chineseText,
+            characterId: characterId,
+            exactUserName: exactUserName,
+            translatedUserName: translatedUserName,
+            fixedCharacterCallNames: fixedCharacterCallNames,
+            fixedChineseCallNames: fixedChineseCallNames,
+            webContext: webContext,
+            lyricsTranslationReference: lyricsTranslationReference,
+            knownSongTitles: knownSongTitles,
+            isRetry: true,
+          );
         }
-        debugPrint(
-          '日语角色化翻译未通过本地校验: '
-          'attempt=$attempt, '
-          'cleanJapanese=${_isCleanJapaneseForTts(japaneseText)}, '
-          'quotationPunctuation=${_usesJapaneseQuotationPunctuation(japaneseText)}, '
-          'baseStyle=${isJapaneseStyleCompatible(japaneseText, characterId)}, '
-          'translationStyle=${isJapaneseTranslationStyleCompatible(japaneseText, characterId)}, '
-          'text=${_logPreview(japaneseText)}',
-        );
+        japaneseText = translation.text;
+        if (!_isAcceptableJapaneseForCharacter(japaneseText, characterId)) {
+          _logJapaneseTranslationValidationFailure(
+            attempt: _maxTranslationRetries,
+            translation: translation,
+            characterId: characterId,
+          );
+        }
       }
       if (!_isAcceptableJapaneseForCharacter(japaneseText, characterId)) {
-        debugPrint('日语角色化翻译失败，使用日语兜底文本');
-        japaneseText = _japaneseFallbackTextForCharacter(characterId);
+        throw const ApiRequestException('日语翻译未能完成，本次未生成角色回复，请稍后重试。');
       }
 
+      final alignedResponse = _alignBilingualParagraphs(
+        japanese: japaneseText,
+        chinese: chineseText,
+      );
+
       return {
-        'japanese': japaneseText,
-        'chinese': chineseText,
+        'japanese': alignedResponse.japanese,
+        'chinese': alignedResponse.chinese,
         'imageDescription': imageContext.isNotEmpty
             ? imageContext.replaceFirst('\n\n【图片内容】', '')
             : '',
       };
     } catch (e) {
       debugPrint('请求失败: $e');
-      return {'japanese': '申し訳ございません...', 'chinese': '抱歉，连接失败了...'};
+      if (e is ApiRequestException) rethrow;
+      throw ApiRequestException(
+        '网络连接中断，回复没有生成。请稍后重试。',
+        cause: e,
+      );
     }
   }
 
@@ -947,8 +1036,9 @@ $responseShapeReminder
               '句子和编号必须共同保持时间先后顺序。只输出规定的 JSON 对象。',
         },
       ];
-      final response = await http.post(
+      final response = await RetryingHttp.post(
         Uri.parse('$deepSeekBaseUrl/chat/completions'),
+        operation: '修正时间线回复',
         headers: {
           'Authorization': 'Bearer $deepSeekApiKey',
           'Content-Type': 'application/json',
@@ -1080,8 +1170,9 @@ $responseShapeReminder
       });
 
     try {
-      final retryResponse = await http.post(
+      final retryResponse = await RetryingHttp.post(
         Uri.parse('$deepSeekBaseUrl/chat/completions'),
+        operation: '修正天气回复',
         headers: {
           'Authorization': 'Bearer $deepSeekApiKey',
           'Content-Type': 'application/json',
@@ -1141,8 +1232,9 @@ $responseShapeReminder
       });
 
     try {
-      final retryResponse = await http.post(
+      final retryResponse = await RetryingHttp.post(
         Uri.parse('$deepSeekBaseUrl/chat/completions'),
+        operation: '修正天气地点回复',
         headers: {
           'Authorization': 'Bearer $deepSeekApiKey',
           'Content-Type': 'application/json',
@@ -1334,7 +1426,10 @@ $responseShapeReminder
 
       final gptResponse = await http.get(
         Uri.parse('$gptSovitsBaseUrl/set_gpt_weights').replace(
-          queryParameters: {'weights_path': resolvedGptModelPath},
+          queryParameters: {
+            'weights_path':
+                AppPaths.gptSovitsModelPathForApi(resolvedGptModelPath),
+          },
         ),
       );
 
@@ -1346,7 +1441,10 @@ $responseShapeReminder
 
       final sovitsResponse = await http.get(
         Uri.parse('$gptSovitsBaseUrl/set_sovits_weights').replace(
-          queryParameters: {'weights_path': resolvedSovitsModelPath},
+          queryParameters: {
+            'weights_path':
+                AppPaths.gptSovitsModelPathForApi(resolvedSovitsModelPath),
+          },
         ),
       );
 
@@ -1540,6 +1638,73 @@ $responseShapeReminder
 
     return forbiddenPatterns.any((pattern) => pattern.hasMatch(normalized));
   }
+
+  static bool _isStickerIntentConfirmationSentence(String sentence) {
+    if (!sentence.contains('？') && !sentence.contains('?')) return false;
+    final compact = sentence.replaceAll(RegExp(r'\s+'), '');
+    return RegExp(
+      r'(?:你|^[^，,。！？!?]{1,16}[，,])'
+      r'(?:是想(?:说|表达|让我|要我)|是在说|的意思是|是在表示)',
+    ).hasMatch(compact);
+  }
+
+  static bool _containsStickerIntentConfirmation(String text) {
+    return _splitCompleteSentences(text)
+        .any(_isStickerIntentConfirmationSentence);
+  }
+
+  static List<String> _splitCompleteSentences(String text) {
+    final sentences = <String>[];
+    final sentence = StringBuffer();
+    const endings = {'。', '！', '？', '!', '?'};
+
+    for (final rune in text.runes) {
+      final character = String.fromCharCode(rune);
+      sentence.write(character);
+      if (!endings.contains(character)) continue;
+      sentences.add(sentence.toString());
+      sentence.clear();
+    }
+    if (sentence.isNotEmpty) sentences.add(sentence.toString());
+    return sentences;
+  }
+
+  static String _removeStickerIntentConfirmationSentences(String text) {
+    final result = StringBuffer();
+    for (final sentence in _splitCompleteSentences(text)) {
+      if (!_isStickerIntentConfirmationSentence(sentence)) {
+        result.write(sentence);
+      }
+    }
+    return result.toString().trim();
+  }
+
+  @visibleForTesting
+  static bool shouldRetryStickerQuestionForTest(String text) =>
+      _containsStickerIntentConfirmation(text);
+
+  @visibleForTesting
+  static String removeStickerIntentConfirmationSentencesForTest(String text) =>
+      _removeStickerIntentConfirmationSentences(text);
+
+  static bool _shouldRetryAssistantLikeGreetingQuestion(
+    String text, {
+    required bool isStickerTurn,
+  }) {
+    // 表情包本身是对话动作，回复中的问句往往是在承接它的具体含义。
+    // 通用的“助手式问句”检查无法判断这层语境，会误杀正确回复。
+    return !isStickerTurn && _containsAssistantLikeGreetingQuestion(text);
+  }
+
+  @visibleForTesting
+  static bool shouldRetryAssistantLikeGreetingQuestionForTest(
+    String text, {
+    required bool isStickerTurn,
+  }) =>
+      _shouldRetryAssistantLikeGreetingQuestion(
+        text,
+        isStickerTurn: isStickerTurn,
+      );
 
   static String? _extractExactUserName(String characterPersonality) {
     final patterns = [
@@ -1739,8 +1904,115 @@ $responseShapeReminder
     return result;
   }
 
+  static String _normalizeConfiguredUserNameForChinese(
+    String text, {
+    String? exactUserName,
+    String? translatedUserName,
+  }) {
+    final source = exactUserName?.trim() ?? '';
+    final target = translatedUserName?.trim() ?? '';
+    if (source.isEmpty || target.isEmpty || source == target) return text;
+    return text.replaceAll(source, target);
+  }
+
+  @visibleForTesting
+  static String normalizeConfiguredUserNameForChineseForTest(
+    String text, {
+    String? exactUserName,
+    String? translatedUserName,
+  }) =>
+      _normalizeConfiguredUserNameForChinese(
+        text,
+        exactUserName: exactUserName,
+        translatedUserName: translatedUserName,
+      );
+
   static String _normalizeChineseConversationWording(String text) {
     return text.replaceAll('您', '你').replaceAll('若是', '要是');
+  }
+
+  static String _normalizeResponseParagraphs(String text) {
+    const paragraphMarker = '【换段】';
+    final normalizedNewlines =
+        text.replaceAll('\r\n', '\n').replaceAll('\r', '\n');
+    final rawParagraphs = normalizedNewlines.split(paragraphMarker);
+    final paragraphs = <String>[];
+
+    for (final rawParagraph in rawParagraphs) {
+      final lines = rawParagraph
+          .split('\n')
+          .map((line) => line.trim())
+          .where((line) => line.isNotEmpty)
+          .toList(growable: false);
+      if (lines.isEmpty) continue;
+
+      final paragraph = StringBuffer(lines.first);
+      for (var i = 1; i < lines.length; i++) {
+        final previous = lines[i - 1];
+        final current = lines[i];
+        final needsSpace = RegExp(r'[A-Za-z0-9]$').hasMatch(previous) &&
+            RegExp(r'^[A-Za-z0-9]').hasMatch(current);
+        if (needsSpace) paragraph.write(' ');
+        paragraph.write(current);
+      }
+      paragraphs.add(paragraph.toString());
+    }
+
+    return paragraphs.join('\n').trim();
+  }
+
+  static ({String japanese, String chinese}) _alignBilingualParagraphs({
+    required String japanese,
+    required String chinese,
+  }) {
+    String normalize(String text) => text
+        .replaceAll('\r\n', '\n')
+        .replaceAll('\r', '\n')
+        .replaceAll(RegExp(r'[ \t]*\n+[ \t]*'), '\n')
+        .trim();
+
+    String collapse(String text) =>
+        text.replaceAll(RegExp(r'[ \t]*\n+[ \t]*'), '').trim();
+
+    final normalizedJapanese = normalize(japanese);
+    final normalizedChinese = normalize(chinese);
+    final japaneseBreaks = '\n'.allMatches(normalizedJapanese).length;
+    final chineseBreaks = '\n'.allMatches(normalizedChinese).length;
+
+    if (japaneseBreaks != chineseBreaks) {
+      debugPrint(
+        '中日段落边界不一致，统一合并为单段: '
+        'japanese=$japaneseBreaks, chinese=$chineseBreaks',
+      );
+      return (
+        japanese: collapse(normalizedJapanese),
+        chinese: collapse(normalizedChinese),
+      );
+    }
+
+    return (
+      japanese: normalizedJapanese,
+      chinese: normalizedChinese,
+    );
+  }
+
+  @visibleForTesting
+  static String normalizeResponseParagraphsForTest(String text) =>
+      _normalizeResponseParagraphs(text);
+
+  @visibleForTesting
+  static Map<String, String> alignBilingualParagraphsForTest({
+    required String japanese,
+    required String chinese,
+  }) {
+    final aligned = _alignBilingualParagraphs(
+      japanese: japanese,
+      chinese: chinese,
+    );
+    return {
+      'japanese': aligned.japanese,
+      'chinese': aligned.chinese,
+    };
   }
 
   @visibleForTesting
@@ -1773,6 +2045,7 @@ $responseShapeReminder
     var protectedText = text;
     final placeholders = <String, String>{};
     final nameMap = <String, String>{};
+    final callNameSources = <String>{};
 
     if (exactUserName != null && exactUserName.trim().isNotEmpty) {
       nameMap[exactUserName.trim()] = exactUserName.trim();
@@ -1790,26 +2063,25 @@ $responseShapeReminder
           japaneseCallName.isEmpty) {
         continue;
       }
-      if (!protectedText.contains(chineseCallName)) continue;
-      final placeholder = '__JP_CALL_${placeholders.length}__';
-      final replaced =
-          _replaceNameTerm(protectedText, chineseCallName, placeholder);
-      if (replaced == protectedText) continue;
-      protectedText = replaced;
-      placeholders[placeholder] = japaneseCallName;
+      if (nameMap.containsKey(chineseCallName)) continue;
+      nameMap[chineseCallName] = japaneseCallName;
+      callNameSources.add(chineseCallName);
     }
 
     for (final entry in _chineseToJapaneseNameMap().entries) {
       nameMap.putIfAbsent(entry.key, () => entry.value);
     }
 
+    // 全名和昵称一起按长度匹配，避免先保护昵称而截断全名。
+    // 同名候选仍以用户称呼、角色专属称呼、全局姓名表依次为准。
     final entries = nameMap.entries.toList()
       ..sort((a, b) => b.key.length.compareTo(a.key.length));
 
     for (final entry in entries) {
       if (!protectedText.contains(entry.key)) continue;
 
-      final placeholder = '__JP_NAME_${placeholders.length}__';
+      final kind = callNameSources.contains(entry.key) ? 'CALL' : 'NAME';
+      final placeholder = '__JP_${kind}_${placeholders.length}__';
       final replaced = _replaceNameTerm(protectedText, entry.key, placeholder);
       if (replaced == protectedText) continue;
 
@@ -2221,17 +2493,6 @@ $responseShapeReminder
     return selfPronounRule.isEmpty ? baseStyle : '$baseStyle$selfPronounRule';
   }
 
-  static String _japaneseFallbackTextForCharacter(String? characterId) {
-    return switch (characterId) {
-      'shinobu' => 'すみません、うまく言葉にできませんでした。もう一度お話ししていただけますか？',
-      'sakiko' => '申し訳ありませんわ。うまく言葉にできませんでしたの。もう一度お話しいただけますか？',
-      'muichirou' => 'ごめん、うまく言葉にできなかった。もう一度話してくれる？',
-      'giyu' => 'すまない。うまく言えなかった。もう一度話してくれ。',
-      'tomori' => 'ごめんなさい。うまく言葉にできなくて……もう一度、話してくれる？',
-      _ => 'ごめん、ちょっと言葉が出てこなかった…もう一度話してくれる？',
-    };
-  }
-
   static String _casualGreetingFallback(String characterLanguage) {
     if (characterLanguage == 'zh') {
       return '晚上好。这个时间收到你的消息，还挺让人安心的。';
@@ -2261,10 +2522,19 @@ $responseShapeReminder
   //     但 AI 生成的对话回复几乎不可能全句不含假名，所以这种边缘情况可以接受
   // 这是当前用来判断"翻译是否成功"的最可靠依据。
   static bool _isLikelyJapanese(String text) {
-    // 平假名范围：U+3040 ~ U+309F
-    // 片假名范围：U+30A0 ~ U+30FF
-    return RegExp(r'[\u3040-\u309f\u30a0-\u30ff]').hasMatch(text);
+    // 只计算假名文字，不把中点、长音符或组合浊点当成已翻译的证据。
+    // 同时支持半角片假名，避免把正常的口语文本误拦。
+    return RegExp(
+      r'[\u3041-\u3096\u30a1-\u30fa\u31f0-\u31ff\uff66-\uff9d]',
+    ).hasMatch(text);
   }
+
+  // 这里只收录明确的中文简化字形，不是“汉字即中文”的语言识别器。
+  // 体、却以及日语字集中已有的听、从、无都不能单字判错；也不使用
+  // 汉字/假名比例或逐词白名单。共用字组成的未译原句由逐句原文对照检查。
+  // 校验与日志必须共享这一份证据，不能各自维护另一张黑名单。
+  static final RegExp _unambiguousChineseForms =
+      RegExp(r'[这们吗话见觉让为还发应过边进远头开关经给样虽]');
 
   static bool _isCleanJapaneseForTts(String text) {
     if (!_isLikelyJapanese(text)) return false;
@@ -2275,6 +2545,17 @@ $responseShapeReminder
   static bool isCleanJapaneseForTtsForTest(String text) =>
       _isCleanJapaneseForTts(text);
 
+  @visibleForTesting
+  static bool isAcceptableJapaneseForCharacterForTest(
+    String text,
+    String characterId,
+  ) =>
+      _isAcceptableJapaneseForCharacter(text, characterId);
+
+  @visibleForTesting
+  static List<int> invalidJapaneseUnitIndexesForTest(List<String> units) =>
+      _invalidJapaneseUnitIndexes(units);
+
   static bool _isAcceptableJapaneseForCharacter(
     String text,
     String? characterId,
@@ -2282,6 +2563,153 @@ $responseShapeReminder
     return _isCleanJapaneseForTts(text) &&
         _usesJapaneseQuotationPunctuation(text) &&
         isJapaneseTranslationStyleCompatible(text, characterId);
+  }
+
+  static List<int> _invalidJapaneseUnitIndexes(List<String> units) {
+    final invalidIndexes = <int>[];
+    for (var i = 0; i < units.length; i++) {
+      if (!_isCleanJapaneseForTts(units[i]) ||
+          !_usesJapaneseQuotationPunctuation(units[i])) {
+        invalidIndexes.add(i);
+      }
+    }
+    return invalidIndexes;
+  }
+
+  static String _chineseResidueDebugText(String text) {
+    final matches = _unambiguousChineseForms
+        .allMatches(text)
+        .map((match) => match.group(0)!)
+        .toSet()
+        .join();
+    return matches.isEmpty ? 'none' : matches;
+  }
+
+  static void _logJapaneseTranslationValidationFailure({
+    required int attempt,
+    required _JapaneseTranslationResult translation,
+    required String? characterId,
+  }) {
+    if (!translation.isValid) {
+      debugPrint(
+        '日语角色化翻译未进入文本校验: '
+        'attempt=$attempt, contractIssue=${translation.issue}',
+      );
+      return;
+    }
+    final invalidUnits = _invalidJapaneseUnitIndexes(translation.units);
+    final unitDetails = invalidUnits.map((index) {
+      final unit = translation.units[index];
+      return '${index + 1}(residue=${_chineseResidueDebugText(unit)}, '
+          'text=${_logPreview(unit)})';
+    }).join('; ');
+    debugPrint(
+      '日语角色化翻译未通过本地校验: '
+      'attempt=$attempt, '
+      'cleanJapanese=${_isCleanJapaneseForTts(translation.text)}, '
+      'quotationPunctuation=${_usesJapaneseQuotationPunctuation(translation.text)}, '
+      'baseStyle=${isJapaneseStyleCompatible(translation.text, characterId)}, '
+      'translationStyle=${isJapaneseTranslationStyleCompatible(translation.text, characterId)}, '
+      'invalidUnits=${unitDetails.isEmpty ? 'none' : unitDetails}, '
+      'text=${_logPreview(translation.text)}',
+    );
+  }
+
+  static Future<_JapaneseTranslationResult> _repairJapaneseTranslationUnits(
+    _JapaneseTranslationResult original, {
+    required List<int> invalidUnitIndexes,
+    required String? characterId,
+  }) async {
+    if (!original.isValid || invalidUnitIndexes.isEmpty) return original;
+    final sourcePayload = jsonEncode({
+      'sentences': [
+        for (final index in invalidUnitIndexes)
+          {'source_index': index + 1, 'text': original.units[index]},
+      ],
+    });
+    debugPrint(
+      '仅重试未通过校验的日语句子: '
+      'source_indexes=${invalidUnitIndexes.map((index) => index + 1).join(',')}',
+    );
+
+    try {
+      final response = await RetryingHttp.post(
+        Uri.parse('$deepSeekBaseUrl/chat/completions'),
+        operation: '修复日语翻译残留',
+        headers: {
+          'Authorization': 'Bearer $deepSeekApiKey',
+          'Content-Type': 'application/json',
+        },
+        body: jsonEncode({
+          'model': deepSeekModel,
+          'thinking': {'type': 'disabled'},
+          'messages': [
+            {
+              'role': 'system',
+              'content': '你是日语台词校对器。输入中的句子已经基本翻译完成，但仍含有非日语字形或中文标点。'
+                  '只修复这些残留，使整句成为自然日语；不得扩写、删减、改换说话人、改变事实或语气。'
+                  '人名、称呼、歌名和引号内专名保持原样，不能追加敬称。'
+                  '角色语体要求：${_japaneseTranslationStyle(characterId)}\n'
+                  '只输出 JSON：{"translations":["修复后的第一句","修复后的第二句"]}。'
+                  '数组中每项只能是译文字符串，不输出编号或逐句对象。数量和顺序必须与输入句子完全一致。',
+            },
+            {'role': 'user', 'content': sourcePayload},
+          ],
+          'max_tokens': 600,
+          'temperature': 0.1,
+          'stream': false,
+          'response_format': {'type': 'json_object'},
+        }),
+      );
+      if (response.statusCode != 200) {
+        debugPrint('日语局部修复 API 错误: ${response.statusCode}');
+        return original;
+      }
+
+      final data = jsonDecode(utf8.decode(response.bodyBytes));
+      final rawResult = data['choices'][0]['message']['content'] as String;
+      final decoded = jsonDecode(rawResult);
+      if (decoded is! Map || decoded['translations'] is! List) {
+        debugPrint('日语局部修复未通过契约: 缺少 translations 数组');
+        return original;
+      }
+      final translations = _translationTextsInOrder(
+        decoded['translations'] as List,
+        invalidUnitIndexes.map((index) => index + 1).toList(),
+      );
+      if (translations == null) {
+        debugPrint('日语局部修复未通过契约: 译文数量、类型或编号不匹配');
+        return original;
+      }
+
+      final mergedUnits = List<String>.from(original.units);
+      for (var i = 0; i < translations.length; i++) {
+        final unitIndex = invalidUnitIndexes[i];
+        final repaired =
+            translations[i].trim().replaceAll(RegExp(r'\s*[\r\n]+\s*'), '');
+        if (!_isCleanJapaneseForTts(repaired) ||
+            !_usesJapaneseQuotationPunctuation(repaired)) {
+          debugPrint(
+            '日语局部修复第 ${unitIndex + 1} 句仍未通过: '
+            'residue=${_chineseResidueDebugText(repaired)}, '
+            'text=${_logPreview(repaired)}',
+          );
+          continue;
+        }
+        mergedUnits[unitIndex] = repaired;
+      }
+      return _JapaneseTranslationResult.valid(
+        units: mergedUnits,
+        paragraphBreakAfter: original.paragraphBreakAfter,
+      );
+    } catch (e) {
+      debugPrint('日语局部修复失败，保留原逐句结果: $e');
+      if (e is ApiRequestException ||
+          RetryingHttp.isTransientNetworkException(e)) {
+        rethrow;
+      }
+      return original;
+    }
   }
 
   static bool _usesJapaneseQuotationPunctuation(String text) {
@@ -2374,10 +2802,7 @@ $responseShapeReminder
   }
 
   static bool _containsChineseFeatures(String clause) {
-    // These simplified forms do not occur in normal Japanese orthography.
-    // Unlike a kana/kanji ratio, this remains safe for kanji-heavy lyrics,
-    // titles, names and short stage directions.
-    return RegExp(r'[这们吗话听见觉让从为还发应过边进远无头体开关经给样虽却]').hasMatch(clause);
+    return _unambiguousChineseForms.hasMatch(clause);
   }
 
   static Map<String, dynamic>? _japaneseLyricsReferenceForPrompt(
@@ -2406,7 +2831,8 @@ $responseShapeReminder
   ) =>
       _japaneseLyricsReferenceForPrompt(bilingualReference);
 
-  static Future<String> _translateChineseRoleResponseToJapanese(
+  static Future<_JapaneseTranslationResult>
+      _translateChineseRoleResponseToJapanese(
     String chineseText, {
     required String? characterId,
     required String? exactUserName,
@@ -2442,8 +2868,12 @@ $responseShapeReminder
           ...protectedTitles.placeholders,
         },
       );
-      final sourceUnits = _splitChineseTranslationUnits(protectedText.text);
-      if (sourceUnits.isEmpty) return '';
+      final translationLayout =
+          _buildChineseTranslationLayout(protectedText.text);
+      final sourceUnits = translationLayout.units;
+      if (sourceUnits.isEmpty) {
+        return const _JapaneseTranslationResult.invalid('原文没有可翻译句子');
+      }
       final genderHints = _genderHintsForTranslationPrompt(webContext);
       final japaneseLyricsReference =
           _japaneseLyricsReferenceForPrompt(lyricsTranslationReference);
@@ -2458,6 +2888,12 @@ $responseShapeReminder
         if (japaneseLyricsReference != null)
           'japanese_lyrics_reference': japaneseLyricsReference,
       });
+      final sourceCharacterCount = sourceUnits.fold<int>(
+        0,
+        (total, unit) => total + unit.runes.length,
+      );
+      final maxTranslationTokens =
+          (sourceCharacterCount * 3 + 400).clamp(1200, 3000).toInt();
       final lyricsInstruction = japaneseLyricsReference == null
           ? ''
           : '歌词翻译规则：输入中的 japanese_lyrics_reference 只属于当前歌曲，且只包含日文原词。'
@@ -2469,9 +2905,9 @@ $responseShapeReminder
               '输入是已经确定内容和角色性的中文回答。你的任务不是复述、润色中文或解释，而是把每个 source_index 的 text 翻译成自然日语。\n'
               '\n'
               '硬性规则：\n'
-              '1. 只输出这个 JSON 对象：{"translations":[{"source_index":1,"text":"日本語訳"}]}。不要代码块，不要说明。\n'
-              '2. 每个输入 source_index 必须对应一个译文，数量、顺序、source_index 必须完全一致；不要跨句移动、合并或拆分。\n'
-              '3. text 里只能写日语。严禁保留中文原句、中文动作描写、中文标点说明或“翻译如下”等前置语。\n'
+              '1. 只输出这个 JSON 对象：{"translations":["第一句的日本語訳","第二句的日本語訳"]}。数组元素只能是译文字符串，不输出编号或逐句对象。不要代码块，不要说明。\n'
+              '2. 数组第几个译文就对应输入第几句，数量和顺序必须完全一致；不要跨句移动、合并或拆分。source_index 只用于识别输入，程序会管理输出的编号。\n'
+              '3. 每个译文字符串里只能写日语。严禁保留中文原句、中文动作描写、中文标点说明或“翻译如下”等前置语。\n'
               '4. 如果原文包含中文括号动作，例如“（轻轻点头）”，必须翻成日语括号动作，例如“（そっと頷いて）”。\n'
               '5. 原文里的 __JP_CALL_0__、__JP_NAME_0__、__JP_LYRIC_0__、__JP_TITLE_0__ 这类占位符必须在同一个 source_index 的译文里原样保留，一个字符也不能改，不能移动到别的句子。__JP_CALL_0__ 代表已经包含角色指定敬称的完整称呼，可以直接接は、が、を等助词，但严禁再接さん、ちゃん、くん、君、様等任何敬称。\n'
               '6. 事实范围、动作主体、对象、主动/被动、因果关系和完成程度必须保持一致。\n'
@@ -2487,9 +2923,9 @@ $responseShapeReminder
               '\n'
               '厳守事項:\n'
               '1. 次の形の JSON オブジェクトだけを出力すること: '
-              '{"translations":[{"source_index":1,"text":"日本語訳"}]}。コードブロックや説明を付けない。\n'
-              '2. 入力の各 source_index に対して翻訳を一つだけ出し、件数と順序を完全に一致させる。文を別の index に移動、結合、分割しない。\n'
-              '3. text は日本語だけにし、中国語の語句、説明、注釈、前置きを残さない。\n'
+              '{"translations":["一文目の日本語訳","二文目の日本語訳"]}。配列の要素は訳文の文字列のみとし、番号や文ごとのオブジェクトを出力しない。コードブロックや説明を付けない。\n'
+              '2. 配列の各位置を入力の同じ位置の文に対応させ、件数と順序を完全に一致させる。文を移動、結合、分割しない。source_index は入力の識別用で、出力の番号はプログラムが管理する。\n'
+              '3. 各訳文は日本語だけにし、中国語の語句、説明、注釈、前置きを残さない。\n'
               '4. 各文の事実範囲、動作主、対象、能動・受動、因果関係、完了の程度を変えない。自然な日本語にするための語順変更はよいが、誰が誰に何をしたかを変えない。\n'
               '5. 元の文にある __JP_CALL_0__、__JP_NAME_0__、__JP_LYRIC_0__、__JP_TITLE_0__ のような占位符は、その同じ index の訳文に一文字も変えず残す。別の文へ移さない。__JP_CALL_0__ はキャラクター指定の敬称まで含む完全な呼称である。は・が・を等の助詞は直結してよいが、さん・ちゃん・くん・君・様等の敬称を追加してはならない。\n'
               '6. 元のテキストに括弧書きの動作や表情がある場合は、削除せず自然な日本語にして括弧内に残す。\n'
@@ -2500,8 +2936,9 @@ $responseShapeReminder
               '11. 出力前に各 source_index の原文と訳文を一対一で照合し、主語と能動・受動が一致しているか確認する。\n'
               '$lyricsInstruction'
               '$retryInstruction';
-      final response = await http.post(
+      final response = await RetryingHttp.post(
         Uri.parse('$deepSeekBaseUrl/chat/completions'),
+        operation: '生成日语翻译',
         headers: {
           'Authorization': 'Bearer $deepSeekApiKey',
           'Content-Type': 'application/json',
@@ -2519,7 +2956,7 @@ $responseShapeReminder
               'content': sourcePayload,
             },
           ],
-          'max_tokens': 1000,
+          'max_tokens': maxTranslationTokens,
           'temperature': isRetry ? 0.2 : 0.3,
           'stream': false,
           'response_format': {'type': 'json_object'},
@@ -2528,41 +2965,65 @@ $responseShapeReminder
       if (response.statusCode == 200) {
         final data = jsonDecode(utf8.decode(response.bodyBytes));
         final rawResult = data['choices'][0]['message']['content'] as String;
+        final finishReason = '${data['choices'][0]['finish_reason'] ?? ''}';
         final parsed = _parseAlignedJapaneseTranslations(
           sourceUnits: sourceUnits,
           rawResponse: rawResult,
           placeholders: protectedText.placeholders,
+          paragraphBreakAfter: translationLayout.paragraphBreakAfter,
         );
         if (!parsed.isValid) {
-          debugPrint('日语逐句翻译契约未通过: ${parsed.issue}');
-          return '';
+          final rawTail = rawResult.length <= 240
+              ? rawResult
+              : rawResult.substring(rawResult.length - 240);
+          debugPrint(
+            '日语逐句翻译契约未通过: ${parsed.issue}; '
+            'finish_reason=${finishReason.isEmpty ? 'unknown' : finishReason}, '
+            'raw_chars=${rawResult.length}, max_tokens=$maxTranslationTokens, '
+            'raw_tail=${_logPreview(rawTail)}',
+          );
+          return _JapaneseTranslationResult.invalid(parsed.issue);
         }
         debugPrint('日语逐句翻译契约通过: sentences=${sourceUnits.length}');
-        var result = _restoreProtectedMappedNames(
-          parsed.text,
-          protectedText.placeholders,
+        final finalizedUnits = parsed.units.map((unit) {
+          var result = _restoreProtectedMappedNames(
+            unit,
+            protectedText.placeholders,
+          );
+          result = _sanitizeUserNameHonorifics(result, exactUserName);
+          result = _applyStandardJapaneseNameSpellings(
+            _removeRubyReadings(result),
+          );
+          result = _applyFixedCharacterCallNames(
+            result,
+            fixedCharacterCallNames,
+            fixedChineseCallNames,
+          );
+          result = _normalizeJapaneseSongTitlePunctuation(
+            result,
+            knownSongTitles,
+          );
+          return result.trim();
+        }).toList(growable: false);
+        return _JapaneseTranslationResult.valid(
+          units: finalizedUnits,
+          paragraphBreakAfter: translationLayout.paragraphBreakAfter,
         );
-        result = _sanitizeUserNameHonorifics(result, exactUserName);
-        result =
-            _applyStandardJapaneseNameSpellings(_removeRubyReadings(result));
-        result = _applyFixedCharacterCallNames(
-          result,
-          fixedCharacterCallNames,
-          fixedChineseCallNames,
-        );
-        result = _normalizeJapaneseSongTitlePunctuation(
-          result,
-          knownSongTitles,
-        );
-        return result.trim();
       } else {
         debugPrint('日文转换 API 错误: ${response.statusCode}');
         debugPrint('错误内容: ${response.body}');
+        throw ApiRequestException(
+          '日语翻译服务暂时不可用（${response.statusCode}），请稍后重试。',
+        );
       }
     } catch (e) {
       debugPrint('日文转换失败: $e');
+      if (e is ApiRequestException ||
+          RetryingHttp.isTransientNetworkException(e)) {
+        rethrow;
+      }
     }
-    return '';
+    return const _JapaneseTranslationResult.invalid('翻译请求未返回可用结果');
   }
 
   static List<String> _splitChineseTranslationUnits(String text) {
@@ -2587,10 +3048,98 @@ $responseShapeReminder
         .toList(growable: false);
   }
 
+  static _ChineseTranslationLayout _buildChineseTranslationLayout(
+    String text,
+  ) {
+    final units = <String>[];
+    final paragraphBreakAfter = <int>{};
+    final paragraphs = text
+        .replaceAll('\r\n', '\n')
+        .replaceAll('\r', '\n')
+        .split('\n')
+        .map((paragraph) => paragraph.trim())
+        .where((paragraph) => paragraph.isNotEmpty)
+        .toList(growable: false);
+
+    for (var i = 0; i < paragraphs.length; i++) {
+      final paragraphUnits = _splitChineseTranslationUnits(paragraphs[i]);
+      if (paragraphUnits.isEmpty) continue;
+      units.addAll(paragraphUnits);
+      if (i < paragraphs.length - 1) {
+        paragraphBreakAfter.add(units.length - 1);
+      }
+    }
+
+    return _ChineseTranslationLayout(
+      units: units,
+      paragraphBreakAfter: paragraphBreakAfter,
+    );
+  }
+
+  // 新输出仅包含有序译文字符串；兼容旧编号对象时仍严格检查编号和顺序。
+  // 全译和局部修复共用这一处解析，局部修复的原句编号由调用方保留。
+  static List<String>? _translationTextsInOrder(
+    List<dynamic> values,
+    List<int> sourceIndexes,
+  ) {
+    if (values.length != sourceIndexes.length) return null;
+    if (values.every((value) => value is String)) {
+      return values.cast<String>();
+    }
+    final texts = <String>[];
+    for (var i = 0; i < values.length; i++) {
+      final value = values[i];
+      if (value is! Map ||
+          value['source_index'] != sourceIndexes[i] ||
+          value['text'] is! String) {
+        return null;
+      }
+      texts.add(value['text'] as String);
+    }
+    return texts;
+  }
+
+  // 只修复旧编号数值后的孤立引号。逐个跳过完整 JSON 字符串，确保
+  // 台词内部的数字、转义引号、占位符一字不改；修复后仍走完整契约校验。
+  static String _repairTranslationIndexSyntax(String input) {
+    final output = StringBuffer();
+    final malformedNumber = RegExp(r'^\s*:\s*\d+"(?=\s*[,}])');
+    var cursor = 0;
+    while (cursor < input.length) {
+      if (input[cursor] != '"') {
+        output.write(input[cursor++]);
+        continue;
+      }
+      final start = cursor++;
+      var closed = false;
+      while (cursor < input.length) {
+        final character = input[cursor++];
+        if (character == '\\') {
+          if (cursor < input.length) cursor++;
+        } else if (character == '"') {
+          closed = true;
+          break;
+        }
+      }
+      final token = input.substring(start, cursor);
+      output.write(token);
+      if (closed && token == '"source_index"') {
+        final match = malformedNumber.firstMatch(input.substring(cursor));
+        if (match != null) {
+          final numberField = match.group(0)!;
+          output.write(numberField.substring(0, numberField.length - 1));
+          cursor += numberField.length;
+        }
+      }
+    }
+    return output.toString();
+  }
+
   static _AlignedTranslationParseResult _parseAlignedJapaneseTranslations({
     required List<String> sourceUnits,
     required String rawResponse,
     required Map<String, String> placeholders,
+    Set<int> paragraphBreakAfter = const {},
   }) {
     final cleaned = rawResponse
         .replaceAll(RegExp(r'^\s*```(?:json)?\s*', caseSensitive: false), '')
@@ -2600,7 +3149,27 @@ $responseShapeReminder
     try {
       decoded = jsonDecode(cleaned);
     } catch (_) {
-      return const _AlignedTranslationParseResult.invalid('输出不是有效 JSON');
+      final objectStart = cleaned.indexOf('{');
+      final objectEnd = cleaned.lastIndexOf('}');
+      if (objectStart < 0 || objectEnd <= objectStart) {
+        return const _AlignedTranslationParseResult.invalid(
+          '输出不是完整 JSON（缺少对象边界，可能被截断）',
+        );
+      }
+      final objectText = cleaned.substring(objectStart, objectEnd + 1);
+      try {
+        decoded = jsonDecode(objectText);
+      } on FormatException {
+        final repaired = _repairTranslationIndexSyntax(objectText);
+        try {
+          decoded = jsonDecode(repaired);
+          debugPrint('日语翻译 JSON 编号格式已本地修复，继续逐句校验（未改动译文）');
+        } on FormatException catch (error) {
+          return _AlignedTranslationParseResult.invalid(
+            '输出不是有效 JSON（${error.message}，位置=${error.offset}）',
+          );
+        }
+      }
     }
     if (decoded is! Map || decoded['translations'] is! List) {
       return const _AlignedTranslationParseResult.invalid(
@@ -2613,17 +3182,20 @@ $responseShapeReminder
         '翻译句数 ${translations.length} 与原文 ${sourceUnits.length} 不一致',
       );
     }
+    final orderedTexts = _translationTextsInOrder(
+      translations,
+      List.generate(sourceUnits.length, (index) => index + 1),
+    );
+    if (orderedTexts == null) {
+      return const _AlignedTranslationParseResult.invalid(
+          '译文类型或 source_index 不匹配');
+    }
 
     final translatedUnits = <String>[];
     final placeholderPattern = RegExp(r'__JP_(?:CALL|NAME|LYRIC|TITLE)_\d+__');
     for (var i = 0; i < sourceUnits.length; i++) {
-      final rawTranslation = translations[i];
-      if (rawTranslation is! Map || rawTranslation['source_index'] != i + 1) {
-        return _AlignedTranslationParseResult.invalid(
-          '第 ${i + 1} 项的 source_index 不匹配',
-        );
-      }
-      final translatedText = '${rawTranslation['text'] ?? ''}'.trim();
+      final translatedText =
+          orderedTexts[i].trim().replaceAll(RegExp(r'\s*[\r\n]+\s*'), '');
       if (translatedText.isEmpty) {
         return _AlignedTranslationParseResult.invalid('第 ${i + 1} 项译文为空');
       }
@@ -2664,7 +3236,17 @@ $responseShapeReminder
       }
       translatedUnits.add(translatedText);
     }
-    return _AlignedTranslationParseResult.valid(translatedUnits.join());
+    final result = StringBuffer();
+    for (var i = 0; i < translatedUnits.length; i++) {
+      result.write(translatedUnits[i]);
+      if (paragraphBreakAfter.contains(i) && i < translatedUnits.length - 1) {
+        result.write('\n');
+      }
+    }
+    return _AlignedTranslationParseResult.valid(
+      text: result.toString(),
+      units: translatedUnits,
+    );
   }
 
   static bool _sameStringSet(Set<String> left, Set<String> right) =>
@@ -2724,6 +3306,15 @@ $responseShapeReminder
       _splitChineseTranslationUnits(text);
 
   @visibleForTesting
+  static Map<String, Object> chineseTranslationLayoutForTest(String text) {
+    final layout = _buildChineseTranslationLayout(text);
+    return {
+      'units': layout.units,
+      'paragraphBreakAfter': layout.paragraphBreakAfter,
+    };
+  }
+
+  @visibleForTesting
   static Map<String, dynamic> protectKnownLyricsForJapaneseTranslationForTest(
     String text,
     Map<String, dynamic>? lyricsTranslationReference,
@@ -2774,11 +3365,13 @@ $responseShapeReminder
     required List<String> sourceUnits,
     required String response,
     Map<String, String> placeholders = const {},
+    Set<int> paragraphBreakAfter = const {},
   }) {
     final parsed = _parseAlignedJapaneseTranslations(
       sourceUnits: sourceUnits,
       rawResponse: response,
       placeholders: placeholders,
+      paragraphBreakAfter: paragraphBreakAfter,
     );
     return parsed.isValid ? parsed.text : null;
   }
@@ -2807,8 +3400,9 @@ $responseShapeReminder
       const String visionPrompt = '请用简洁的中文描述这张图片的内容，包括主要对象、场景、活动、氛围等，'
           '100字以内，只描述看到的内容，不分析不评价。';
 
-      final response = await http.post(
+      final response = await RetryingHttp.post(
         Uri.parse('$doubaoVisionBaseUrl/chat/completions'),
+        operation: '识别图片',
         headers: {
           'Authorization': 'Bearer $doubaoVisionApiKey',
           'Content-Type': 'application/json',
@@ -3005,15 +3599,71 @@ class _TimelineAnswerParseResult {
 class _AlignedTranslationParseResult {
   final bool isValid;
   final String text;
+  final List<String> units;
   final String issue;
 
-  const _AlignedTranslationParseResult.valid(this.text)
-      : isValid = true,
+  const _AlignedTranslationParseResult.valid({
+    required this.text,
+    required this.units,
+  })  : isValid = true,
         issue = '';
 
   const _AlignedTranslationParseResult.invalid(this.issue)
       : isValid = false,
-        text = '';
+        text = '',
+        units = const [];
+}
+
+class _JapaneseTranslationResult {
+  final bool isValid;
+  final String text;
+  final List<String> units;
+  final Set<int> paragraphBreakAfter;
+  final String issue;
+
+  factory _JapaneseTranslationResult.valid({
+    required List<String> units,
+    required Set<int> paragraphBreakAfter,
+  }) {
+    final text = StringBuffer();
+    for (var i = 0; i < units.length; i++) {
+      text.write(units[i]);
+      if (paragraphBreakAfter.contains(i) && i < units.length - 1) {
+        text.write('\n');
+      }
+    }
+    return _JapaneseTranslationResult._(
+      isValid: true,
+      text: text.toString().trim(),
+      units: List<String>.unmodifiable(units),
+      paragraphBreakAfter: Set<int>.unmodifiable(paragraphBreakAfter),
+      issue: '',
+    );
+  }
+
+  const _JapaneseTranslationResult.invalid(this.issue)
+      : isValid = false,
+        text = '',
+        units = const [],
+        paragraphBreakAfter = const {};
+
+  const _JapaneseTranslationResult._({
+    required this.isValid,
+    required this.text,
+    required this.units,
+    required this.paragraphBreakAfter,
+    required this.issue,
+  });
+}
+
+class _ChineseTranslationLayout {
+  final List<String> units;
+  final Set<int> paragraphBreakAfter;
+
+  const _ChineseTranslationLayout({
+    required this.units,
+    required this.paragraphBreakAfter,
+  });
 }
 
 class _ProtectedTranslationText {

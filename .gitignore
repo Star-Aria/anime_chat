@@ -52,3 +52,6 @@ lib/api_keys.dart
 
 # Codex 本地会话记录体积很大，不纳入版本库
 old-codex-session.jsonl
+
+# Optional machine-local GPT-SoVITS installation override
+gpt_sovits_path.txt

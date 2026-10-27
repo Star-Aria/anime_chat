@@ -1067,7 +1067,7 @@ MyGO!!!!!全员：灯、爱音、乐奈、爽世与立希并没有消除彼此�
           referWavPath: r'reference_audio\tomori_processed\温柔 或 珍视.wav',
           promptText: 'みんなすごく、優しくて、かっこよくて……大切な人たちです',
           promptLanguage: 'ja',
-          description: '面对珍视的人、回忆或约定时的温柔语气，轻柔且真挚',
+          description: '面对珍视的人、回忆或约定时的温柔语气，带着笑意，轻柔且真挚',
         ),
         SpeechEmotion.cautious: EmotionReferenceAudio(
           referWavPath: r'reference_audio\tomori_processed\小心翼翼.wav',
@@ -1077,10 +1077,11 @@ MyGO!!!!!全员：灯、爱音、乐奈、爽世与立希并没有消除彼此�
         ),
       }),
       emotionCharacterHint: '高松灯的情绪表达内敛而细微：\n'
-          '- neutral 是她绝大多数日常对话的默认朗读声线；非 neutral 标签必须达到参考音频那样明显的表演强度，不要根据话题内容或省略号自动放大情绪\n'
+          '- neutral 用于她平常、平静的日常语气；内敛不代表没有情绪。承接对方真实的悲伤或痛苦时，要根据整段回应判断持续的沉重感，不要求每句都表现出激烈情绪，也不要仅因省略号而放大情绪\n'
           '- neutralHigh 只表示略微高一些的日常声调，\n'
           '- nervous 是当下的紧张，lost 是对生活、自我或关系归属的“迷子感”，不得用于一般的没听懂或困惑，cautious 是害怕打扰或被拒绝的试探\n'
-          '- depressed 用于已经明显下沉的压抑低落，vulnerableMonologue 只用于明显袒露创伤、恐惧或深层孤独的脆弱独白，painfulCrying 只用于已有明显哭腔的痛苦；普通的关心、迟疑、谈歌词或说事情还没完成都不达到这些标签的门槛\n'
+          '- depressed 用于低沉、压抑或克制而沉重的悲伤承接；同一语段中的短应答、叙述和不确定表达可以延续这种声线。转向对珍视之人的带着笑意的轻柔陪伴时，可自然过渡到 gentleCherishing，不必先切回 neutral\n'
+          '- vulnerableMonologue 只用于明显袒露创伤、恐惧或深层孤独的脆弱独白，painfulCrying 只用于已有明显哭腔的痛苦；普通的关心、迟疑、谈歌词或说事情还没完成本身不构成低落、脆弱或哭腔的证据\n'
           '- intenseShout 只用于情绪真正爆发的呐喊，determined 则是仍然克制但意志坚定',
       gptModelPath: r'GPT-SoVITS\GPT_weights_v2ProPlus\MyGO_高松灯_v2pp.ckpt',
       sovitsModelPath: r'GPT-SoVITS\SoVITS_weights_v2ProPlus\MyGO_高松灯_v2pp.pth',
@@ -1655,7 +1656,7 @@ MyGO!!!!! 是现在仍然与你一起前进的人。
           referWavPath: r'reference_audio\andy\sad.mp3',
           promptText: '你也相信我，我真的不希望你做这件事情。而且，我也不想牵出什么不必要的麻烦。',
           promptLanguage: 'zh',
-          description: '低落沉静，语调偏低偏慢，触碰到真正的内心伤处时',
+          description: '低落沉静，语调偏低偏慢；触碰到真正的内心伤处，或在严重突发事件中以克制而沉重的语气承接对方时',
         ),
       }),
       emotionCharacterHint: '安迪和对方（她当妹妹的邻居）聊天时会比较放松，比公开场合温柔很多。\n'
@@ -1678,8 +1679,10 @@ MyGO!!!!! 是现在仍然与你一起前进的人。
           '\n'
           '-> angry：极少。她不满或被触怒时，语气变冷变硬，但是压着的不是爆发型。\n'
           '\n'
-          '-> sad：极少。只在真正触碰到她内心伤处（母亲、福利院、遗传病的恐惧）\n'
-          '   或者帮对方承接极沉重情绪时出现。\n',
+          '-> sad：极少。只在真正触碰到她内心伤处（母亲、福利院、遗传病的恐惧），\n'
+          '   或者对方遭遇严重突发事件，需要她以克制而沉重的语气承接冲击、确认当下安全时出现。\n'
+          '   这种情形不能因为她没有哭泣就全部标为 neutral；但冷静分析和具体行动建议仍用 neutral，\n'
+          '   普通的关心、提醒和“注意身体”也不使用 sad。\n',
       gptModelPath: r'GPT-SoVITS\GPT_weights_v2ProPlus\AI_Andy-e15.ckpt',
       sovitsModelPath:
           r'GPT-SoVITS\SoVITS_weights_v2ProPlus\AI_Andy_e8_s616.pth',

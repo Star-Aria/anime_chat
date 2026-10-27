@@ -19,6 +19,8 @@ import 'emotion_analyzer.dart';
 import 'character_settings_page.dart';
 import 'path_service.dart';
 import 'name_pronunciation.dart';
+import 'sticker_catalog.dart';
+import 'user_turn_batch.dart';
 
 // ========================================
 // 自定义配置区域
@@ -230,10 +232,14 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
   }
 
   final List<Map<String, dynamic>> _userMessageQueue = [];
+  Timer? _userTurnCoalescingTimer;
+  static const Duration _userTurnCoalescingDelay = Duration(milliseconds: 1200);
   bool _isProcessingQueue = false;
   Map<String, dynamic>? _activeUserRequest;
   int _responseGeneration = 0;
   bool _queuePausedForRecall = false;
+  int _recalledRequestInsertIndex = 0;
+  bool _isStickerPickerOpen = false;
   bool _showTypingIndicator = false;
   int _typingIndicatorGeneration = 0;
 
@@ -456,6 +462,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
     _audioPlayerPrimary.dispose();
     _audioPlayerSecondary.dispose();
     _musicPositionTimer?.cancel();
+    _userTurnCoalescingTimer?.cancel();
     unawaited(_disposeMusicBackend());
     _textController.dispose();
     _scrollController.dispose();
@@ -552,6 +559,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
   }
 
   Future<void> _createNewChatSession() async {
+    _userTurnCoalescingTimer?.cancel();
     final session = await StorageService.createChatSession(widget.character.id);
     final sessions = await StorageService.loadChatSessions(widget.character.id);
     if (!mounted) return;
@@ -563,6 +571,9 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
       _pendingImagePaths = [];
       _isLoading = false;
       _isProcessingQueue = false;
+      _activeUserRequest = null;
+      _queuePausedForRecall = false;
+      _recalledRequestInsertIndex = 0;
     });
     await _loadCharacterSettings();
     _scrollToBottom(animated: false, settlePasses: 5);
@@ -573,6 +584,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
     if (_isPlaying) {
       await _stopAudio();
     }
+    _userTurnCoalescingTimer?.cancel();
     await StorageService.switchActiveChatSession(
         widget.character.id, sessionId);
     final sessions = await StorageService.loadChatSessions(widget.character.id);
@@ -589,6 +601,9 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
       _pendingImagePaths = [];
       _isLoading = false;
       _isProcessingQueue = false;
+      _activeUserRequest = null;
+      _queuePausedForRecall = false;
+      _recalledRequestInsertIndex = 0;
     });
     await _loadCharacterSettings();
     _scrollToBottom(animated: false, settlePasses: 5);
@@ -667,8 +682,11 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
         'message': userMessage,
       };
       if (_queuePausedForRecall) {
-        _userMessageQueue.insert(0, request);
+        final insertIndex =
+            _recalledRequestInsertIndex.clamp(0, _userMessageQueue.length);
+        _userMessageQueue.insert(insertIndex, request);
         _queuePausedForRecall = false;
+        _recalledRequestInsertIndex = 0;
       } else {
         _userMessageQueue.add(request);
       }
@@ -683,57 +701,94 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
     );
     await _refreshChatSessions();
 
-    if (!_isProcessingQueue) {
-      _processMessageQueue();
+    _scheduleUserTurnProcessing();
+  }
+
+  void _scheduleUserTurnProcessing() {
+    _userTurnCoalescingTimer?.cancel();
+    if (_userMessageQueue.isEmpty ||
+        _queuePausedForRecall ||
+        _isStickerPickerOpen ||
+        _isProcessingQueue) {
+      return;
     }
+    _userTurnCoalescingTimer = Timer(_userTurnCoalescingDelay, () {
+      _userTurnCoalescingTimer = null;
+      if (!mounted || _queuePausedForRecall || _isProcessingQueue) return;
+      unawaited(_processMessageQueue());
+    });
   }
 
   bool _isCurrentResponse(int generation) =>
       mounted && generation == _responseGeneration;
 
   bool _isActiveRequestMessage(Message message) {
-    final activeMessage = _activeUserRequest?['message'];
+    final rawRequests = _activeUserRequest?['requests'];
+    final requests = rawRequests is List
+        ? rawRequests.whereType<Map<String, dynamic>>()
+        : const <Map<String, dynamic>>[];
     return _isLoading &&
-        activeMessage is Message &&
-        activeMessage.timestamp == message.timestamp &&
-        activeMessage.content == message.content;
+        requests.any((request) {
+          final activeMessage = request['message'];
+          return activeMessage is Message &&
+              activeMessage.timestamp == message.timestamp &&
+              activeMessage.content == message.content;
+        });
   }
 
-  Future<void> _recallActiveMessage() async {
+  Future<void> _recallActiveMessage(Message selectedMessage) async {
     final request = _activeUserRequest;
-    final activeMessage = request?['message'];
+    final rawRequests = request?['requests'];
+    final requests = rawRequests is List
+        ? rawRequests.whereType<Map<String, dynamic>>().toList()
+        : <Map<String, dynamic>>[];
+    final selectedIndex = requests.indexWhere((queuedRequest) {
+      final message = queuedRequest['message'];
+      return message is Message &&
+          message.timestamp == selectedMessage.timestamp &&
+          message.content == selectedMessage.content;
+    });
     if (request == null ||
-        activeMessage is! Message ||
-        !_isActiveRequestMessage(activeMessage)) {
+        selectedIndex == -1 ||
+        !_isActiveRequestMessage(selectedMessage)) {
       return;
     }
 
-    final text = (request['text'] as String?) ?? '';
+    final selectedRequest = requests[selectedIndex];
+    final text = (selectedRequest['text'] as String?) ?? '';
     final imagePaths =
-        List<String>.from(request['imagePaths'] as List? ?? const []);
+        List<String>.from(selectedRequest['imagePaths'] as List? ?? const []);
+    final isStickerMessage = selectedRequest['stickerTitle'] is String;
+    final remainingRequests = List<Map<String, dynamic>>.from(requests)
+      ..removeAt(selectedIndex);
 
     // 立即使正在等待的旧请求失效。即使网络请求稍后返回，也不能再
     // 写入回复、继续 TTS 或触发连续消息。
     _responseGeneration++;
     _typingIndicatorGeneration++;
+    _userTurnCoalescingTimer?.cancel();
 
     if (!mounted) return;
     setState(() {
       _messages.removeWhere(
         (message) =>
-            message.timestamp == activeMessage.timestamp &&
-            message.content == activeMessage.content,
+            message.timestamp == selectedMessage.timestamp &&
+            message.content == selectedMessage.content,
       );
+      _userMessageQueue.insertAll(0, remainingRequests);
       _activeUserRequest = null;
       _isLoading = false;
       _isProcessingQueue = false;
       _showTypingIndicator = false;
       _queuePausedForRecall = true;
+      _recalledRequestInsertIndex =
+          selectedIndex.clamp(0, remainingRequests.length);
       _pendingImagePaths = imagePaths;
     });
+    final restoredText = isStickerMessage ? '' : text;
     _textController.value = TextEditingValue(
-      text: text,
-      selection: TextSelection.collapsed(offset: text.length),
+      text: restoredText,
+      selection: TextSelection.collapsed(offset: restoredText.length),
     );
 
     await StorageService.saveConversation(
@@ -759,6 +814,175 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
     }
   }
 
+  Future<void> _showStickerPicker() async {
+    if (_isLoading) return;
+
+    // 用户已经发出文字后打开表情包选择器时，暂停短暂的合并倒计时；
+    // 这样挑选表情包所花的时间不会被误判成新一轮对话。
+    _userTurnCoalescingTimer?.cancel();
+    _userTurnCoalescingTimer = null;
+    _isStickerPickerOpen = true;
+
+    StickerDefinition? selected;
+    try {
+      selected = await showModalBottomSheet<StickerDefinition>(
+        context: context,
+        backgroundColor: Colors.transparent,
+        barrierColor: Colors.black.withValues(alpha: 0.18),
+        isScrollControlled: true,
+        builder: (sheetContext) {
+          final color = Color(int.parse('0xFF${widget.character.color}'));
+          return SafeArea(
+            top: false,
+            child: Container(
+              constraints: BoxConstraints(
+                maxHeight: MediaQuery.of(sheetContext).size.height * 0.62,
+              ),
+              decoration: const BoxDecoration(
+                color: Color(0xFFF8FAFD),
+                borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
+              ),
+              child: Column(
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(20, 14, 12, 8),
+                    child: Row(
+                      children: [
+                        const Expanded(
+                          child: Text(
+                            '选择表情包',
+                            style: TextStyle(
+                              fontSize: 17,
+                              fontWeight: FontWeight.w600,
+                              color: Color(0xFF2D3142),
+                            ),
+                          ),
+                        ),
+                        IconButton(
+                          tooltip: '关闭',
+                          onPressed: () => Navigator.pop(sheetContext),
+                          icon: const Icon(Icons.close),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Divider(
+                    height: 1,
+                    color: color.withValues(alpha: 0.14),
+                  ),
+                  Expanded(
+                    child: GridView.builder(
+                      padding: const EdgeInsets.fromLTRB(14, 8, 14, 18),
+                      gridDelegate:
+                          const SliverGridDelegateWithMaxCrossAxisExtent(
+                        maxCrossAxisExtent: 142,
+                        mainAxisExtent: 142,
+                        crossAxisSpacing: 10,
+                        mainAxisSpacing: 10,
+                      ),
+                      itemCount: StickerCatalog.all.length,
+                      itemBuilder: (_, stickerIndex) {
+                        final sticker = StickerCatalog.all[stickerIndex];
+                        return Material(
+                          color: Colors.white.withValues(alpha: 0.72),
+                          borderRadius: BorderRadius.circular(14),
+                          child: InkWell(
+                            borderRadius: BorderRadius.circular(14),
+                            onTap: () => Navigator.pop(sheetContext, sticker),
+                            child: Padding(
+                              padding: const EdgeInsets.fromLTRB(8, 8, 8, 6),
+                              child: Column(
+                                children: [
+                                  Expanded(
+                                    child: Image.asset(
+                                      sticker.assetPath,
+                                      fit: BoxFit.contain,
+                                      gaplessPlayback: true,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    sticker.fullTitle,
+                                    maxLines: 2,
+                                    textAlign: TextAlign.center,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                      fontSize: 11,
+                                      height: 1.15,
+                                      color: Color(0xFF50566A),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      );
+    } finally {
+      _isStickerPickerOpen = false;
+    }
+
+    if (selected != null && mounted) {
+      await _sendSticker(selected);
+    } else {
+      _scheduleUserTurnProcessing();
+    }
+  }
+
+  Future<void> _sendSticker(StickerDefinition sticker) async {
+    if (_isLoading) return;
+
+    _consecutiveCount = 0;
+    _currentTurnWebContext = null;
+    _currentTurnKnownSongTitles = const [];
+
+    final content = StickerCatalog.userMessageContent(sticker);
+    final userMessage = Message(
+      role: 'user',
+      content: content,
+      timestamp: DateTime.now(),
+      stickerAssetPath: sticker.assetPath,
+      stickerTitle: sticker.fullTitle,
+    );
+
+    setState(() {
+      _messages.add(userMessage);
+      final request = <String, dynamic>{
+        'text': content,
+        'imagePaths': <String>[],
+        'stickerTitle': sticker.fullTitle,
+        'message': userMessage,
+      };
+      if (_queuePausedForRecall) {
+        final insertIndex =
+            _recalledRequestInsertIndex.clamp(0, _userMessageQueue.length);
+        _userMessageQueue.insert(insertIndex, request);
+        _queuePausedForRecall = false;
+        _recalledRequestInsertIndex = 0;
+      } else {
+        _userMessageQueue.add(request);
+      }
+    });
+
+    _scrollToBottom();
+    await StorageService.saveConversation(
+      widget.character.id,
+      _messages,
+      sessionId: _sessionId,
+    );
+    await _refreshChatSessions();
+
+    _scheduleUserTurnProcessing();
+  }
+
   Future<void> _processMessageQueue() async {
     if (_userMessageQueue.isEmpty || _queuePausedForRecall) {
       setState(() {
@@ -767,7 +991,29 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
       return;
     }
 
-    final item = _userMessageQueue.removeAt(0);
+    _userTurnCoalescingTimer?.cancel();
+    _userTurnCoalescingTimer = null;
+
+    final requests = List<Map<String, dynamic>>.from(_userMessageQueue);
+    _userMessageQueue.clear();
+    final batch = UserTurnBatch(
+      requests.map(
+        (request) => UserTurnPart(
+          text: (request['text'] as String?) ?? '',
+          imagePaths:
+              List<String>.from(request['imagePaths'] as List? ?? const []),
+          isSticker: request['stickerTitle'] is String,
+        ),
+      ),
+    );
+    final item = <String, dynamic>{
+      'text': batch.responsePrompt,
+      'serviceQuery': batch.serviceQuery,
+      'imagePaths': batch.imagePaths,
+      'containsSticker': batch.containsSticker,
+      'isStickerOnly': batch.isStickerOnly,
+      'requests': requests,
+    };
     final responseGeneration = ++_responseGeneration;
     setState(() {
       _isProcessingQueue = true;
@@ -778,29 +1024,33 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
     _scheduleTypingIndicator();
 
     final userMessage = (item['text'] as String?) ?? '';
+    final serviceQuery = (item['serviceQuery'] as String?) ?? '';
     final imagePaths = List<String>.from(item['imagePaths'] as List? ?? []);
+    final containsSticker = item['containsSticker'] == true;
+    final isStickerOnly = item['isStickerOnly'] == true;
 
     // 1. 先生成本地时间上下文：
     //    这里不联网，只告诉 AI 当前年月日、星期、早中晚、距离上次聊天多久等。
     final timeContext = _generateTimeContext();
 
-    // _messages 里已经包含了刚刚发送的用户消息。
-    // ApiService.generateResponse() 下面还会把 userMessage 作为“本轮最后一句”单独加入一次，
-    // 所以传历史时要去掉最后这条用户消息，避免同一句话在 prompt 里重复两遍。
+    // _messages 里已经包含了这一批连续发送的用户消息。
+    // ApiService.generateResponse() 下面还会把合并后的 userMessage 作为本轮输入加入一次，
+    // 所以传历史时要去掉本批消息，避免在 prompt 里重复。
     //
     // 这份历史也会交给 WebContextService，用来判断“这个是什么意思”
     // 这类追问是否还在延续上一轮原作/角色资料话题。
-    final historyMessages =
-        _messages.isNotEmpty && _messages.last.role == 'user'
-            ? _messages.sublist(0, _messages.length - 1)
-            : _messages;
+    final batchMessageCount = requests.length;
+    final historyEnd = max(0, _messages.length - batchMessageCount);
+    final historyMessages = _messages.sublist(0, historyEnd);
     final recentMessages = StorageService.getRecentMessages(historyMessages);
 
-    final musicAttachment = await MusicService.pickAttachmentForRequest(
-      userText: userMessage,
-      character: widget.character,
-      conversationHistory: historyMessages,
-    );
+    final MusicAttachment? musicAttachment = serviceQuery.isEmpty
+        ? null
+        : await MusicService.pickAttachmentForRequest(
+            userText: serviceQuery,
+            character: widget.character,
+            conversationHistory: historyMessages,
+          );
     if (!_isCurrentResponse(responseGeneration)) return;
 
     // 2. 再生成“现实/联网信息上下文”：
@@ -810,18 +1060,21 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
     //    - 祥子：东京天气、日本/国际节日、流行语、BanG Dream 资料
     //    - 安迪：上海天气、中国/国际节日、经济、新闻、书影音等
     //    如果用户这句话不需要联网，它会返回空字符串，不影响正常聊天。
-    final musicContext = musicAttachment == null
-        ? await MusicService.buildDiscussionContext(
-            userText: userMessage,
-            character: widget.character,
-          )
-        : MusicService.buildPromptContext(musicAttachment);
+    final musicContext = serviceQuery.isEmpty
+        ? ''
+        : musicAttachment == null
+            ? await MusicService.buildDiscussionContext(
+                userText: serviceQuery,
+                character: widget.character,
+              )
+            : MusicService.buildPromptContext(musicAttachment);
     if (!_isCurrentResponse(responseGeneration)) return;
-    final localOnlyMusicDiscussion = musicAttachment == null &&
-        await MusicService.shouldUseLocalOnlyForDiscussion(
-          userText: userMessage,
-          character: widget.character,
-        );
+    final localOnlyMusicDiscussion = serviceQuery.isEmpty ||
+        (musicAttachment == null &&
+            await MusicService.shouldUseLocalOnlyForDiscussion(
+              userText: serviceQuery,
+              character: widget.character,
+            ));
     if (!_isCurrentResponse(responseGeneration)) return;
 
     //    分享本地曲库歌曲，以及聊已覆盖的 MyGO / Ave Mujica 歌曲时，
@@ -830,7 +1083,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
     final webContext = musicAttachment != null || localOnlyMusicDiscussion
         ? ''
         : await WebContextService.buildContext(
-            userMessage: userMessage,
+            userMessage: serviceQuery,
             characterId: widget.character.id,
             characterName: widget.character.name,
             conversationHistory: recentMessages,
@@ -840,12 +1093,13 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
       if (webContext.isNotEmpty) webContext,
       if (musicContext.isNotEmpty) musicContext,
     ].join('\n\n');
-    final lyricsTranslationReference =
-        await MusicService.buildTranslationLyricsReference(
-      userText: userMessage,
-      character: widget.character,
-      selectedAttachment: musicAttachment,
-    );
+    final lyricsTranslationReference = serviceQuery.isEmpty
+        ? null
+        : await MusicService.buildTranslationLyricsReference(
+            userText: serviceQuery,
+            character: widget.character,
+            selectedAttachment: musicAttachment,
+          );
     if (!_isCurrentResponse(responseGeneration)) return;
     final knownSongTitles = musicContext.isEmpty
         ? const <String>[]
@@ -874,6 +1128,8 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
         imagePaths: imagePaths.isNotEmpty ? imagePaths : null,
         characterId: widget.character.id,
         characterLanguage: widget.character.language,
+        containsStickerInput: containsSticker,
+        stickerOnlyInput: isStickerOnly,
         lyricsTranslationReference: lyricsTranslationReference,
         knownSongTitles: knownSongTitles,
       );
@@ -904,6 +1160,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
         japaneseText,
         chineseText,
         musicAttachment: musicAttachment,
+        emotionContext: userMessage,
         isCanceled: () => !_isCurrentResponse(responseGeneration),
       );
       if (!_isCurrentResponse(responseGeneration)) return;
@@ -915,9 +1172,8 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
       // 这里每追加成功一条就 +1，达到 _maxConsecutiveFollowUps 后停止，
       // 防止 AI 无限连发。
       //
-      // 只在用户消息队列已空时才尝试追加：
-      // 如果用户连续发了好几条消息，AI 应该优先逐条回复，
-      // 全部回完之后再考虑是否追加。
+      // 只在用户消息队列已空时才尝试追加；同一轮连续发送的内容已经在
+      // 前面合并为一次输入，不应在尚有新输入等待时插入主动补充消息。
       if (_userMessageQueue.isEmpty &&
           _consecutiveCount < _maxConsecutiveFollowUps) {
         _consecutiveCount++;
@@ -926,22 +1182,31 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
     } catch (e) {
       if (!_isCurrentResponse(responseGeneration)) return;
       debugPrint('生成回复时出错: $e');
+      if (mounted) {
+        final message =
+            e is ApiRequestException ? e.userMessage : '回复生成失败，请稍后重试。';
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(SnackBar(content: Text(message)));
+      }
     }
 
     if (!_isCurrentResponse(responseGeneration)) return;
     setState(() {
       _isLoading = false;
+      _isProcessingQueue = false;
       _showTypingIndicator = false;
       _activeUserRequest = null;
     });
 
-    await _processMessageQueue();
+    _scheduleUserTurnProcessing();
   }
 
   Future<void> _sendAIMessage(
     String japanese,
     String chinese, {
     MusicAttachment? musicAttachment,
+    String? emotionContext,
     bool Function()? isCanceled,
   }) async {
     if (isCanceled?.call() == true) return;
@@ -966,6 +1231,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
     // 使用统一的情绪分析 + 逐句 TTS 方法生成音频（传入主内容）
     final List<String> audioPaths = await _generateEmotionAudio(
       cleanPrimary,
+      precedingUserMessage: emotionContext,
       isCanceled: isCanceled,
     );
     if (isCanceled?.call() == true) {
@@ -1596,7 +1862,10 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
       }
 
       // 调用统一方法：分句 -> 情绪分析 -> 逐句 TTS
-      final newAudioPaths = await _generateEmotionAudio(japaneseText);
+      final newAudioPaths = await _generateEmotionAudio(
+        japaneseText,
+        precedingUserMessage: _precedingUserMessageFor(message),
+      );
 
       if (newAudioPaths.isEmpty) {
         debugPrint('所有句子音频生成均失败');
@@ -1679,8 +1948,10 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
       debugPrint('重新生成情绪化语音...');
 
       // 调用统一方法：分句 -> 情绪分析 -> 逐句 TTS
-      final List<String> newAudioPaths =
-          await _generateEmotionAudio(japaneseText);
+      final List<String> newAudioPaths = await _generateEmotionAudio(
+        japaneseText,
+        precedingUserMessage: _precedingUserMessageFor(message),
+      );
 
       if (mounted) {
         setState(() {
@@ -1918,6 +2189,18 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
     return -1;
   }
 
+  String? _precedingUserMessageFor(Message assistantMessage) {
+    final messageIndex = _findMessageIndex(assistantMessage);
+    if (messageIndex <= 0) return null;
+    for (int i = messageIndex - 1; i >= 0; i--) {
+      if (_messages[i].role == 'user') {
+        final content = _messages[i].content.trim();
+        return content.isEmpty ? null : content;
+      }
+    }
+    return null;
+  }
+
   // ========================================
   // 统一的情绪分析 + 逐句 TTS 生成方法
   // ========================================
@@ -1933,6 +2216,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
   //   调用方需要自行处理空列表的情况
   Future<List<String>> _generateEmotionAudio(
     String text, {
+    String? precedingUserMessage,
     bool Function()? isCanceled,
   }) async {
     if (isCanceled?.call() == true) return const [];
@@ -1956,6 +2240,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
         sentences: sentences,
         character: widget.character,
         language: lang,
+        precedingUserMessage: precedingUserMessage,
       );
       if (isCanceled?.call() == true) return const [];
     } else {
@@ -2492,21 +2777,25 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
               children: [
                 Icon(Icons.undo, size: 18, color: Colors.grey[700]),
                 const SizedBox(width: 10),
-                const Text('撤回并编辑', style: TextStyle(fontSize: 14)),
+                Text(
+                  message.stickerAssetPath != null ? '撤回' : '撤回并编辑',
+                  style: const TextStyle(fontSize: 14),
+                ),
               ],
             ),
           ),
-        PopupMenuItem<String>(
-          value: 'copy',
-          height: 42,
-          child: Row(
-            children: [
-              Icon(Icons.copy_outlined, size: 18, color: Colors.grey[700]),
-              const SizedBox(width: 10),
-              const Text('复制消息', style: TextStyle(fontSize: 14)),
-            ],
+        if (message.stickerAssetPath == null)
+          PopupMenuItem<String>(
+            value: 'copy',
+            height: 42,
+            child: Row(
+              children: [
+                Icon(Icons.copy_outlined, size: 18, color: Colors.grey[700]),
+                const SizedBox(width: 10),
+                const Text('复制消息', style: TextStyle(fontSize: 14)),
+              ],
+            ),
           ),
-        ),
         if (!_isActiveRequestMessage(message))
           PopupMenuItem<String>(
             value: 'delete',
@@ -2524,7 +2813,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
     );
 
     if (selected == 'recall') {
-      await _recallActiveMessage();
+      await _recallActiveMessage(message);
     } else if (selected == 'copy') {
       await Clipboard.setData(ClipboardData(text: message.content));
     } else if (selected == 'delete') {
@@ -2937,6 +3226,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
     );
     if (confirm != true) return;
 
+    _userTurnCoalescingTimer?.cancel();
     if (_isPlaying) {
       await _stopAudio();
     }
@@ -2959,6 +3249,9 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
       _pendingImagePaths = [];
       _isLoading = false;
       _isProcessingQueue = false;
+      _activeUserRequest = null;
+      _queuePausedForRecall = false;
+      _recalledRequestInsertIndex = 0;
     });
     await _loadCharacterSettings();
     _scrollToBottom();
@@ -3544,6 +3837,64 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
                                     ),
                                   ),
                                 ),
+                                Padding(
+                                  padding: const EdgeInsets.only(right: 12),
+                                  child: Tooltip(
+                                    message: '发送表情包',
+                                    child: GestureDetector(
+                                      onTap: _isLoading
+                                          ? null
+                                          : _showStickerPicker,
+                                      child: Container(
+                                        width: 52,
+                                        height: 52,
+                                        decoration: BoxDecoration(
+                                          shape: BoxShape.circle,
+                                          boxShadow: [
+                                            BoxShadow(
+                                              color: Colors.black
+                                                  .withValues(alpha: 0.10),
+                                              blurRadius: 16,
+                                              offset: const Offset(0, 6),
+                                            ),
+                                          ],
+                                        ),
+                                        child: ClipOval(
+                                          child: BackdropFilter(
+                                            filter: ImageFilter.blur(
+                                                sigmaX: 18, sigmaY: 18),
+                                            child: Container(
+                                              decoration: BoxDecoration(
+                                                shape: BoxShape.circle,
+                                                gradient: LinearGradient(
+                                                  begin: Alignment.topLeft,
+                                                  end: Alignment.bottomRight,
+                                                  colors: [
+                                                    Colors.white.withValues(
+                                                        alpha: 0.66),
+                                                    Colors.white.withValues(
+                                                        alpha: 0.34),
+                                                  ],
+                                                ),
+                                                border: Border.all(
+                                                  color: Colors.white
+                                                      .withValues(alpha: 0.72),
+                                                  width: 1.4,
+                                                ),
+                                              ),
+                                              child: Icon(
+                                                Icons.emoji_emotions_outlined,
+                                                size: 22,
+                                                color: color.withValues(
+                                                    alpha: 0.78),
+                                              ),
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ),
                                 Expanded(
                                   child: Container(
                                     decoration: BoxDecoration(
@@ -3920,6 +4271,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
 
   Widget _buildMessageBubble(
       Message message, bool isUser, Color color, int index) {
+    final isSticker = isUser && message.stickerAssetPath != null;
     bool shouldShowTime = false;
     if (index == 0) {
       shouldShowTime = true;
@@ -3991,19 +4343,25 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
                           context, details.globalPosition, index, message);
                     },
                     child: Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: messageBubbleHorizontalPadding,
-                        vertical: messageBubbleVerticalPadding,
-                      ),
+                      padding: isSticker
+                          ? EdgeInsets.zero
+                          : const EdgeInsets.symmetric(
+                              horizontal: messageBubbleHorizontalPadding,
+                              vertical: messageBubbleVerticalPadding,
+                            ),
                       decoration: BoxDecoration(
-                        gradient: isUser
+                        gradient: isSticker || isUser
                             ? null
                             : LinearGradient(
                                 begin: Alignment.topLeft,
                                 end: Alignment.bottomRight,
                                 colors: widget.character.aiBubbleGradient,
                               ),
-                        color: isUser ? color.withValues(alpha: 0.6) : null,
+                        color: isSticker
+                            ? Colors.transparent
+                            : isUser
+                                ? color.withValues(alpha: 0.6)
+                                : null,
                         borderRadius: isUser
                             ? const BorderRadius.only(
                                 topLeft: Radius.circular(messageBubbleRadius),
@@ -4023,29 +4381,41 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
                                 bottomRight:
                                     Radius.circular(messageBubbleRadius),
                               ),
-                        border: !isUser
+                        border: !isUser && !isSticker
                             ? Border.all(
                                 color: widget.character.aiBubbleBorderColor,
                                 width: 1.5)
                             : null,
-                        boxShadow: [
-                          BoxShadow(
-                              color: Colors.black.withValues(alpha: 0.05),
-                              blurRadius: 5,
-                              offset: const Offset(0, 2)),
-                          if (!isUser)
-                            BoxShadow(
-                              color: widget.character.aiBubbleGlowColor
-                                  .withValues(alpha: aiBubbleGlowOpacity),
-                              blurRadius: aiBubbleGlowBlur,
-                              spreadRadius: -2,
-                              offset: const Offset(0, 0),
-                            ),
-                        ],
+                        boxShadow: isSticker
+                            ? const []
+                            : [
+                                BoxShadow(
+                                    color: Colors.black.withValues(alpha: 0.05),
+                                    blurRadius: 5,
+                                    offset: const Offset(0, 2)),
+                                if (!isUser)
+                                  BoxShadow(
+                                    color: widget.character.aiBubbleGlowColor
+                                        .withValues(alpha: aiBubbleGlowOpacity),
+                                    blurRadius: aiBubbleGlowBlur,
+                                    spreadRadius: -2,
+                                    offset: const Offset(0, 0),
+                                  ),
+                              ],
                       ),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
+                          if (isSticker)
+                            Semantics(
+                              label: '表情包：${message.stickerTitle ?? ''}',
+                              child: Image.asset(
+                                message.stickerAssetPath!,
+                                width: 150,
+                                fit: BoxFit.contain,
+                                gaplessPlayback: true,
+                              ),
+                            ),
                           if (isUser &&
                               (message.imagePaths?.isNotEmpty == true ||
                                   message.imagePath != null))
@@ -4081,9 +4451,10 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
                                 }).toList(),
                               ),
                             ),
-                          if (!(isUser &&
-                              !message.content.contains(' ') &&
-                              message.content.startsWith('[图片')))
+                          if (!isSticker &&
+                              !(isUser &&
+                                  !message.content.contains(' ') &&
+                                  message.content.startsWith('[图片')))
                             if (!isUser &&
                                 (message.content.contains('\n\n中文：') ||
                                     widget.character.language == 'zh'))

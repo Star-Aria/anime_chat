@@ -208,7 +208,7 @@ void main() {
           ]));
     });
 
-    test('all accepted cases satisfy their release policies', () {
+    test('all archived cases satisfy their grounding release policies', () {
       final failures = <String>[];
       for (final item in cases) {
         final index = item['index'] as int;
@@ -220,15 +220,50 @@ void main() {
         if (snapshot.chineseAnswer.isEmpty) {
           failures.add('Q$index: 中文回答为空');
         }
-        if (!ApiService.isJapaneseStyleCompatible(
-          snapshot.japaneseAnswer,
-          '${item['characterId'] ?? ''}',
-        )) {
-          failures.add('Q$index: 日语回答不符合角色语体');
-        }
         failures.addAll(issues.map((issue) => 'Q$index: $issue'));
       }
       expect(failures, isEmpty, reason: failures.join('\n'));
+    });
+
+    test('current style gate rejects exactly the archived Q6 pronoun defect',
+        () {
+      // 原始基线于 2026-08-07 的 2368dc8 冻结；同日 bbb687b 新增
+      // 自称门禁后，Q6 的「俺」已不合格。保留原文作反例，不把历史接地
+      // 验收误当成当前语体验收，也不以修改 fixture 或放松门禁掩盖缺陷。
+      final rejectedIndexes = <int>[];
+      for (final item in cases) {
+        final snapshot = GroundingSnapshot.fromJson(item['snapshot'] as Map);
+        if (!ApiService.isJapaneseStyleCompatible(
+          snapshot.japaneseAnswer,
+          item['characterId'] as String,
+        )) {
+          rejectedIndexes.add(item['index'] as int);
+        }
+      }
+      expect(rejectedIndexes, [6]);
+
+      final q6 = cases.singleWhere((item) => item['index'] == 6);
+      expect(q6['characterId'], 'muichirou');
+      final original = (q6['snapshot'] as Map)['japaneseAnswer'] as String;
+      expect('俺'.allMatches(original), hasLength(2));
+
+      // 仅在测试内构造最小对照，不写回历史基线、不改动角色输出。
+      final corrected = original.replaceAll('俺', '僕');
+      expect(
+          ApiService.isJapaneseStyleCompatible(original, 'muichirou'), isFalse);
+      expect(
+          ApiService.isJapaneseStyleCompatible(corrected, 'muichirou'), isTrue);
+      expect(
+        ApiService.isAcceptableJapaneseForCharacterForTest(
+            original, 'muichirou'),
+        isFalse,
+      );
+      expect(
+        ApiService.isAcceptableJapaneseForCharacterForTest(
+            corrected, 'muichirou'),
+        isTrue,
+      );
+      expect((q6['snapshot'] as Map)['japaneseAnswer'], original);
     });
   });
 }

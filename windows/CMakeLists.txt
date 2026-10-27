@@ -104,6 +104,15 @@ endif()
 
 # Copy the native assets provided by the build.dart from all packages.
 set(NATIVE_ASSETS_DIR "${PROJECT_BUILD_DIR}native_assets/windows/")
+# Flutter may omit this directory when the native asset list is empty, or it
+# may have been removed during build-cache cleanup. Restore it at install time
+# (after flutter_assemble), so subsequent builds also recover without a clean.
+install(CODE "
+  if(NOT IS_DIRECTORY \"${NATIVE_ASSETS_DIR}\")
+    message(STATUS \"Restoring missing native assets directory\")
+    file(MAKE_DIRECTORY \"${NATIVE_ASSETS_DIR}\")
+  endif()
+  " COMPONENT Runtime)
 install(DIRECTORY "${NATIVE_ASSETS_DIR}"
    DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"
    COMPONENT Runtime)

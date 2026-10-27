@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "scope": "Local routing only; no generated role answers or real API responses.",
+  "noExternalInformation": [
+    {
+      "characterId": "tomori",
+      "characterName": "高松灯",
+      "message": "小灯，我朋友今天生日，还有英语考试，请送他几句祝福。"
+    },
+    {
+      "characterId": "tomori",
+      "characterName": "高松灯",
+      "message": "可以祝福我吗？"
+    },
+    {
+      "characterId": "shinobu",
+      "characterName": "蝴蝶忍",
+      "message": "忍小姐，我明天考试，有些紧张，可以鼓励我吗？"
+    },
+    {
+      "characterId": "muichirou",
+      "characterName": "时透无一郎",
+      "message": "无一郎，我今天心情很差，想得到你的安慰。"
+    },
+    {
+      "characterId": "andy",
+      "characterName": "安迪",
+      "message": "姐姐，请帮朋友打气，他这周有很重要的考试。"
+    }
+  ],
+  "requiresPlanning": [
+    "祝福我考试顺利，另外今天东京会下雨吗？",
+    "送朋友生日祝福，顺便查一下今天是什么节日。",
+    "请鼓励我，也讲讲你和祥子当初是怎么认识的。",
+    "请送她祝福，另外她喜欢企鹅吗？",
+    "生日快乐这个词在日语里是什么意思？",
+    "你以前是怎么鼓励爱音的？",
+    "送他生日祝福，并告诉他你们乐队的名字。"
+  ]
+}

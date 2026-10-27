@@ -1,11 +1,12 @@
 import 'dart:io';
 
+import 'gpt_sovits_paths.dart';
+
 class AppPaths {
   static final String _exeDir = File(Platform.resolvedExecutable).parent.path;
   static final String _cwd = Directory.current.path;
 
-  static const String _legacyGptSovitsRoot =
-      r'C:\GPT-SoVITS-v2pro-20250604-nvidia50';
+  static final GptSovitsPaths _gptSovitsPaths = GptSovitsPaths();
   static const String _legacyReferenceAudioRoot = r'D:\AI model';
   static const String _legacyAveMujicaRoot = r'C:\AveMujica模型（V2pro版本）';
   static const String _legacyAppAssetRoot = r'C:\anime_chat';
@@ -14,6 +15,11 @@ class AppPaths {
     if (path.isEmpty || _isAbsolute(path)) return path;
 
     final normalized = path.replaceAll('/', r'\');
+    const gptPrefix = r'GPT-SoVITS\';
+    if (normalized.startsWith(gptPrefix)) {
+      // 模型与 Python / FFmpeg 必须来自同一整合包，避免混用两份安装。
+      return _join(gptSovitsRoot, normalized.substring(gptPrefix.length));
+    }
     final candidates = <String>[
       _join(_cwd, normalized),
       _join(_exeDir, normalized),
@@ -33,7 +39,10 @@ class AppPaths {
 
   // GPT-SoVITS 的本地安装目录。启动服务和模型路径解析共用这一路径，
   // 避免在不同文件里各写一份容易失效的绝对路径。
-  static String get gptSovitsRoot => _legacyGptSovitsRoot;
+  static String get gptSovitsRoot => _gptSovitsPaths.root;
+
+  static String gptSovitsModelPathForApi(String resolvedPath) =>
+      _gptSovitsPaths.modelPathForApi(resolvedPath);
 
   static String get gptSovitsPython =>
       _join(gptSovitsRoot, r'runtime\python.exe');
@@ -45,14 +54,10 @@ class AppPaths {
       RegExp(r'^[A-Za-z]:[\\/]').hasMatch(path) || path.startsWith(r'\\');
 
   static List<String> _legacyCandidates(String path) {
-    const gptPrefix = r'GPT-SoVITS\';
     const audioPrefix = r'reference_audio\';
     const avePrefix = r'AveMujica\';
     const assetsPrefix = r'assets\';
 
-    if (path.startsWith(gptPrefix)) {
-      return [_join(_legacyGptSovitsRoot, path.substring(gptPrefix.length))];
-    }
     if (path.startsWith(audioPrefix)) {
       return [
         _join(_legacyReferenceAudioRoot, path.substring(audioPrefix.length))

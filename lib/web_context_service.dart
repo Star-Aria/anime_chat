@@ -449,13 +449,17 @@ ${resolvedAnswerBasis == _answerBasisExplicitFact ? '''
   // - “你那边外面怎么样？”
   // 这些句子没有明显关键词，但确实需要原作资料或现实天气。
   //
-  // 所以这里先调用一次搜索计划模型，让它输出一个 JSON 搜索计划。
+  // 明确且自足的社交表达先在本地返回；其他消息再调用搜索计划模型。
   // 然后本程序再按角色权限执行搜索。
   static Future<_SearchPlan> _buildSearchPlan(
     String text,
     _WebProfile profile,
     List<Message> conversationHistory,
   ) async {
+    if (_isSelfContainedSocialRequest(text, profile)) {
+      _logSearch('联网分流: 本轮是自足的祝愿/情绪支持请求，跳过远程规划与搜索');
+      return _noExternalInformationPlan;
+    }
     final llmPlan =
         await _buildSearchPlanWithDoubao(text, profile, conversationHistory);
     if (llmPlan != null) {
@@ -494,8 +498,10 @@ ${resolvedAnswerBasis == _answerBasisExplicitFact ? '''
     try {
       final apiKey = _doubaoTextApiKey;
       final endpoint = _doubaoTextEndpoint;
+      _logTextEndpointConfiguration();
       if (apiKey.isEmpty || endpoint.isEmpty) {
         debugPrint('豆包搜索计划模型未配置，使用关键词计划兜底');
+        _markTextModelUnavailable();
         return null;
       }
 
@@ -716,6 +722,43 @@ JSON 格式：
     }).join('\n');
   }
 
+  static const _noExternalInformationPlan = _SearchPlan(
+    includeWeather: false,
+    weatherCity: null,
+    includeFestivals: false,
+    includePhenology: false,
+    searchQuery: null,
+    category: 'none',
+  );
+
+  // 只对有明确社交言语请求、且没有独立信息问项的消息做本地短路。
+  // 这是保守的意图门禁，不根据“生日/今天/他”等背景词或历史话题决定。
+  // 混合查证问题和拿不准的消息仍交给原规划链路，不关闭正常联网能力。
+  static bool _isSelfContainedSocialRequest(String text, _WebProfile profile) {
+    final socialAct = RegExp(r'祝福|祝愿|安慰|鼓励|打气');
+    final speechRequest = RegExp(r'请|可以|能|希望|想|需要|帮|给|送');
+    final clauses = text.split(RegExp(r'[，,。；;\n\r]+'));
+    bool requestsSocialSpeech(String clause) =>
+        socialAct.hasMatch(clause) && speechRequest.hasMatch(clause);
+
+    if (!clauses.any(requestsSocialSpeech)) return false;
+    if (_asksWeather(text) ||
+        _asksEconomy(text) ||
+        _shouldMentionDateOrFestival(text) ||
+        _shouldSearchWeb(text, profile)) {
+      return false;
+    }
+    // 疑问词或查证动作是独立信息需求；“可以祝福他吗”是言语请求，
+    // 不能仅因有问号就联网，但另一个分句中的事实问句不能被它吞掉。
+    final informationRequest = RegExp(
+      r'什么|哪|谁|多少|多久|多大|几岁|为何|为什么|怎么|如何|是否|是不是|有没有|'
+      r'后来呢|之后呢|然后呢|查|搜|核实|确认|告诉|解释|介绍|讲讲|说说',
+    );
+    if (informationRequest.hasMatch(text)) return false;
+    return !clauses.any((clause) =>
+        !requestsSocialSpeech(clause) && RegExp(r'[?？]|吗|么').hasMatch(clause));
+  }
+
   // 本地关键词方案：作为豆包搜索计划失败时的兜底。
   static _SearchPlan _keywordSearchPlan(String text, _WebProfile profile) {
     return _SearchPlan(
@@ -739,6 +782,9 @@ JSON 格式：
   static _SearchPlan _applyProfileRules(
       _SearchPlan plan, String text, _WebProfile profile,
       {bool allowImplicitCurrentAffairsSearch = true}) {
+    if (_isSelfContainedSocialRequest(text, profile)) {
+      return _noExternalInformationPlan;
+    }
     // 天气问题用“大模型判断 + 本地关键词”双保险。
     //
     // 原因：
@@ -1314,6 +1360,9 @@ JSON 格式：
     final localPlan = allowLocalCanonRecovery
         ? _applyFollowUpRules(plan, text, profile, conversationHistory)
         : plan;
+    // 规划与事实抽取共用服务。已经确认该服务不可用时，只保留本地计划，
+    // 不再启动同服务复核或其他模型守门，避免一次故障触发更多收费请求。
+    if (_factExtractorUnavailableThisTurn) return localPlan;
     if (localPlan.hasAnyTask) {
       if (localPlan.category == 'canon') {
         final isPresentDayRoleplay = await _reviewPresentDayRoleplayWithModel(
@@ -1545,6 +1594,10 @@ query 规则：
     _WebProfile profile,
     List<Message> conversationHistory,
   ) {
+    // 当前明确请求优先于历史话题，不能因为“他/她”等代词重开原作搜索。
+    if (_isSelfContainedSocialRequest(text, profile)) {
+      return _noExternalInformationPlan;
+    }
     final currentTopic = _currentCanonTopic(text);
     final canInheritRecentTopic =
         currentTopic == null && _containsCanonFollowUpSignal(text);
@@ -1739,10 +1792,19 @@ query 规则：
 
   // 判断是否和日期/节日有关。
   static bool _shouldMentionDateOrFestival(String text) {
-    return RegExp(
-      r'日期|星期|周几|节日|假期|节气|纪念日|生日|什么日子|几月几|'
-      r'明天|后天|今天.*(?:节|假|星期|周几|日期|什么日子)|(?:节|假).*今天',
-    ).hasMatch(text);
+    // 本地兜底只认同一分句里的日历查询，不把“今天/生日”等背景陈述
+    // 当成查节日的请求。正常情况下仍由规划模型负责理解整句意图。
+    final calendarTopic = RegExp(
+      r'日期|日历|星期|周几|几号|节日|假期|放假|节气|纪念日|生日|什么日子|几月几',
+    );
+    final calendarQuestion = RegExp(
+      r'几月|几号|哪天|哪一天|星期几|周几|什么时候|什么日子|什么节|哪些节|'
+      r'哪个节|多少天|多久|查询|查一下|查查|日历|日期是|是不是.*(?:节|假)|有没有.*(?:节|假)',
+    );
+    return text
+        .split(RegExp(r'[，,。！？!?；;\n\r]+'))
+        .any((clause) => calendarTopic.hasMatch(clause) &&
+            calendarQuestion.hasMatch(clause));
   }
 
   // 判断是否和天气有关。
@@ -1803,8 +1865,9 @@ query 规则：
     }
     if (_asksEconomy(text) && !profile.allowEconomySearch) return false;
     if (profile.onlyCanonSearch) return _asksCanon(text);
+    // 时间词本身不是事实查询：“今天过生日”“最近很累”不需要搜索。
     return RegExp(
-      r'最近|近期|现在|今天|新闻|热搜|流行语|梗|什么意思|经济|股市|汇率|政策|书|电影|电视剧|动画|漫画|原作|原剧|剧情|设定|人物关系|台词|出处|真实|资料|百科',
+      r'新闻|热搜|流行语|梗|什么意思|经济|股市|汇率|政策|书|电影|电视剧|动画|漫画|原作|原剧|剧情|设定|人物关系|台词|出处|真实|资料|百科|搜索|查询|查一下|查查',
     ).hasMatch(text);
   }
 
@@ -2332,17 +2395,85 @@ ${location.name}：数据源 Open-Meteo；天气数据时间 $currentTime；当�
     return ApiKeys.doubaoVisionKey.trim();
   }
 
-  static String get _doubaoTextEndpoint {
-    final configured = ApiKeys.doubaoTextEndpoint.trim();
-    if (configured.isNotEmpty) return configured;
+  static ({String endpoint, String source, bool usesVisionFallback})
+      get _resolvedTextEndpoint {
+    var envEndpoint = '';
     try {
-      final envEndpoint =
-          (Platform.environment['ARK_TEXT_ENDPOINT'] ?? '').trim();
-      if (envEndpoint.isNotEmpty) return envEndpoint;
+      envEndpoint = Platform.environment['ARK_TEXT_ENDPOINT'] ?? '';
     } catch (_) {
-      // Ignore and try the existing Ark endpoint below.
+      // Some platforms do not expose process environment variables.
     }
-    return ApiService.doubaoVisionEndpoint.trim();
+    return _resolveTextEndpoint(
+      configured: ApiKeys.doubaoTextEndpoint,
+      environment: envEndpoint,
+      visionEndpoint: ApiService.doubaoVisionEndpoint,
+    );
+  }
+
+  // Keep the existing precedence for compatibility, but expose the legacy
+  // inheritance explicitly. A vision endpoint is not a text configuration.
+  static ({String endpoint, String source, bool usesVisionFallback})
+      _resolveTextEndpoint({
+    required String configured,
+    required String environment,
+    required String visionEndpoint,
+  }) {
+    if (configured.trim().isNotEmpty) {
+      return (
+        endpoint: configured.trim(),
+        source: 'lib/api_keys.dart: doubaoTextEndpoint',
+        usesVisionFallback: false,
+      );
+    }
+    if (environment.trim().isNotEmpty) {
+      return (
+        endpoint: environment.trim(),
+        source: '进程环境变量 ARK_TEXT_ENDPOINT',
+        usesVisionFallback: false,
+      );
+    }
+    return (
+      endpoint: visionEndpoint.trim(),
+      source: visionEndpoint.trim().isEmpty
+          ? '未配置'
+          : 'ApiService.doubaoVisionEndpoint（旧版兼容继承）',
+      usesVisionFallback: visionEndpoint.trim().isNotEmpty,
+    );
+  }
+
+  static String get _doubaoTextEndpoint => _resolvedTextEndpoint.endpoint;
+
+  static void _logTextEndpointConfiguration() {
+    final runState = _activeRunState;
+    if (runState?.textEndpointConfigurationLogged == true) return;
+    if (runState != null) runState.textEndpointConfigurationLogged = true;
+    final resolved = _resolvedTextEndpoint;
+    _logSearch('规划/事实文本接入点: '
+        'endpoint=${resolved.endpoint.isEmpty ? "未配置" : resolved.endpoint}, '
+        'source=${resolved.source}');
+    if (resolved.usesVisionFallback) {
+      _logSearch('配置警告: 独立文本接入点为空，正在继承旧视觉接入点；'
+          '应在 lib/api_keys.dart 的 doubaoTextEndpoint '
+          '或进程环境变量 ARK_TEXT_ENDPOINT 中明确配置已可用的文本接入点。');
+    }
+  }
+
+  @visibleForTesting
+  static Map<String, Object> textEndpointResolutionForTest({
+    required String configured,
+    required String environment,
+    required String visionEndpoint,
+  }) {
+    final resolved = _resolveTextEndpoint(
+      configured: configured,
+      environment: environment,
+      visionEndpoint: visionEndpoint,
+    );
+    return {
+      'endpoint': resolved.endpoint,
+      'source': resolved.source,
+      'usesVisionFallback': resolved.usesVisionFallback,
+    };
   }
 
   // ========================================
@@ -2377,6 +2508,7 @@ ${location.name}：数据源 Open-Meteo；天气数据时间 $currentTime；当�
     List<String> searchTargets = const [],
   }) async {
     if (!_shouldUseDoubaoSearch(category)) return const [];
+    if (_stopSearchAfterFactExtractorFailure()) return const [];
 
     final apiKey = _doubaoSearchApiKey;
     if (apiKey.isEmpty) {
@@ -6390,6 +6522,8 @@ $rawResults
     required bool includeThinkingField,
     int maxTokens = 1200,
   }) async {
+    if (_factExtractorUnavailableThisTurn) return null;
+
     Future<http.Response> send({required bool jsonObjectMode}) {
       final body = <String, dynamic>{
         'model': model,
@@ -6437,6 +6571,12 @@ $rawResults
 
       if (response.statusCode != 200) {
         debugPrint('$providerName 失败: ${response.statusCode} ${response.body}');
+        final diagnostic = _closedTextEndpointDiagnostic(
+          response.body,
+          endpoint: model,
+        );
+        if (diagnostic != null) _logSearch(diagnostic);
+        _markTextModelUnavailable();
         return null;
       }
 
@@ -6447,9 +6587,47 @@ $rawResults
       );
     } catch (e) {
       debugPrint('$providerName 异常: $e');
+      _markTextModelUnavailable();
       return null;
     }
   }
+
+  static void _markTextModelUnavailable() {
+    final runState = _activeRunState;
+    if (runState == null || runState.factExtractorUnavailable) return;
+    runState.factExtractorUnavailable = true;
+    _logSearch('规划/事实服务不可用，本轮停止后续网页搜索和模型复核；'
+        '普通聊天继续，不切换事实来源。');
+  }
+
+  static String? _closedTextEndpointDiagnostic(
+    String responseBody, {
+    required String endpoint,
+  }) {
+    try {
+      final data = jsonDecode(responseBody);
+      if (data is! Map) return null;
+      final error = data['error'];
+      if (error is! Map ||
+          error['code'] != 'InvalidEndpoint.ClosedEndpoint') {
+        return null;
+      }
+      return '接入点诊断: $endpoint 在服务端已关闭或暂不可用，'
+          '不是本地语音目录或日语校验错误。'
+          '请在服务控制台查看该接入点的状态与关闭原因，恢复原接入点，'
+          '或将 doubaoTextEndpoint / ARK_TEXT_ENDPOINT 改为已可用的文本接入点。'
+          '该错误本身不能确定是手动停用、模型下线还是账户状态问题。';
+    } catch (_) {
+      return null;
+    }
+  }
+
+  @visibleForTesting
+  static String? closedTextEndpointDiagnosticForTest(
+    String responseBody, {
+    required String endpoint,
+  }) =>
+      _closedTextEndpointDiagnostic(responseBody, endpoint: endpoint);
 
   static String _doubaoFactExtractorPrompt(
     _WebProfile profile,
@@ -6633,7 +6811,7 @@ $nameGlossary
     if (_queryAsksMediaOrEntertainment(userText)) return false;
     return RegExp(
       r'新闻|时事|热点|政策|金融|财经|经济|市场|行业|趋势|前景|展望|元年|'
-      r'今年|当前|近期|最近|怎么看|如何看待',
+      r'股市|汇率|产业',
     ).hasMatch(userText);
   }
 
@@ -10737,6 +10915,7 @@ class _SiteSearchResult {
 }
 
 class _WebContextRunState {
+  bool textEndpointConfigurationLogged = false;
   bool factExtractorUnavailable = false;
   bool factExtractorStopLogged = false;
 }

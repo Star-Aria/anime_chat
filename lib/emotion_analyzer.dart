@@ -1,8 +1,8 @@
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
-import 'package:http/http.dart' as http;
 import 'api_keys.dart';
 import 'character_config.dart';
+import 'http_retry.dart';
 
 // ========================================
 // 情绪分析服务
@@ -52,6 +52,7 @@ class EmotionAnalyzer {
     required List<String> sentences,
     required Character character,
     String language = 'ja',
+    String? precedingUserMessage,
   }) async {
     if (sentences.isEmpty) return [];
 
@@ -122,11 +123,13 @@ class EmotionAnalyzer {
           '2. 有些角色说刻薄话时用的是平静语气，那就应该标 neutral\n'
           '3. 括号里的动作描述可以参考语气，但不是主体\n'
           '4. 如果一句话有多种可能，选最适合 TTS 朗读效果的那个\n'
-          '5. neutral 是默认声线，其他标签是只在语气证据清晰时才使用的稀疏覆盖；不需要为了让一段话显得有变化而分配不同标签\n'
-          '6. 句子谈到某种情绪，不等于说话者正用该情绪说话。普通的关心、安慰和提醒不等于说话者悲伤；普通的停顿、思考和措辞不等于脆弱或压抑\n'
-          '7. 伤心、低沉、压抑、哭腔、脆弱等会明显改变声音质感的标签必须有强而直接的表达证据；只有轻微倾向或无法确定时一律使用 neutral\n'
-          '8. 同一段连续叙述在没有明确情绪转折时应保持声线连续，避免在一组 neutral 句子中突然插入一句强烈低落语气\n'
-          '9. 严格只用上方列出的标签，不能发明新标签\n'
+          '5. 先结合用户消息和完整回复判断说话者的整体状态，再按实际语气转折划分连续语段，最后把每个语段的朗读语气分配给其中各句。句号只是 TTS 分段边界，不是情绪重置边界；不得把每一句孤立分类\n'
+          '6. neutral 表示真正平常、无明显情绪色彩的朗读，不是所有克制、轻声或没有情绪词的句子的默认答案。其他标签没有数量或占比限制，整段持续悲伤时可以连续使用悲伤标签，不需要穿插 neutral\n'
+          '7. 话题本身不决定语气，要看角色正在怎样回应。客观介绍一个悲伤话题可以平静；真正在承接对方的痛苦、哀伤或冲击时，即使表达克制，也可以有持续的低沉和沉重感，不需要逐句说出“我很难过”来证明。日常关心、思考和省略号本身不构成低落或脆弱的证据\n'
+          '8. 短应答、不确定表达和承上启下的句子应随所在语段选择语气，不要因句子短或字面中性就回到 neutral。只有声音表现确实转变时才更换标签。表达目的从叙述变成安慰、陪伴，不代表说话者的悲伤或压抑已经缓解；温柔可以仍然低沉悲伤，应延续符合这种声音的标签\n'
+          '9. 区分克制的悲伤与哭腔、呐喊、濒临崩溃。后者仍需对应的明显声音表现，不能把严肃语境一律升级成激烈表演。选择已有参考音频中最贴合该段语气的标签\n'
+          '10. 标签描述中的声音特征是选择条件，优先于标签名称的字面含义和句子的交际目的。描述要求带笑意、轻快或释然时，必须有当前语境支持这种声音；不能只因内容在表达关心或珍视就选择它。持续沉重悲伤且没有情绪缓解依据时，不得引入带笑意或轻快的参考声线\n'
+          '11. 输出前通读标签序列，逐处核对切换是否有声音变化的依据；只有话意变化而声音状态未变的地方，保持原语段声线。严格只用上方列出的标签，不能发明新标签\n'
           '\n'
           '输出格式（严格遵守，不得有任何额外内容）：\n'
           '- 只输出一个 JSON 数组，长度和输入句子数量完全相同\n'
@@ -147,15 +150,19 @@ class EmotionAnalyzer {
                   '\n'
               : '';
 
-      final String userPrompt = '$characterHintSection'
-          '请为以下 ${sentences.length} 句话逐一标注情绪（按编号顺序输出）：\n'
-          '$sentenceList';
+      final String userPrompt = _buildUserPrompt(
+        characterHintSection: characterHintSection,
+        sentenceList: sentenceList.toString(),
+        sentenceCount: sentences.length,
+        precedingUserMessage: precedingUserMessage,
+      );
 
       // ----------------------------------------
       // 调用 DeepSeek API
       // ----------------------------------------
-      final response = await http.post(
+      final response = await RetryingHttp.post(
         Uri.parse('$_baseUrl/chat/completions'),
+        operation: '分析 TTS 情绪',
         headers: {
           'Authorization': 'Bearer $_apiKey',
           'Content-Type': 'application/json',
@@ -167,8 +174,8 @@ class EmotionAnalyzer {
             {'role': 'system', 'content': systemPrompt},
             {'role': 'user', 'content': userPrompt},
           ],
-          // max_tokens：每个标签约 14 字符，200 足够约 14 句话
-          'max_tokens': 200,
+          // 按句数留足 JSON 和驼峰标签的空间，避免长回复被截断后全回退。
+          'max_tokens': (sentences.length * 16 + 64).clamp(256, 4096),
           // temperature 设低，分类任务要稳定，不需要创意
           'temperature': 0.2,
           'stream': false,
@@ -196,6 +203,41 @@ class EmotionAnalyzer {
       debugPrint('情绪分析失败: $e，回退到默认情绪');
       return defaults;
     }
+  }
+
+  static String _buildUserPrompt({
+    required String characterHintSection,
+    required String sentenceList,
+    required int sentenceCount,
+    String? precedingUserMessage,
+  }) {
+    final context = precedingUserMessage?.trim() ?? '';
+    final contextSection = context.isEmpty
+        ? ''
+        : '上一条用户消息（仅用于理解角色回复的语境，不要为这段文字输出标签）：\n'
+            '$context\n\n';
+    return '$characterHintSection'
+        '$contextSection'
+        '以下 $sentenceCount 句话共同组成角色的一次完整回复。请先通读并判断连续语段的语气，'
+        '再按编号输出各句标签，分句不代表情绪已经结束：\n'
+        '$sentenceList';
+  }
+
+  @visibleForTesting
+  static String buildUserPromptForTest({
+    required List<String> sentences,
+    String? precedingUserMessage,
+  }) {
+    final sentenceList = StringBuffer();
+    for (int i = 0; i < sentences.length; i++) {
+      sentenceList.writeln('$i: ${sentences[i]}');
+    }
+    return _buildUserPrompt(
+      characterHintSection: '',
+      sentenceList: sentenceList.toString(),
+      sentenceCount: sentences.length,
+      precedingUserMessage: precedingUserMessage,
+    );
   }
 
   // ========================================
